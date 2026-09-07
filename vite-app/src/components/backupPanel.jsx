@@ -4,7 +4,7 @@ import { Btn, Dialog, Field, ErrorBox, Loading, TagX } from "./common.jsx";
 import {
   BACKUP_PROVIDERS, PROVIDER_LABEL, redirectUriFor, readBackupOutcome,
   isBeforeRestore, restoreNameMatches, failedRunAdvice, keepPhrase,
-  runRows, runFiles, runBytes, sizeTrend
+  runRows, runFiles, runBytes, sizeTrend, carriedOverNote
 } from "../backupPanelLogic.js";
 import { fileSize } from "../data.js";
 import { describeSchedule, WEEKDAY_NAMES, nextRunAt, BACKUP_ZONE } from "../backupSchedule.js";
@@ -479,7 +479,7 @@ export function AutomaticBackupPanel() {
           {run.folder_name ? <> &middot; {run.folder_name}</> : null}
           <div style={{ marginTop: 4 }}>
             {PHASE_WORDS[run.phase] || run.phase || "starting"} &middot; {plural(rowsIn(run.counts), "record")},
-            {" "}{plural(filesIn(run.counts), "file")} ({mb(bytesIn(run.counts))}) so far.
+            {" "}{plural(filesIn(run.counts), "file")} ({mb(bytesIn(run.counts))}{carriedOverNote(run.counts)}) so far.
           </div>
           <div style={{ ...QUIET, marginTop: 4 }}>
             It keeps going on the server whether this screen is open or not &mdash; a big first backup can take an hour.
@@ -493,7 +493,7 @@ export function AutomaticBackupPanel() {
           {s.last_run.status === "complete" ? (
             <>finished {when(s.last_run.finished_at)} &middot; {s.last_run.folder_name} &middot;{" "}
               {plural(rowsIn(s.last_run.counts), "record")}, {plural(filesIn(s.last_run.counts), "file")}{" "}
-              ({mb(bytesIn(s.last_run.counts))}).
+              ({mb(bytesIn(s.last_run.counts))}{carriedOverNote(s.last_run.counts)}).
               {/* The tallies belong to the restore that empties the app
                   first: there, a row left out is a row that is simply not
                   there any more. A per-job restore's figures are sentences

@@ -51,11 +51,12 @@ import {
   retryDelayMs, reviveCursor, shouldRetry, sliceDeadline, sliceLooksAlive,
   startPrefixWalk, stillHoldsRun
 } from "../_shared/backupRun.ts";
+import { carryOverId, chooseBaseFolder } from "../_shared/backupRun.ts";
 import type { RunCursor } from "../_shared/backupRun.ts";
 import { gzip } from "../_shared/gzip.ts";
 import { nextRunAt } from "../_shared/backupSchedule.ts";
 
-const APP_VERSION = "0.9.0-Beta";
+const APP_VERSION = "0.92-beta 2";
 
 const RUN_COLUMNS = "id, kind, status, phase, cursor, counts, folder_id, folder_name, created_at, started_at, heartbeat_at";
 
@@ -435,7 +436,7 @@ async function advance(db: SupabaseClient, run: Run, secret: string): Promise<Re
     let units = 0;
     while (!outOfBudget(deadline, Date.now()) && cursor.phase !== "done") {
       if (cursor.phase === "tables") cursor = await stepTables(db, conn.drive, tablesFolder, cursor);
-      else if (cursor.phase === "files") cursor = await stepFiles(db, conn.drive, filesFolder, cursor, deadline);
+      else if (cursor.phase === "files") cursor = await stepFiles(db, conn.drive, filesFolder, cursor, deadline, conn.rootFolderId, String(current.folder_name ?? ""));
       else if (cursor.phase === "manifest") cursor = await stepManifest(db, conn.drive, folderId, cursor, String(current.kind));
       else if (cursor.phase === "retention") cursor = await stepRetention(db, conn.drive, conn.rootFolderId, conn.keep, cursor);
       else cursor.phase = "done";
@@ -574,10 +575,45 @@ async function addAuthEmails(db: SupabaseClient, rows: Record<string, unknown>[]
 // ── Phase: files ─────────────────────────────────────────────────────────
 
 async function stepFiles(
-  db: SupabaseClient, drive: DriveClient, filesFolder: string, c: RunCursor, deadline: number
+  db: SupabaseClient, drive: DriveClient, filesFolder: string, c: RunCursor, deadline: number,
+  rootFolderId: string, ownFolderName: string
 ): Promise<RunCursor> {
   if (c.bucketIndex >= BUCKETS.length) { c.phase = "manifest"; return c; }
   const bucket = BUCKETS[c.bucketIndex];
+
+  // The base: last night's folder, whose unchanged files are copied over
+  // on the drive rather than pulled through Supabase again (carryOverId in
+  // backupRun.ts says which). Chosen once per run and kept on the cursor,
+  // "none" included. A base is a saving and never a requirement: any
+  // trouble finding or listing it means every object goes the long way
+  // round, which is what every object did before.
+  if (!c.baseLooked) {
+    try {
+      const folders = await withRetry("Looking for last night's folder", () => drive.listFolders(rootFolderId));
+      const baseName = chooseBaseFolder(folders.map(f => f.name), ownFolderName);
+      const base = baseName ? folders.find(f => f.name === baseName) : undefined;
+      const sub = base
+        ? (await withRetry("Opening last night's folder", () => drive.listFolders(base.id))).find(f => f.name === FILES_FOLDER)
+        : undefined;
+      c.baseFilesFolderId = sub ? sub.id : null;
+    } catch (e) {
+      console.warn(`No base folder for carrying files over: ${(e as Error).message}`);
+      c.baseFilesFolderId = null;
+    }
+    c.baseLooked = true;
+  }
+  // Listed once per slice — a few calls for thousands of names.
+  const baseFiles = new Map<string, { id: string; size: number }>();
+  if (c.baseFilesFolderId) {
+    try {
+      for (const e of await withRetry("Listing last night's files", () => drive.listFiles(c.baseFilesFolderId!))) {
+        baseFiles.set(e.name, { id: e.id, size: e.size });
+      }
+    } catch (e) {
+      console.warn(`Last night's files could not be listed; copying everything through: ${(e as Error).message}`);
+      baseFiles.clear();
+    }
+  }
 
   // An empty prefix stack means this bucket has not been started: the stack
   // and the bucket index are advanced together at the end of a bucket, so
@@ -596,20 +632,36 @@ async function stepFiles(
 
   let copied = 0;
   let bytes = 0;
+  let reused = 0;
   for (let i = c.pageDone; i < objects.length; i++) {
     if (outOfBudget(deadline, Date.now())) {
       // Stop where we are: the same page is re-listed next slice and the
       // first pageDone objects are skipped.
-      return pausePage(c, i, copied, bytes);
+      return pausePage(c, i, copied, bytes, reused);
     }
     const key = top.prefix + objects[i].name;
+    const name = fileEntryName(bucket, key);
+    // Storage's listing carries the object's size; a listing without one
+    // is no match, and the object is read through.
+    const size = Number((objects[i].metadata as { size?: unknown } | undefined)?.size ?? -1);
+    const from = carryOverId(bucket, name, size, baseFiles);
+    if (from) {
+      try {
+        await withRetry(`Carrying over ${bucket}/${key}`, () => drive.copy(from, filesFolder, name));
+        copied += 1;
+        reused += 1;
+        bytes += size;
+        continue;
+      } catch (e) {
+        console.warn(`Carry-over of ${bucket}/${key} failed; copying it through: ${(e as Error).message}`);
+      }
+    }
     const blob = await withRetry(`Reading ${bucket}/${key}`, async () => {
       const { data, error: dErr } = await db.storage.from(bucket).download(key);
       if (dErr) throw dErr;
       return data as Blob;
     });
     const payload = new Uint8Array(await blob.arrayBuffer());
-    const name = fileEntryName(bucket, key);
     await withRetry(`Uploading ${bucket}/${key}`, () =>
       drive.upload(filesFolder, name, payload, blob.type || "application/octet-stream"));
     copied += 1;
@@ -619,7 +671,7 @@ async function stepFiles(
   // Depth first: sub-prefixes go on the stack, and this prefix advances.
   return afterFilesPage(c, {
     bucketCount: BUCKETS.length, pageLength: page.length, pageRows: PAGE_ROWS,
-    folderNames: folders.map(f => f.name), files: copied, bytes
+    folderNames: folders.map(f => f.name), files: copied, bytes, reused
   });
 }
 
@@ -643,7 +695,7 @@ async function stepManifest(
   for (const table of LOAD_ORDER) {
     m = recordTable(m, table, Number(c.rows[table] ?? 0), c.parts[table] ?? []);
   }
-  m = recordFiles(m, c.files, c.bytes);
+  m = recordFiles(m, c.files, c.bytes, c.reused);
   m.jobs = jobsIndex(c.index as any);
   m = finishManifest(m, new Date().toISOString());
 

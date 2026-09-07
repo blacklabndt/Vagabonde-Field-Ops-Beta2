@@ -36,7 +36,25 @@ export interface DriveClient {
   upload(folderId: string, name: string, body: Uint8Array, contentType: string): Promise<string>;
   download(fileId: string): Promise<Uint8Array>;
   delete(id: string): Promise<void>;
+  // A copy made on the drive, from one of its files into a folder under a
+  // name — nothing passes through here. A file already there under that
+  // name is replaced, as upload does. Answers the new file's id.
+  copy(fileId: string, folderId: string, name: string): Promise<string>;
 }
+
+// A refusal the caller should not retry: the drive answered, and the answer
+// is no. backup-run's withRetry reads the flag and stops.
+function plainRefusal(message: string): DriveError {
+  const e = new Error(message) as DriveError;
+  e.status = 0;
+  e.retryable = false;
+  return e;
+}
+
+// How long a Graph copy is given to finish: it is asynchronous, and one
+// that has not completed by then is treated as refused so the caller falls
+// back to copying the bytes through.
+const GRAPH_COPY_WAIT_MS = 20_000;
 
 // A refusal worth retrying carries `retryable`; backup-run's withRetry asks
 // the flag, never the prose. 429 and 5xx are the drive being busy; a 401 is
@@ -327,6 +345,20 @@ export class GoogleDrive implements DriveClient {
     return new Uint8Array(await res.arrayBuffer());
   }
 
+  async copy(fileId: string, folderId: string, name: string): Promise<string> {
+    // A retried slice would otherwise leave two of the same name.
+    for (const clash of await this.findByName(folderId, name, false)) await this.delete(clash.id);
+    const res = await ok(await fetch(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/copy?fields=id`,
+      {
+        method: "POST",
+        headers: this.head({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ name, parents: [folderId] })
+      }
+    ), "Google Drive copy");
+    return String((await res.json() as { id: string }).id);
+  }
+
   async delete(id: string): Promise<void> {
     const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`,
       { method: "DELETE", headers: this.head() });
@@ -484,6 +516,33 @@ export class OneDrive implements DriveClient {
     const res = await ok(await fetch(`${GRAPH}/items/${encodeURIComponent(fileId)}/content`,
       { headers: this.head() }), "OneDrive download");
     return new Uint8Array(await res.arrayBuffer());
+  }
+
+  async copy(fileId: string, folderId: string, name: string): Promise<string> {
+    // Graph copies asynchronously: the 202 names a monitor URL (read with
+    // no token) that reports progress and, when done, the new item's id —
+    // or redirects to the item itself, which is the other shape it takes.
+    const res = await ok(await fetch(`${GRAPH}/items/${encodeURIComponent(fileId)}/copy`, {
+      method: "POST",
+      headers: this.head({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        parentReference: { id: folderId }, name, "@microsoft.graph.conflictBehavior": "replace"
+      })
+    }), "OneDrive copy");
+    const monitor = res.headers.get("Location") ?? "";
+    await res.body?.cancel();
+    if (!monitor) throw plainRefusal("OneDrive copy gave no monitor URL");
+    const until = Date.now() + GRAPH_COPY_WAIT_MS;
+    for (;;) {
+      const poll = await fetch(monitor);
+      const j = await poll.json().catch(() => ({})) as
+        { status?: string; resourceId?: string; errorCode?: string; id?: string };
+      if (j.status === "completed" && j.resourceId) return String(j.resourceId);
+      if (!j.status && j.id) return String(j.id);
+      if (j.status === "failed") throw plainRefusal(`OneDrive copy failed: ${j.errorCode ?? "unknown"}`);
+      if (Date.now() > until) throw plainRefusal("OneDrive copy did not finish in time");
+      await new Promise(r => setTimeout(r, 500));
+    }
   }
 
   async delete(id: string): Promise<void> {
@@ -652,6 +711,16 @@ export class Dropbox implements DriveClient {
       headers: this.head({ "Dropbox-API-Arg": dropboxArg({ path: fileId }) })
     }), "Dropbox download");
     return new Uint8Array(await res.arrayBuffer());
+  }
+
+  async copy(fileId: string, folderId: string, name: string): Promise<string> {
+    // A path is the id here. The target is cleared first (delete ignores
+    // not-found) because copy_v2 refuses to land on a file already there.
+    const to = `${folderId}/${name}`;
+    await this.delete(to);
+    const j = await this.rpc("files/copy_v2", { from_path: fileId, to_path: to, autorename: false }, "Dropbox copy");
+    const made = (j.metadata as { path_display?: string }) ?? {};
+    return String(made.path_display ?? to);
   }
 
   async delete(id: string): Promise<void> {

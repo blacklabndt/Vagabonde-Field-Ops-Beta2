@@ -395,6 +395,20 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   credentials blanked (`APP_SETTINGS_SECRETS`); `profiles` carries an extra
   `auth_email` field that is not a column, because Auth holds the addresses
   and a restore has nowhere to send a set-password link without them.
+- The files phase carries unchanged files over ON the drive
+  (`docs/superpowers/specs/2026-09-07-backup-carries-unchanged-files-over-design.md`):
+  once per run it picks a base — the newest stamped folder other than its
+  own (`chooseBaseFolder`, pure) — and for an object in a write-once bucket
+  (`WRITE_ONCE_BUCKETS`: reports, chat-media; keys never reused) whose name
+  and size the base's `files/` already holds, `DriveClient.copy` makes the
+  night's copy server-side (`carryOverId`). jhas, timesheets and shared are
+  rewritten at the same key and are read through every night. Every folder
+  stays complete on its own; restore and retention are untouched; a copy
+  that fails falls back to download-and-upload, so the backup can never do
+  worse than before. The cursor carries `baseLooked`, `baseFilesFolderId`
+  and `reused`; `counts.reused` and the manifest's `files.reused` say how
+  many, and the panel says "N carried over". Nightly Supabase egress is
+  what is new, not the whole store times thirty.
 - The tick is the only scheduler. pg_cron fires `backup-run` every five
   minutes with `x-internal-secret` (chat-retention's shape, read from
   `private.internal_config` when the job fires); `backup-run` drives kinds

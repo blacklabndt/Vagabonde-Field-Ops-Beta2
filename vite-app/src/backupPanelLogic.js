@@ -99,6 +99,14 @@ export const runRows = counts => {
 };
 export const runFiles = counts => Number((counts && counts.files) || 0);
 export const runBytes = counts => Number((counts && counts.bytes) || 0);
+// How many of a run's files were copied over on the drive from the night
+// before rather than read out of Supabase — the saving the nightly backup
+// makes on its egress. Said only when it is not nothing.
+export const runReused = counts => Number((counts && counts.reused) || 0);
+export const carriedOverNote = counts => {
+  const n = runReused(counts);
+  return n ? `, ${n} carried over from the night before` : "";
+};
 
 // Only these two kinds put a copy of the app in the drive. A restore's own
 // bytes are what it read back out, and drawing them on the same line as the

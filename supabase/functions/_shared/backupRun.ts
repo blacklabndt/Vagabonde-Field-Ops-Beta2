@@ -34,6 +34,13 @@ export interface RunCursor {
   pageDone: number;
   files: number;
   bytes: number;
+  // Carrying unchanged files over: whether this run has looked for a base
+  // folder yet, the id of that folder's files/ (null when there is none),
+  // and how many files were copied on the drive rather than pulled
+  // through Supabase.
+  baseLooked: boolean;
+  baseFilesFolderId: string | null;
+  reused: number;
   removed?: string[];
   startedAt: string;
 }
@@ -75,6 +82,9 @@ export function newRunCursor(startedAt: string): RunCursor {
     pageDone: 0,
     files: 0,
     bytes: 0,
+    baseLooked: false,
+    baseFilesFolderId: null,
+    reused: 0,
     startedAt
   };
 }
@@ -106,7 +116,12 @@ export function reviveCursor(raw: unknown, startedAt: string): RunCursor {
       : [],
     pageDone: num(c.pageDone),
     files: num(c.files),
-    bytes: num(c.bytes)
+    bytes: num(c.bytes),
+    // A cursor from before these existed looks for its base again, which
+    // costs one listing and nothing else.
+    baseLooked: c.baseLooked === true,
+    baseFilesFolderId: typeof c.baseFilesFolderId === "string" && c.baseFilesFolderId ? c.baseFilesFolderId : null,
+    reused: num(c.reused)
   };
 }
 
@@ -256,10 +271,11 @@ export function startPrefixWalk(c: RunCursor): PrefixFrame {
 // A slice ran out of budget partway through a page of objects. Nothing else
 // moves: the same page is listed again next slice, at the same offset, and
 // the first `pageDone` objects are skipped.
-export function pausePage(c: RunCursor, at: number, files: number, bytes: number): RunCursor {
+export function pausePage(c: RunCursor, at: number, files: number, bytes: number, reused = 0): RunCursor {
   c.pageDone = at;
   c.files += files;
   c.bytes += bytes;
+  c.reused += num(reused);
   return c;
 }
 
@@ -273,10 +289,12 @@ export function afterFilesPage(c: RunCursor, done: {
   folderNames: string[];
   files: number;
   bytes: number;
+  reused?: number;
 }): RunCursor {
   const top = c.prefixes[c.prefixes.length - 1];
   c.files += num(done.files);
   c.bytes += num(done.bytes);
+  c.reused += num(done.reused);
   c.pageDone = 0;
 
   top.offset += num(done.pageLength);
@@ -310,8 +328,48 @@ export function stillHoldsRun(matched: unknown): boolean {
 
 // ── What the panel counts ────────────────────────────────────────────────
 
-export function countsOf(c: RunCursor): { rows: Record<string, number>; files: number; bytes: number } {
-  return { rows: c.rows, files: num(c.files), bytes: num(c.bytes) };
+export function countsOf(c: RunCursor): { rows: Record<string, number>; files: number; bytes: number; reused: number } {
+  return { rows: c.rows, files: num(c.files), bytes: num(c.bytes), reused: num(c.reused) };
+}
+
+// ── Carrying unchanged files over ────────────────────────────────────────
+//
+// Every night's folder is complete on its own — the restore reads one
+// folder and retention deletes whole ones — but the bytes of a report PDF
+// do not change between nights, only the folder they sit in. So an object
+// whose key can never be reused is copied from last night's folder ON the
+// drive when that folder holds a file of the same name and size, and only
+// what the previous folder lacks is pulled through Supabase. That turns the
+// nightly egress from the whole store into what is new.
+//
+// Same name and same size is the whole test, which is why only buckets
+// whose keys are written once qualify: reports keys carry Date.now() and
+// chat-media keys are UUIDs. jhas are re-rendered at close-out and
+// timesheets at approval, both at the same key; a shared file deleted and
+// re-uploaded has the same key. Those are copied fresh every night.
+export const WRITE_ONCE_BUCKETS: readonly string[] = ["reports", "chat-media"];
+
+export function carryOverId(
+  bucket: string, entryName: string, size: number,
+  base: Map<string, { id: string; size: number }>
+): string | null {
+  if (!WRITE_ONCE_BUCKETS.includes(bucket)) return null;
+  if (!Number.isFinite(size) || size < 0) return null;
+  const held = base.get(entryName);
+  if (!held || !held.id) return null;
+  return num(held.size) === size ? held.id : null;
+}
+
+// The base is the newest stamped folder in the drive's root other than this
+// run's own. A partial folder from a failed run is a fine base — every file
+// in it is whole, uploads being atomic, and anything it lacks is simply
+// downloaded — so nothing here reads a manifest. The stamp shape is
+// backupManifest's STAMP; repeated here because this module imports nothing.
+const BASE_STAMP = /^\d{4}-\d{2}-\d{2} \d{2}-\d{2}$/;
+
+export function chooseBaseFolder(names: string[], ownName: string): string | null {
+  const stamps = (names || []).map(String).filter(n => BASE_STAMP.test(n) && n !== ownName).sort();
+  return stamps.length ? stamps[stamps.length - 1] : null;
 }
 
 export function totalRows(counts: unknown): number {

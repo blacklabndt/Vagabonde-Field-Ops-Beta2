@@ -346,8 +346,10 @@ test("a manifest records what went in and says what it holds", () => {
 test("recordFiles adds up across the slices a run is made of", () => {
   let m = newManifest("0.9.0-Beta", null, "2026-09-04T08:00:00.000Z");
   m = recordFiles(m, 100, 1000);
-  m = recordFiles(m, 40, 500);
-  assert.deepEqual(m.files, { count: 140, bytes: 1500 });
+  m = recordFiles(m, 40, 500, 30);
+  // reused counts the files copied over on the drive from the night
+  // before; they are among count, not beside it.
+  assert.deepEqual(m.files, { count: 140, bytes: 1500, reused: 30 });
 });
 
 test("the jobs index is what the per-job restore picks from", () => {

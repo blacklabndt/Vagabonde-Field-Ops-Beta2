@@ -30,7 +30,9 @@ export interface Manifest {
   started_at: string;
   finished_at: string | null;
   tables: Record<string, { rows: number; parts: string[] }>;
-  files: { count: number; bytes: number };
+  // `reused` is how many of `count` were copied over on the drive from
+  // the night before rather than read out of Supabase (backupRun.ts).
+  files: { count: number; bytes: number; reused?: number };
   jobs: ManifestJob[];
   note: string;
 }
@@ -61,8 +63,8 @@ export function recordTable(m: Manifest, table: string, rows: number, parts: str
 
 // Added to rather than set: a run is made of slices and the files phase
 // crosses several of them.
-export function recordFiles(m: Manifest, count: number, bytes: number): Manifest {
-  m.files = { count: m.files.count + count, bytes: m.files.bytes + bytes };
+export function recordFiles(m: Manifest, count: number, bytes: number, reused = 0): Manifest {
+  m.files = { count: m.files.count + count, bytes: m.files.bytes + bytes, reused: (m.files.reused ?? 0) + reused };
   return m;
 }
 
