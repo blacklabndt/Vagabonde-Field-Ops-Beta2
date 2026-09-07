@@ -3,8 +3,33 @@ import { money, todayLocal, localDate, dayMonth, ticketDateStamp, primaryContact
 import { OfflineCache } from "./offlineCache.js";
 import { Toasts } from "./toastBus.js";
 import { OfflineQueue, isNetworkError } from "./offlineQueue.js";
-import { RESPONSE_ROW_CAP, fetchAllPages, fetchAllKeyset } from "./paging.js";
+import { RESPONSE_ROW_CAP, fetchAllPages, fetchAllKeyset, mapLimit } from "./paging.js";
 import { ticketFingerprint } from "./ticketFingerprint.js";
+
+// The one sentence a completed job answers with, wherever its row was read
+// — assertJobOpen reads the row itself; updateTicket has it embedded on the
+// ticket's own pre-read and must say the same thing.
+function assertJobRowOpen(job) {
+  if (job.status === "Complete") {
+    throw new Error(`Job ${job.job_number} is marked complete — an admin has to reopen it before anything can be added.`);
+  }
+}
+
+// How many ticket batches the line export walks at once. Each batch is its
+// own keyset walk, sequential within itself as the paging rule wants; the
+// batches are disjoint tickets, so they need not wait on each other.
+const EXPORT_LINE_WALKS = 4;
+
+// The idempotency-key lookup a field save starts before its open check, so
+// the two round trips overlap. A builder does nothing until something waits
+// on it, hence the Promise.resolve; a lookup that fails resolves with its
+// error rather than rejecting, so a refusal from the open check — thrown
+// while this is still in flight — leaves nothing unhandled behind it.
+function startKeyLookup(table, columns, clientKey) {
+  if (!clientKey) return null;
+  return Promise.resolve(sbClient.from(table).select(columns).eq("client_key", clientKey).maybeSingle())
+    .catch(e => ({ data: null, error: e }));
+}
 
 // Thin data-access layer over the tables that are wired to Supabase so far
 // (see README "What's wired"). Screens call these instead of touching
@@ -557,9 +582,14 @@ export const Db = {
     // The first contact for an organisation is its primary whether or not the
     // box was ticked — otherwise an org can end up with contacts on file and
     // nothing for the job screens to pre-fill.
-    const existing = await this.listContactsForOrg(orgType, orgId);
-    const primary = isPrimary || existing.length === 0;
-    if (primary && existing.length) await this.clearPrimary(orgType, orgId);
+    // A count, not the rows: this used to page the organisation's whole
+    // directory to learn whether it was empty.
+    const { count, error: cErr } = await sbClient.from("contacts")
+      .select("id", { count: "exact", head: true }).eq("org_type", orgType).eq("org_id", orgId);
+    if (cErr) throw cErr;
+    const onFile = count || 0;
+    const primary = isPrimary || onFile === 0;
+    if (primary && onFile) await this.clearPrimary(orgType, orgId);
     const { data, error } = await sbClient.from("contacts").insert({
       org_type: orgType, org_id: orgId, name: clean,
       title: (title || "").trim() || null,
@@ -856,9 +886,13 @@ export const Db = {
   // to be read as "J-" + digits, so a card numbered S-1042 suggested J-1,
   // and J-50 followed by J-12 suggested J-13.
   async getNextJobNumber() {
-    const recent = await this.getMostRecentJob();
+    // The newest number alone — getMostRecentJob's row carries three joins
+    // this never reads.
+    const { data: recent, error: rErr } = await sbClient.from("jobs").select("job_number")
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (rErr) throw rErr;
     if (!recent) return "J-1";
-    const m = /^(.*?)(\d+)$/.exec(String(recent.id || "").trim());
+    const m = /^(.*?)(\d+)$/.exec(String(recent.job_number || "").trim());
     if (!m) return "";
     const prefix = m[1];
     const { data, error } = await sbClient.from("jobs").select("job_number")
@@ -1033,9 +1067,7 @@ export const Db = {
       await assertSessionAlive();
       throw new Error("This job hasn't reached the database yet — it's still waiting to sync. It'll go through once the job ahead of it does.");
     }
-    if (data.status === "Complete") {
-      throw new Error(`Job ${data.job_number} is marked complete — an admin has to reopen it before anything can be added.`);
-    }
+    assertJobRowOpen(data);
   },
 
   // Contractors are created inline when a job names a new one (see
@@ -1111,12 +1143,11 @@ export const Db = {
     // returned the existing row and never filed anybody, so the job showed
     // the organisation's primary rep for ever.
     const fileReps = async (clientId, contractorId) => {
-      if (clientId && clientRep && clientRep.name) {
-        await this.rememberContact("client", clientId, clientRep);
-      }
-      if (contractorId && contractorRep && contractorRep.name) {
-        await this.rememberContact("contractor", contractorId, contractorRep);
-      }
+      // Two organisations, so the two filings go out together.
+      await Promise.all([
+        clientId && clientRep && clientRep.name ? this.rememberContact("client", clientId, clientRep) : null,
+        contractorId && contractorRep && contractorRep.name ? this.rememberContact("contractor", contractorId, contractorRep) : null
+      ]);
     };
 
     // Replaying a queued job has to be safe to do twice. The insert can
@@ -1450,13 +1481,15 @@ export const Db = {
   // hazard selection, signatures and a placeholder filename, which is
   // enough for "Signed JHAs on file" to be real data instead of a mock array.
   async createJha({ jobDbId, template, hazards, signedBy, siteRep, pdfKey, dosimetry, unitNumber, details, workDate, clientKey = null }) {
+    // Started before the open check, awaited after it (see createTicket).
+    const keyLookup = startKeyLookup("jhas", "*", clientKey);
     await this.assertJobOpen(jobDbId);
     // The same idempotency key tickets and reports carry (jhas.client_key,
     // unique): an assessment whose insert landed but whose answer was lost
     // on the radio replays from the outbox as a lookup of the row that
     // already exists, not as a second signed safety record for the day.
     const existing = async () => {
-      const { data: already, error: keyErr } = await sbClient.from("jhas").select().eq("client_key", clientKey).maybeSingle();
+      const { data: already, error: keyErr } = await keyLookup;
       if (keyErr) throw keyErr;
       // The row that landed while its answer was lost never had its PDF
       // rendered either — the render is fired from the insert path, which
@@ -1618,14 +1651,16 @@ export const Db = {
   // the row. Falls back to storing metadata only if the browser gave us no
   // File (the mobile screen's demo rows, or a same-name collision).
   async uploadReport({ jobDbId, jobNumber, file, welds, result, interpretedBy, send, sendTo, clientKey = null }) {
+    // Started before the open check, awaited after it (see createTicket).
+    const keyLookup = startKeyLookup("reports", "*", clientKey);
     await this.assertJobOpen(jobDbId);
     // The same idempotency key as createTicket: a report whose insert landed
     // but whose answer was lost must not be filed — and emailed — twice.
     // A lookup that failed is not a lookup that found nothing: proceeding
     // past a refused or malformed pre-check is exactly the double filing
     // the key exists to prevent, so its error is the save's error.
-    if (clientKey) {
-      const { data: already, error: keyErr } = await sbClient.from("reports").select("*").eq("client_key", clientKey).maybeSingle();
+    if (keyLookup) {
+      const { data: already, error: keyErr } = await keyLookup;
       if (keyErr) throw keyErr;
       if (already) return already;
     }
@@ -2146,10 +2181,12 @@ export const Db = {
     // The reps, which this used to drop on the floor: the boxes were editable
     // and nothing was ever written, so a corrected phone number vanished on
     // the next load.
-    const clientContactId = await this.resolveJobContact("client", job.clientId, record.clientRepDetail);
-    const contractorContactId = contractorId
-      ? await this.resolveJobContact("contractor", contractorId, record.contractorRepDetail)
-      : null;
+    // Two organisations, nothing shared, so the two reads-and-writes go out
+    // together rather than one after the other.
+    const [clientContactId, contractorContactId] = await Promise.all([
+      this.resolveJobContact("client", job.clientId, record.clientRepDetail),
+      contractorId ? this.resolveJobContact("contractor", contractorId, record.contractorRepDetail) : null
+    ]);
 
     const { error } = await sbClient.from("jobs").update({
       contractor_id: contractorId,
@@ -2554,7 +2591,10 @@ export const Db = {
       // the ordinary 5% and a blank cell.
       gstRate: t.client_gst_rate == null ? null : Number(t.client_gst_rate),
       clientId: t.client_id || null,
-      invoiceNumber: t.invoice_number == null ? null : Number(t.invoice_number)
+      // undefined when the column is not on this database at all (the RPC
+      // returns no such field), null when it is there and empty — the export
+      // reads the difference.
+      invoiceNumber: t.invoice_number === undefined ? undefined : (t.invoice_number == null ? null : Number(t.invoice_number))
     }));
     const total = data && data.length ? Number(data[0].total_count) : 0;
     // The money across every matching ticket, not only this page's — null
@@ -2627,52 +2667,42 @@ export const Db = {
     return all;
   },
 
-  // What the accounting export knows about a ticket that search_tickets does
-  // not: its invoice number, and — for the per-line export — the charges it is
-  // made of. Asked for in batches of ticket ids rather than one ticket at a
-  // time, because a busy month is thousands of tickets and that many round
-  // trips is an export nobody waits for.
+  // What the accounting export knows about a ticket beyond its tracker row:
+  // for the per-line export, the charges it is made of. Handed the rows
+  // whole, because the invoice number and date ride on search_tickets since
+  // 20260906 — they are read off the rows rather than off the tickets again
+  // in batches, which was eighty round trips a year for figures already in
+  // hand.
   //
-  // The invoice number arrives with a later migration. A database without that
-  // column refuses the whole select, and that refusal is not a failure of the
-  // export — the CSV goes out with those cells blank and says so. Recognised
-  // the way the dose ledger recognises its missing routine: the code is the
-  // reliable half, and a message is believed only when it names the column, so
-  // a permission refusal or a timeout still reaches the screen as itself.
+  // A database before that migration returns rows with no invoice_number
+  // field at all — searchTickets leaves invoiceNumber undefined then, and
+  // null when the column is there and empty — and the CSV goes out with
+  // those cells blank and a line saying why.
   //
   // The lines are walked by key inside each batch, never by offset. Two
   // hundred tickets carry well over the 1000-row cap in lines alone, so the
   // walk is the read and not a precaution — and line_order is one sequence
   // across the whole table, so "the next thousand after this one" is a true
   // keyset walk. It is also the column the printed invoice orders by, so the
-  // CSV lists a ticket's charges in the order the client agreed them.
-  async listTicketExportDetail(ticketIds, { withLines = false, batchSize = 200 } = {}) {
-    const ids = [...new Set((ticketIds || []).filter(Boolean))];
+  // CSV lists a ticket's charges in the order the client agreed them. The
+  // batches are disjoint sets of tickets, so a few walk at once; the keyset
+  // rule is about the order within one walk, which each keeps.
+  async listTicketExportDetail(tickets, { withLines = false, batchSize = 200 } = {}) {
+    const rows = (tickets || []).filter(t => t && t.id);
     const invoices = {};
+    const seen = new Set();
+    for (const t of rows) {
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
+      invoices[t.id] = { number: t.invoiceNumber == null ? "" : t.invoiceNumber, invoicedAt: t.invoicedAt || null };
+    }
+    const invoiceNumbers = !rows.length || rows.some(t => t.invoiceNumber !== undefined);
     const lines = {};
-    let invoiceNumbers = true;
-    const noInvoiceColumn = e => {
-      if (!e) return false;
-      if (e.code === "42703") return true;
-      const msg = String(e.message || "");
-      return msg.includes("invoice_number") && /does not exist|could not find|schema cache/i.test(msg);
-    };
-    for (let i = 0; i < ids.length; i += batchSize) {
-      const batch = ids.slice(i, i + batchSize);
-      if (invoiceNumbers) {
-        const { data, error } = await sbClient.from("tickets")
-          .select("id, invoice_number, invoiced_at").in("id", batch);
-        if (error) {
-          if (!noInvoiceColumn(error)) throw error;
-          invoiceNumbers = false;
-        } else {
-          for (const t of data || []) {
-            invoices[t.id] = { number: t.invoice_number || "", invoicedAt: t.invoiced_at || null };
-          }
-        }
-      }
-      if (!withLines) continue;
-      const rows = await fetchAllKeyset(async after => {
+    if (withLines) {
+      const ids = [...seen];
+      const batches = [];
+      for (let i = 0; i < ids.length; i += batchSize) batches.push(ids.slice(i, i + batchSize));
+      const walked = await mapLimit(batches, EXPORT_LINE_WALKS, batch => fetchAllKeyset(async after => {
         let query = sbClient.from("ticket_lines")
           .select("ticket_id, kind, label, unit, quantity, unit_rate, line_order")
           .in("ticket_id", batch);
@@ -2680,8 +2710,8 @@ export const Db = {
         const { data, error } = await query.order("line_order").limit(RESPONSE_ROW_CAP);
         if (error) throw error;
         return data || [];
-      }, r => r.line_order);
-      for (const r of rows) (lines[r.ticket_id] || (lines[r.ticket_id] = [])).push(r);
+      }, r => r.line_order));
+      for (const batchRows of walked) for (const r of batchRows) (lines[r.ticket_id] || (lines[r.ticket_id] = [])).push(r);
     }
     return { invoices, lines, invoiceNumbers };
   },
@@ -2831,6 +2861,10 @@ export const Db = {
   // handed back as `{ existing: true }` so the caller knows its lines and
   // crew may still need writing.
   async createTicket({ initials, jobDbId, technicianId, workDate, clientContact, contractorContact, lines, status, delays, clientKey = null }) {
+    // The key lookup and the open check touch different tables and neither
+    // needs the other's answer, so they go out together; they are awaited
+    // in the old order so the job's refusal still wins over the key's.
+    const keyLookup = startKeyLookup("tickets", "id, total", clientKey);
     await this.assertJobOpen(jobDbId);
     lines = lines.map(cleanLine);
     const total = totalOf(lines);
@@ -2838,8 +2872,8 @@ export const Db = {
 
     // A failed lookup is the save's failure, not a green light (see
     // uploadReport).
-    if (clientKey) {
-      const { data: already, error: keyErr } = await sbClient.from("tickets").select("id, total").eq("client_key", clientKey).maybeSingle();
+    if (keyLookup) {
+      const { data: already, error: keyErr } = await keyLookup;
       if (keyErr) throw keyErr;
       if (already) return { id: already.id, total: Number(already.total), existing: true };
     }
@@ -3007,7 +3041,11 @@ export const Db = {
   // client has approved is what they agreed to pay, and nothing in the app may
   // quietly rewrite it afterwards.
   async updateTicket({ ticketId, clientContact, contractorContact, lines, status, delays }) {
-    const { data: row, error: rErr } = await sbClient.from("tickets").select("status, job_id, total").eq("id", ticketId).maybeSingle();
+    // The job rides on the pre-read: its open check used to be a second
+    // round trip, strictly after this one, in front of every save and every
+    // queued replay. A job the embed cannot show (unsynced, or invisible)
+    // falls through to assertJobOpen so the wording of that case is its own.
+    const { data: row, error: rErr } = await sbClient.from("tickets").select("status, job_id, total, jobs(status, job_number)").eq("id", ticketId).maybeSingle();
     if (rErr) throw rErr;
     // Cancelled on another device while this editor was open. Say so —
     // the screen's generic wrapper ("press Save again") would be a lie
@@ -3017,7 +3055,7 @@ export const Db = {
       await assertSessionAlive();
       throw plainError(`Ticket ${ticketId} no longer exists — it was cancelled on another device, so there is nothing to save onto.`, { ticketGone: true });
     }
-    await this.assertJobOpen(row.job_id);
+    if (row.jobs) assertJobRowOpen(row.jobs); else await this.assertJobOpen(row.job_id);
     // Whether this save may land on that row at all. The rule itself is
     // ticketStatusWriteRefusal in data.js, so it can be read and tested
     // without a database; both of its clauses are about money that has
@@ -3553,9 +3591,12 @@ export const Db = {
     return data;
   },
   // The names in the log, for the panel's filter — the log is small (it is
-  // cleared by hand) so a distinct over it is a cheap read.
+  // cleared by hand) so a distinct over it is a cheap read. Capped where
+  // PostgREST would cap it silently: a log nobody has cleared still fills
+  // the dropdown from its first thousand entries rather than pretending to
+  // have read them all.
   async listFunctionErrorNames() {
-    const { data, error } = await sbClient.from("function_errors").select("function_name").order("function_name");
+    const { data, error } = await sbClient.from("function_errors").select("function_name").order("function_name").limit(RESPONSE_ROW_CAP);
     if (error) throw error;
     return [...new Set((data || []).map(r => r.function_name))];
   },

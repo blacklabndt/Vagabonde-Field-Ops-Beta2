@@ -15,6 +15,27 @@
 // hours off a timesheet. Both now page until the source is exhausted.
 export const RESPONSE_ROW_CAP = 1000;
 
+// Run `fn` over `items` at most `n` at a time, answering in the input's
+// order whatever order the answers came back in. One at a time left a
+// truck's connection waiting on the network with nothing else happening;
+// four at once is enough to stop that and few enough not to drown it.
+// `fn` is expected to answer rather than throw where the caller wants
+// every item's result (the archive wraps its own failures); a throw ends
+// the whole run with that error.
+export async function mapLimit(items, n, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(n, items.length)) }, worker));
+  return out;
+}
+
 // Fetch every page of something that exceeds the 1000-row response cap.
 //
 // The two callers used to walk pages one at a time, each waiting on the last.

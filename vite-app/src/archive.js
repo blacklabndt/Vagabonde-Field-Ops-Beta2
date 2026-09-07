@@ -16,6 +16,11 @@ import { makeZip, safeFilename, crc32 } from "./zip.js";
 // Only for the switch that turns the offline fallback off while the archive
 // reads — no env, nothing browser-only, so the tests still load this module.
 import { OfflineCache } from "./offlineCache.js";
+// The concurrency pool lives in paging.js now, where db.js's export can
+// reach it without pulling this module into the shell; re-exported because
+// the dialog and the tests still take it from here.
+import { mapLimit } from "./paging.js";
+export { mapLimit };
 
 const enc = new TextEncoder();
 const text = s => enc.encode(String(s ?? ""));
@@ -95,19 +100,7 @@ const row = (label, value) => (value ? `${label}: ${value}` : null);
 // `fn` is expected to answer rather than throw (the caller wraps its own
 // failures), and the order is the input's, so the zip is the same file
 // whatever order the answers came back in.
-export async function mapLimit(items, n, fn) {
-  const out = new Array(items.length);
-  let next = 0;
-  const worker = async () => {
-    for (;;) {
-      const i = next++;
-      if (i >= items.length) return;
-      out[i] = await fn(items[i], i);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(n, items.length)) }, worker));
-  return out;
-}
+// (mapLimit: see paging.js.)
 
 // What has changed under a job between the archive being built and the clear
 // being pressed. `was` is what the build read; `now` is what the server says

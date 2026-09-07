@@ -368,12 +368,11 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
       // the screen to one client's March and pressed Export got every ticket
       // ever raised, under a footer count that said otherwise.
       const all = await Db.listTicketsForExport({ status: filter, q, from, to });
-      // The invoice number is not on a tracker row — it is read off the
-      // tickets themselves, in batches. A database that has no such column yet
-      // answers so, and the export goes out with that column blank and a line
-      // in the file saying why, rather than failing over a number the office
-      // was not asking for.
-      const detail = await Db.listTicketExportDetail(all.map(t => t.id));
+      // The invoice number rides on the rows themselves. A database that has
+      // no such column yet answers so, and the export goes out with that
+      // column blank and a line in the file saying why, rather than failing
+      // over a number the office was not asking for.
+      const detail = await Db.listTicketExportDetail(all);
       exportTickets(all, filterCaption(filter, q, from, to), detail);
     } catch (e) {
       setError(e.message || "Couldn't build the export.");
@@ -390,7 +389,7 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
     setError("");
     try {
       const all = await Db.listTicketsForExport({ status: filter, q, from, to });
-      const detail = await Db.listTicketExportDetail(all.map(t => t.id), { withLines: true });
+      const detail = await Db.listTicketExportDetail(all, { withLines: true });
       exportLines(all, filterCaption(filter, q, from, to), detail);
     } catch (e) {
       setError(e.message || "Couldn't build the line export.");
