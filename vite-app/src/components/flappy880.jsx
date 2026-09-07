@@ -174,22 +174,37 @@ function drawDevice(g, x, y, tilt) {
 
 // A pipe joint: the pipe itself plus a weld cap at the opening, so the thing
 // being dodged looks like the thing being radiographed.
-function drawPipe(g, x, top, height, flip) {
-  const grad = g.createLinearGradient(x, 0, x + PIPE_W, 0);
-  grad.addColorStop(0, "#7d8890");
-  grad.addColorStop(0.35, "#aeb8bf");
-  grad.addColorStop(1, "#6d777e");
+// The gradient is built once per context (see the effect below) and the
+// pipe drawn under a translate, which is pixel-identical to a gradient
+// minted at x — six of them a frame at 60 fps was allocation for nothing.
+function drawPipe(g, grad, x, top, height, flip) {
+  g.save();
+  g.translate(x, 0);
   g.fillStyle = grad;
-  g.fillRect(x, top, PIPE_W, height);
+  g.fillRect(0, top, PIPE_W, height);
   g.strokeStyle = "#4d565c";
   g.lineWidth = 2;
-  g.strokeRect(x, top, PIPE_W, height);
+  g.strokeRect(0, top, PIPE_W, height);
 
   // the weld cap at the open end
   const capY = flip ? top + 4 : top + height - 14;
   g.fillStyle = "#95a0a7";
-  g.fillRect(x - 4, capY, PIPE_W + 8, 10);
-  g.strokeRect(x - 4, capY, PIPE_W + 8, 10);
+  g.fillRect(-4, capY, PIPE_W + 8, 10);
+  g.strokeRect(-4, capY, PIPE_W + 8, 10);
+  g.restore();
+}
+
+// The two gradients the scene uses, made once for a context. Their
+// coordinates are constants; a setTransform does not invalidate them.
+function makeGradients(g) {
+  const sky = g.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, "#cfe0ec");
+  sky.addColorStop(1, "#eef2f4");
+  const pipe = g.createLinearGradient(0, 0, PIPE_W, 0);
+  pipe.addColorStop(0, "#7d8890");
+  pipe.addColorStop(0.35, "#aeb8bf");
+  pipe.addColorStop(1, "#6d777e");
+  return { sky, pipe };
 }
 
 export function Flappy880({ onClose, me }) {
@@ -268,6 +283,7 @@ export function Flappy880({ onClose, me }) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const g = canvas.getContext("2d");
+    const grads = makeGradients(g);
 
     // Match the pixel buffer to the screen's actual pixels. A fixed 360x520
     // buffer on a phone at devicePixelRatio 3 is one canvas pixel smeared
@@ -329,9 +345,17 @@ export function Flappy880({ onClose, me }) {
         if (s.y + dh >= H - 26 || s.y <= 0) crash();
       }
 
-      draw(g);
+      // A crashed board is a still: it is painted once and then left, rather
+      // than repainted sixty times a second for as long as it sits open.
+      if (stateRef.current === "crashed") {
+        if (!crashPainted) { crashPainted = true; draw(g); }
+      } else {
+        crashPainted = false;
+        draw(g);
+      }
       raf = requestAnimationFrame(step);
     };
+    let crashPainted = false;
 
     const crash = () => {
       if (dead.current) return;
@@ -352,15 +376,12 @@ export function Flappy880({ onClose, me }) {
       const s = game.current;
 
       // sky over a prairie horizon — it is Grande Prairie, after all
-      const sky = g2.createLinearGradient(0, 0, 0, H);
-      sky.addColorStop(0, "#cfe0ec");
-      sky.addColorStop(1, "#eef2f4");
-      g2.fillStyle = sky;
+      g2.fillStyle = grads.sky;
       g2.fillRect(0, 0, W, H);
 
       for (const p of s.pipes) {
-        drawPipe(g2, p.x, 0, p.gapY, true);
-        drawPipe(g2, p.x, p.gapY + GAP, H - (p.gapY + GAP) - 26, false);
+        drawPipe(g2, grads.pipe, p.x, 0, p.gapY, true);
+        drawPipe(g2, grads.pipe, p.x, p.gapY + GAP, H - (p.gapY + GAP) - 26, false);
       }
 
       // ground

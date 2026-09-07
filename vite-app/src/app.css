@@ -648,30 +648,6 @@ label.field-label-missing {
 .egg-board .pts { font-variant-numeric: tabular-nums; font-weight: 600; }
 .egg-board li.mine { font-weight: 600; }
 .egg-board-note { margin: 0; opacity: .6; }
-/* The platformer cabinet: wider stage, an on-screen pad, and the little
-   status card the shifts announce themselves on. */
-/* Two classes, so this outranks the base .egg-canvas sizing below no matter
-   which order a bundler emits them in. */
-.egg-canvas.egg-canvas-wide {
-  width: min(480px, 92vw, calc((100vh - 210px) * 1.5385));
-  width: min(480px, 92vw, calc((100dvh - 210px) * 1.5385));
-  aspect-ratio: 480 / 312;
-}
-.egg-pad { display: flex; gap: 10px; padding: 10px 12px 0; }
-.egg-pad-btn {
-  min-width: 64px; min-height: 44px; font-size: 20px; line-height: 1;
-  border: 1px solid var(--color-text); background: var(--color-bg);
-  color: var(--color-text); cursor: pointer;
-  /* Holding a direction must not scroll the page or select the label. */
-  touch-action: none; user-select: none; -webkit-user-select: none;
-}
-.egg-pad-btn:active { background: color-mix(in srgb, var(--color-text) 12%, transparent); }
-.egg-note {
-  position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%);
-  background: var(--color-bg); border: 1px solid var(--color-text);
-  padding: 8px 14px; font-size: 13px; white-space: nowrap;
-  pointer-events: none;
-}
 .egg-canvas {
   display: block; touch-action: manipulation; cursor: pointer;
   /* Fits whatever is left after the header and footer, keeping the 360:520

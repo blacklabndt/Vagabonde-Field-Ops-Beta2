@@ -439,6 +439,217 @@ function Lightbox({ src, onClose }) {
 const DRAFT_MAX = 4000;
 const DRAFT_WARN_FROM = 3500;
 
+// Body text with web addresses made tappable and any real job number
+// turned into a tap-through to the job. URLs first; the job pass runs
+// on what's left, split on word-shaped tokens (odd indexes are the
+// candidates in both passes). Membership in jobNums, never a pattern —
+// job numbers are freeform. Module-level so a memoized row can call it.
+function renderBody(text, jobNums, openJobNumber) {
+  const out = [];
+  const urlParts = String(text).split(/(https?:\/\/[^\s<>"']+)/g);
+  urlParts.forEach((seg, i) => {
+    if (i % 2 === 1) {
+      out.push(
+        <a key={"u" + i} href={seg} target="_blank" rel="noopener noreferrer"
+          style={{ color: "var(--color-accent)", overflowWrap: "anywhere" }}>
+          {seg}
+        </a>
+      );
+      return;
+    }
+    if (!seg) return;
+    if (!jobNums || !jobNums.size) { out.push(seg); return; }
+    const parts = seg.split(/([A-Za-z0-9][A-Za-z0-9-]{2,19})/g);
+    parts.forEach((part, j) => {
+      if (j % 2 === 1 && /\d/.test(part) && jobNums.has(part.toUpperCase())) {
+        out.push(
+          <button key={`j${i}-${j}`} onClick={() => openJobNumber(part)}
+            style={{ background: "transparent", border: "none", padding: 0, font: "inherit", cursor: "pointer", color: "var(--color-accent)", textDecoration: "underline" }}>
+            {part}
+          </button>
+        );
+      } else if (part) out.push(part);
+    });
+  });
+  return out;
+}
+
+const MUTED = "color-mix(in srgb, var(--color-text) 55%, transparent)";
+const TINY_BTN = { background: "transparent", border: "none", cursor: "pointer", color: MUTED, padding: 2, lineHeight: 1 };
+
+// One message. Memoized on its own props, so a reaction landing on this
+// morning's message, a ⋯ tap, or a new arrival re-renders the row it
+// touches and not the hundred above it — the room's useMemo used to
+// rebuild every bubble, and re-split every body, on each of those.
+// `h` is a ref holding the current handlers: they close over refs,
+// functional setState and Db, and reading them through the ref keeps
+// this memo from ever seeing a new function identity. `quiet` is decided
+// by the parent — the entrance animation must not read a ref in here.
+const ChatRow = React.memo(function ChatRow({ m, mine, newRun, quiet, menuOpen, isAdmin, uid, jobNums, h }) {
+  const hue = chipHue(m.profileId);
+  const hasMedia = !!(m.imageKey || m.gifUrl);
+  // Reactions grouped for the chips: one per emoji, count and
+  // whether one of them is yours.
+  const reactionGroups = [];
+  if (m.reactions && m.reactions.length) {
+    const byEmoji = new Map();
+    for (const r of m.reactions) {
+      const g = byEmoji.get(r.emoji) || { emoji: r.emoji, count: 0, mine: false };
+      g.count++;
+      if (r.profileId === uid) g.mine = true;
+      byEmoji.set(r.emoji, g);
+    }
+    reactionGroups.push(...byEmoji.values());
+  }
+  return (
+<div
+      className={quiet ? undefined : "chat-msg-in"}
+      style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", marginTop: newRun ? 12 : 3 }}>
+      {newRun && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexDirection: mine ? "row-reverse" : "row", marginBottom: 3 }}>
+          <span aria-hidden="true" style={{
+            width: 22, height: 22, display: "grid", placeItems: "center", flex: "none",
+            fontSize: 10, fontWeight: 700, letterSpacing: ".03em",
+            color: hue,
+            background: `color-mix(in srgb, ${hue} 20%, transparent)`,
+            border: `1px solid color-mix(in srgb, ${hue} 45%, transparent)`
+          }}>
+            {initialsOf(m.name || "").slice(0, 2) || "•"}
+          </span>
+          <span style={{ fontSize: 11, color: MUTED }}>
+            {mine ? "You" : (m.name || "Someone")} · {new Date(m.createdAt).toLocaleTimeString("en-CA", { hour: "2-digit", minute: "2-digit", hour12: false })}
+          </span>
+        </div>
+      )}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexDirection: mine ? "row-reverse" : "row", maxWidth: "86%" }}>
+        <div style={{
+          padding: 0, overflow: "hidden", fontSize: 14, lineHeight: 1.45,
+          background: mine
+            ? "color-mix(in srgb, var(--color-accent) 16%, transparent)"
+            : "color-mix(in srgb, var(--color-text) 7%, transparent)",
+          border: "1px solid " + (mine
+            ? "color-mix(in srgb, var(--color-accent) 35%, transparent)"
+            : "var(--color-divider)")
+        }}>
+          {m.quoted && (
+            <div style={{
+              margin: "8px 12px 0", padding: "4px 8px", fontSize: 12,
+              borderLeft: "2px solid color-mix(in srgb, var(--color-accent) 55%, transparent)",
+              background: "color-mix(in srgb, var(--color-text) 5%, transparent)",
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 320
+            }}>
+              <span style={{ color: "var(--color-accent)", fontWeight: 600 }}>{m.quoted.name || "Someone"}</span>
+              <span style={{ color: MUTED }}> — {m.quoted.body || m.quoted.label}</span>
+            </div>
+          )}
+          {m.gifUrl && (
+            // Straight off KLIPY's CDN — the constraint on the column
+            // is what keeps this an image host, not a tracking pixel.
+            // Media runs to the bubble's edges; only words get padding.
+            <img src={m.gifUrl} alt="GIF" loading="lazy" onLoad={() => h.current.restick()}
+              onClick={() => h.current.openImage(m)}
+              style={{ display: "block", maxWidth: "100%", maxHeight: 320, cursor: "zoom-in", marginTop: m.quoted ? 8 : 0 }} />
+          )}
+          {m.imageKey && (
+            <div style={{ marginTop: m.quoted ? 8 : 0 }}>
+              <ChatImage imageKey={m.imageKey} onSized={() => h.current.restick()} onOpen={() => h.current.openImage(m)} />
+            </div>
+          )}
+          {m.audioKey && (
+            <div style={{ padding: "8px 10px" }}>
+              <ChatAudio audioKey={m.audioKey} />
+            </div>
+          )}
+          {m.fileKey && (
+            <button onClick={() => h.current.openSharedFile(m)}
+              title="Open this file from the Files page"
+              style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", background: "transparent", border: "none", cursor: "pointer", font: "inherit", color: "inherit", textAlign: "left", maxWidth: "100%" }}>
+              <span style={{ flex: "none", fontSize: 9, fontWeight: 700, letterSpacing: ".06em", padding: "3px 5px", border: "1px solid color-mix(in srgb, var(--color-accent) 55%, transparent)", color: "var(--color-accent)" }}>
+                {(m.fileName.split(".").pop() || "file").toUpperCase().slice(0, 4)}
+              </span>
+              <span style={{ textDecoration: "underline", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {m.fileName}
+              </span>
+            </button>
+          )}
+          {m.body && (
+            <div style={{ padding: hasMedia ? "6px 12px 8px" : "8px 12px", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+              {renderBody(m.body, jobNums, h.current.openJobNumber)}
+            </div>
+          )}
+        </div>
+        {/* One quiet ⋯ instead of a row of controls. Reply and the
+            reactions are for everyone; moderation — pin and delete —
+            is an Admin's job. A tech's own messages stand as sent
+            until the 30-day sweep takes them. */}
+        {/* The glyph stays quiet; the target does not. This is the only
+            way to reach Reply, and it was 16 × 18 px — six of them down a
+            390 px screen, none of them hittable with gloves on. The
+            padding is the hit area, not the mark. */}
+        <button onClick={() => h.current.setMenuFor(menuOpen ? null : m.id)}
+          aria-label="Message actions" title="Message actions"
+          aria-expanded={menuOpen}
+          style={{
+            ...TINY_BTN, fontSize: 14, fontWeight: 700, flex: "none",
+            width: 44, height: 44, padding: 0,
+            display: "inline-flex", alignItems: "center", justifyContent: "center"
+          }}>
+          ⋯
+        </button>
+      </div>
+      {menuOpen && (
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 4, justifyContent: mine ? "flex-end" : "flex-start" }}>
+          {REACTION_SET.map(e => (
+            <button key={e} onClick={() => { h.current.setMenuFor(null); h.current.react(m, e); }}
+              aria-label={"React with " + e}
+              style={{ ...TINY_BTN, fontSize: 15, padding: "2px 4px" }}>
+              {e}
+            </button>
+          ))}
+          <button onClick={() => { h.current.setMenuFor(null); h.current.setReplyTarget(m); }}
+            style={{ ...TINY_BTN, fontSize: 11, fontWeight: 600 }}>
+            Reply
+          </button>
+          {isAdmin && (
+            <button onClick={() => { h.current.setMenuFor(null); h.current.togglePin(m); }}
+              style={{ ...TINY_BTN, fontSize: 11, fontWeight: 600 }}>
+              {m.pinnedAt ? "Unpin" : "Pin"}
+            </button>
+          )}
+          {isAdmin && (
+            <button onClick={() => { h.current.setMenuFor(null); h.current.remove(m.id); }}
+              aria-label="Remove this message" title="Remove this message"
+              style={{ ...TINY_BTN, fontSize: 15 }}>
+              ×
+            </button>
+          )}
+        </div>
+      )}
+      {reactionGroups.length > 0 && (
+        <div style={{ display: "flex", gap: 4, marginTop: 3, flexWrap: "wrap", justifyContent: mine ? "flex-end" : "flex-start" }}>
+          {reactionGroups.map(g => (
+            <button key={g.emoji} onClick={() => h.current.react(m, g.emoji)}
+              aria-label={g.emoji + " — " + g.count + (g.mine ? ", including you" : "")}
+              title={g.mine ? "Tap to take yours back" : "Tap to react too"}
+              style={{
+                fontSize: 12, padding: "1px 7px", cursor: "pointer",
+                background: g.mine
+                  ? "color-mix(in srgb, var(--color-accent) 14%, transparent)"
+                  : "color-mix(in srgb, var(--color-text) 5%, transparent)",
+                border: "1px solid " + (g.mine
+                  ? "color-mix(in srgb, var(--color-accent) 55%, transparent)"
+                  : "var(--color-divider)"),
+                color: "var(--color-text)"
+              }}>
+              {g.emoji} {g.count}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+
 export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
   const [messages, setMessages] = useState([]);
   const [pins, setPins] = useState([]);
@@ -669,18 +880,27 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
         me: { id: currentUser.id, name: currentUser.name },
         onReaction: ({ messageId, profileId, emoji, on }) => {
           if (!live) return;
-          setMessages(prev => prev.map(msg => {
-            if (msg.id !== messageId) return msg;
-            const cur = msg.reactions || [];
-            const has = cur.some(r => r.profileId === profileId && r.emoji === emoji);
-            if (on === has) return msg;
-            return {
-              ...msg,
-              reactions: on
-                ? [...cur, { emoji, profileId }]
-                : cur.filter(r => !(r.profileId === profileId && r.emoji === emoji))
-            };
-          }));
+          // Identity matters: the rows are memoized on the message, and the
+          // list on the array. Your own reaction comes straight back as an
+          // echo already applied — handing back a fresh array for it
+          // re-rendered the whole room a second time for nothing.
+          setMessages(prev => {
+            let hit = false;
+            const next = prev.map(msg => {
+              if (msg.id !== messageId) return msg;
+              const cur = msg.reactions || [];
+              const has = cur.some(r => r.profileId === profileId && r.emoji === emoji);
+              if (on === has) return msg;
+              hit = true;
+              return {
+                ...msg,
+                reactions: on
+                  ? [...cur, { emoji, profileId }]
+                  : cur.filter(r => !(r.profileId === profileId && r.emoji === emoji))
+              };
+            });
+            return hit ? next : prev;
+          });
         },
         onPresence: people => {
           if (!live) return;
@@ -904,14 +1124,22 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
   // scrollHeight of 763. Capped at about eight rows so the conversation above
   // never disappears behind the box; past that the textarea scrolls itself.
   const composerRef = useRef(null);
+  // The ceiling — eight lines plus the frame — comes from .input's metrics,
+  // which do not change while the screen is mounted, so it is measured
+  // once: getComputedStyle on every keystroke was a forced style recalc
+  // right before the reflow below.
+  const composerMax = useRef(0);
   useLayoutEffect(() => {
     const el = composerRef.current;
     if (!el) return;
-    const cs = window.getComputedStyle(el);
-    const line = parseFloat(cs.lineHeight) || 21;
-    const frame = ["paddingTop", "paddingBottom", "borderTopWidth", "borderBottomWidth"]
-      .reduce((sum, p) => sum + (parseFloat(cs[p]) || 0), 0);
-    const max = Math.round(line * 8 + frame);
+    if (!composerMax.current) {
+      const cs = window.getComputedStyle(el);
+      const line = parseFloat(cs.lineHeight) || 21;
+      const frame = ["paddingTop", "paddingBottom", "borderTopWidth", "borderBottomWidth"]
+        .reduce((sum, p) => sum + (parseFloat(cs[p]) || 0), 0);
+      composerMax.current = Math.round(line * 8 + frame);
+    }
+    const max = composerMax.current;
     // Measured from scratch each time, or deleting a paragraph leaves the box
     // as tall as the paragraph was.
     el.style.height = "auto";
@@ -1213,49 +1441,22 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
   };
 
   const isAdmin = currentUser.role === "Admin";
-  const muted = "color-mix(in srgb, var(--color-text) 55%, transparent)";
-  const tinyBtn = { background: "transparent", border: "none", cursor: "pointer", color: muted, padding: 2, lineHeight: 1 };
+  const muted = MUTED;
+  const tinyBtn = TINY_BTN;
 
-  // Body text with web addresses made tappable and any real job number
-  // turned into a tap-through to the job. URLs first; the job pass runs
-  // on what's left, split on word-shaped tokens (odd indexes are the
-  // candidates in both passes).
-  const renderBody = text => {
-    const out = [];
-    const urlParts = String(text).split(/(https?:\/\/[^\s<>"']+)/g);
-    urlParts.forEach((seg, i) => {
-      if (i % 2 === 1) {
-        out.push(
-          <a key={"u" + i} href={seg} target="_blank" rel="noopener noreferrer"
-            style={{ color: "var(--color-accent)", overflowWrap: "anywhere" }}>
-            {seg}
-          </a>
-        );
-        return;
-      }
-      if (!seg) return;
-      if (!jobNums || !jobNums.size) { out.push(seg); return; }
-      const parts = seg.split(/([A-Za-z0-9][A-Za-z0-9-]{2,19})/g);
-      parts.forEach((part, j) => {
-        if (j % 2 === 1 && /\d/.test(part) && jobNums.has(part.toUpperCase())) {
-          out.push(
-            <button key={`j${i}-${j}`} onClick={() => openJobNumber(part)}
-              style={{ background: "transparent", border: "none", padding: 0, font: "inherit", cursor: "pointer", color: "var(--color-accent)", textDecoration: "underline" }}>
-              {part}
-            </button>
-          );
-        } else if (part) out.push(part);
-      });
-    });
-    return out;
-  };
+  // The handlers the rows call, read through one ref so a row's memo never
+  // sees a new function identity (see ChatRow).
+  const rowHandlers = useRef({});
+  rowHandlers.current = { react, remove, togglePin, setReplyTarget, setMenuFor, openImage, openSharedFile, restick, openJobNumber };
 
-  // The rows rebuild only when the room does — messages, the unread mark,
-  // the job dictionary, or an open ⋯ menu. Without this, every keystroke
-  // in the composer re-rendered a hundred bubbles — per-letter work a
-  // cold phone can feel. The handlers captured here only touch refs,
-  // functional setState and Db, so a captured copy never goes stale in
-  // any way that matters.
+
+  // The room's rows: day dividers, the "new messages" mark and one ChatRow
+  // per message. Rebuilt when the room does — messages, the unread mark,
+  // the job dictionary, an open ⋯ menu — and not on a keystroke in the
+  // composer; and cheap now that each row is memoized on its own props,
+  // so a rebuild here re-renders only the rows whose props moved. What
+  // stays in this loop is sequential: where the dividers go and which
+  // message starts a run.
   const messageRows = useMemo(() => {
     const rows = [];
     let prevMsg = null;
@@ -1293,167 +1494,10 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
       // or the same one back after half an hour away.
       const newRun = !prevMsg || prevMsg.profileId !== m.profileId ||
         new Date(m.createdAt) - new Date(prevMsg.createdAt) > 30 * 60000;
-      const hue = chipHue(m.profileId);
-      const hasMedia = !!(m.imageKey || m.gifUrl);
-      // Reactions grouped for the chips: one per emoji, count and
-      // whether one of them is yours.
-      const reactionGroups = [];
-      if (m.reactions && m.reactions.length) {
-        const byEmoji = new Map();
-        for (const r of m.reactions) {
-          const g = byEmoji.get(r.emoji) || { emoji: r.emoji, count: 0, mine: false };
-          g.count++;
-          if (r.profileId === currentUser.id) g.mine = true;
-          byEmoji.set(r.emoji, g);
-        }
-        reactionGroups.push(...byEmoji.values());
-      }
       rows.push(
-        <div key={m.id}
-          className={quietIds.current.has(m.id) ? undefined : "chat-msg-in"}
-          style={{ display: "flex", flexDirection: "column", alignItems: mine ? "flex-end" : "flex-start", marginTop: newRun ? 12 : 3 }}>
-          {newRun && (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexDirection: mine ? "row-reverse" : "row", marginBottom: 3 }}>
-              <span aria-hidden="true" style={{
-                width: 22, height: 22, display: "grid", placeItems: "center", flex: "none",
-                fontSize: 10, fontWeight: 700, letterSpacing: ".03em",
-                color: hue,
-                background: `color-mix(in srgb, ${hue} 20%, transparent)`,
-                border: `1px solid color-mix(in srgb, ${hue} 45%, transparent)`
-              }}>
-                {initialsOf(m.name || "").slice(0, 2) || "•"}
-              </span>
-              <span style={{ fontSize: 11, color: muted }}>
-                {mine ? "You" : (m.name || "Someone")} · {new Date(m.createdAt).toLocaleTimeString("en-CA", { hour: "2-digit", minute: "2-digit", hour12: false })}
-              </span>
-            </div>
-          )}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, flexDirection: mine ? "row-reverse" : "row", maxWidth: "86%" }}>
-            <div style={{
-              padding: 0, overflow: "hidden", fontSize: 14, lineHeight: 1.45,
-              background: mine
-                ? "color-mix(in srgb, var(--color-accent) 16%, transparent)"
-                : "color-mix(in srgb, var(--color-text) 7%, transparent)",
-              border: "1px solid " + (mine
-                ? "color-mix(in srgb, var(--color-accent) 35%, transparent)"
-                : "var(--color-divider)")
-            }}>
-              {m.quoted && (
-                <div style={{
-                  margin: "8px 12px 0", padding: "4px 8px", fontSize: 12,
-                  borderLeft: "2px solid color-mix(in srgb, var(--color-accent) 55%, transparent)",
-                  background: "color-mix(in srgb, var(--color-text) 5%, transparent)",
-                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 320
-                }}>
-                  <span style={{ color: "var(--color-accent)", fontWeight: 600 }}>{m.quoted.name || "Someone"}</span>
-                  <span style={{ color: muted }}> — {m.quoted.body || m.quoted.label}</span>
-                </div>
-              )}
-              {m.gifUrl && (
-                // Straight off KLIPY's CDN — the constraint on the column
-                // is what keeps this an image host, not a tracking pixel.
-                // Media runs to the bubble's edges; only words get padding.
-                <img src={m.gifUrl} alt="GIF" loading="lazy" onLoad={restick}
-                  onClick={() => openImage(m)}
-                  style={{ display: "block", maxWidth: "100%", maxHeight: 320, cursor: "zoom-in", marginTop: m.quoted ? 8 : 0 }} />
-              )}
-              {m.imageKey && (
-                <div style={{ marginTop: m.quoted ? 8 : 0 }}>
-                  <ChatImage imageKey={m.imageKey} onSized={restick} onOpen={() => openImage(m)} />
-                </div>
-              )}
-              {m.audioKey && (
-                <div style={{ padding: "8px 10px" }}>
-                  <ChatAudio audioKey={m.audioKey} />
-                </div>
-              )}
-              {m.fileKey && (
-                <button onClick={() => openSharedFile(m)}
-                  title="Open this file from the Files page"
-                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", background: "transparent", border: "none", cursor: "pointer", font: "inherit", color: "inherit", textAlign: "left", maxWidth: "100%" }}>
-                  <span style={{ flex: "none", fontSize: 9, fontWeight: 700, letterSpacing: ".06em", padding: "3px 5px", border: "1px solid color-mix(in srgb, var(--color-accent) 55%, transparent)", color: "var(--color-accent)" }}>
-                    {(m.fileName.split(".").pop() || "file").toUpperCase().slice(0, 4)}
-                  </span>
-                  <span style={{ textDecoration: "underline", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {m.fileName}
-                  </span>
-                </button>
-              )}
-              {m.body && (
-                <div style={{ padding: hasMedia ? "6px 12px 8px" : "8px 12px", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-                  {renderBody(m.body)}
-                </div>
-              )}
-            </div>
-            {/* One quiet ⋯ instead of a row of controls. Reply and the
-                reactions are for everyone; moderation — pin and delete —
-                is an Admin's job. A tech's own messages stand as sent
-                until the 30-day sweep takes them. */}
-            {/* The glyph stays quiet; the target does not. This is the only
-                way to reach Reply, and it was 16 × 18 px — six of them down a
-                390 px screen, none of them hittable with gloves on. The
-                padding is the hit area, not the mark. */}
-            <button onClick={() => setMenuFor(menuFor === m.id ? null : m.id)}
-              aria-label="Message actions" title="Message actions"
-              aria-expanded={menuFor === m.id}
-              style={{
-                ...tinyBtn, fontSize: 14, fontWeight: 700, flex: "none",
-                width: 44, height: 44, padding: 0,
-                display: "inline-flex", alignItems: "center", justifyContent: "center"
-              }}>
-              ⋯
-            </button>
-          </div>
-          {menuFor === m.id && (
-            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 4, justifyContent: mine ? "flex-end" : "flex-start" }}>
-              {REACTION_SET.map(e => (
-                <button key={e} onClick={() => { setMenuFor(null); react(m, e); }}
-                  aria-label={"React with " + e}
-                  style={{ ...tinyBtn, fontSize: 15, padding: "2px 4px" }}>
-                  {e}
-                </button>
-              ))}
-              <button onClick={() => { setMenuFor(null); setReplyTarget(m); }}
-                style={{ ...tinyBtn, fontSize: 11, fontWeight: 600 }}>
-                Reply
-              </button>
-              {isAdmin && (
-                <button onClick={() => { setMenuFor(null); togglePin(m); }}
-                  style={{ ...tinyBtn, fontSize: 11, fontWeight: 600 }}>
-                  {m.pinnedAt ? "Unpin" : "Pin"}
-                </button>
-              )}
-              {isAdmin && (
-                <button onClick={() => { setMenuFor(null); remove(m.id); }}
-                  aria-label="Remove this message" title="Remove this message"
-                  style={{ ...tinyBtn, fontSize: 15 }}>
-                  ×
-                </button>
-              )}
-            </div>
-          )}
-          {reactionGroups.length > 0 && (
-            <div style={{ display: "flex", gap: 4, marginTop: 3, flexWrap: "wrap", justifyContent: mine ? "flex-end" : "flex-start" }}>
-              {reactionGroups.map(g => (
-                <button key={g.emoji} onClick={() => react(m, g.emoji)}
-                  aria-label={g.emoji + " — " + g.count + (g.mine ? ", including you" : "")}
-                  title={g.mine ? "Tap to take yours back" : "Tap to react too"}
-                  style={{
-                    fontSize: 12, padding: "1px 7px", cursor: "pointer",
-                    background: g.mine
-                      ? "color-mix(in srgb, var(--color-accent) 14%, transparent)"
-                      : "color-mix(in srgb, var(--color-text) 5%, transparent)",
-                    border: "1px solid " + (g.mine
-                      ? "color-mix(in srgb, var(--color-accent) 55%, transparent)"
-                      : "var(--color-divider)"),
-                    color: "var(--color-text)"
-                  }}>
-                  {g.emoji} {g.count}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <ChatRow key={m.id} m={m} mine={mine} newRun={newRun}
+          quiet={quietIds.current.has(m.id)} menuOpen={menuFor === m.id}
+          isAdmin={isAdmin} uid={currentUser.id} jobNums={jobNums} h={rowHandlers} />
       );
       prevMsg = m;
     }
@@ -1760,7 +1804,7 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
           )}
           {pinView.body && (
             <div style={{ fontSize: 14, lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-              {renderBody(pinView.body)}
+              {renderBody(pinView.body, jobNums, openJobNumber)}
             </div>
           )}
         </Dialog>

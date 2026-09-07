@@ -148,16 +148,22 @@ const LABELABLE = new Set(["input", "select", "textarea", "button", "meter", "ou
 // reader ends up re-announcing the box being typed into. The stamped element
 // belongs to this Field's own subtree and leaves with it.
 function useLabelFirstControl(rootRef, labelId, active) {
+  // The control already stamped, so a settled Field costs nothing per
+  // render: the write was always a no-op after the first pass, but the
+  // querySelectorAll in front of it ran on every keystroke of every form.
+  // A stamped control that has left the tree makes it look again.
+  const stamped = useRef(null);
   useEffect(() => {
     if (!active) return;
     const root = rootRef.current;
     if (!root) return;
     const ours = el => el.getAttribute("aria-labelledby") === labelId;
+    if (stamped.current && stamped.current.isConnected && ours(stamped.current)) return;
     const named = el => el.getAttribute("aria-label") ||
       (el.getAttribute("aria-labelledby") && !ours(el)) ||
       (el.labels && el.labels.length);
     const el = Array.from(root.querySelectorAll("input, select, textarea")).find(x => !named(x));
-    if (el && !ours(el)) el.setAttribute("aria-labelledby", labelId);
+    if (el && !ours(el)) { el.setAttribute("aria-labelledby", labelId); stamped.current = el; }
   });
 }
 
