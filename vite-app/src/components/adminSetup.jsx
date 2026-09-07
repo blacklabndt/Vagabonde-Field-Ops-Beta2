@@ -102,14 +102,17 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
         Everything here is Admin-only; save applies immediately, no restart needed.
       </p>
 
+      <ErrorBox>{error}</ErrorBox>
+
       {/* The sections flow into as many columns as the page allows — two on
           a desktop, one on a phone — so the screen is not a 640px strip down
-          the middle of a wide monitor. min(…, 100%) keeps a card narrower
-          than a phone from forcing the page to scroll sideways, and minWidth
-          0 on each card lets a long, unbroken error message wrap inside it
-          instead of widening the grid. */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(460px, 100%), 1fr))", gap: 16, alignItems: "start" }}>
-        <div style={{ gridColumn: "1 / -1" }}><ErrorBox>{error}</ErrorBox></div>
+          the middle of a wide monitor. Columns rather than a grid: a grid
+          makes every row as tall as its tallest card, so a short card left
+          a hole beneath it; in a column each card sits 16px under the one
+          above, whatever its neighbour's height (.admin-columns in
+          app.css). minWidth 0 on each card lets a long, unbroken error
+          message wrap inside it instead of widening the column. */}
+      <div className="admin-columns">
 
         {/* Year-end. It lives here, not on Home, because its last step is
             the one bulk delete in the app: the archive dialog only offers

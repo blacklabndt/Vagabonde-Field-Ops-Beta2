@@ -108,6 +108,12 @@ input[type=range] { accent-color: var(--color-accent); }
 
 /* — page shell — */
 .page { max-width: 1240px; margin: 0 auto; padding: 32px 28px 64px; }
+/* The Admin screen's cards: as many 460px columns as fit (one on a phone —
+   a column narrower than the page is the page), each card whole and 16px
+   under the one above, so there is no row to leave a hole beneath a short
+   card. The last card's margin is what keeps the columns' bottoms even. */
+.admin-columns { columns: 460px; column-gap: 16px; }
+.admin-columns > * { break-inside: avoid; margin-bottom: 16px; }
 .kicker { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--color-accent); }
 
 /* — filter pills — */
