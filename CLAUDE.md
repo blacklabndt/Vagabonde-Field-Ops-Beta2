@@ -40,6 +40,13 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
   Nothing is waiting there now. The latest is
+  `20260907175805_the_error_log_clear_says_where.sql` — the Clear button's
+  `clear_function_errors()` deletes `where true`, because the authenticator
+  role preloads pg-safeupdate, which refuses an unfiltered DELETE or UPDATE
+  in every API session, definer functions included ("DELETE requires a
+  WHERE clause"). Any new bulk door needs a WHERE, even a `where true`;
+  the probe beside it cannot load the library (refused outside the API's
+  sessions), so the button is the end-to-end check. Before it,
   `20260907044223_a_ticket_is_edited_by_its_technician_or_an_admin.sql` —
   `private.can_write_ticket`, the gate behind every ticket_lines and
   ticket_crew write, is the technician's own or an Admin's; the Coordinator
