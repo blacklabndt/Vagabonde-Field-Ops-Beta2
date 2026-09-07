@@ -203,18 +203,22 @@ function shapeJob(j) {
 // Best effort, and counted rather than thrown: the rows are already gone by
 // the time this runs, so a refused removal is an untidy bucket, not a lost
 // record — and the caller can say how many are left behind.
+//
+// The batches are independent, so a few go at a time: a year's archive clear
+// hands back thousands of keys, and one batch after another was tens of
+// serial round trips on the tail of an operation that already runs long.
 async function removeStoredPdfs(result) {
-  let filesLeft = 0;
-  const removeAll = async (bucket, keys) => {
-    for (let i = 0; i < keys.length; i += 100) {
-      const batch = keys.slice(i, i + 100);
-      const { error: rmErr } = await sbClient.storage.from(bucket).remove(batch);
-      if (rmErr) { filesLeft += batch.length; console.warn(`Couldn't remove ${batch.length} object(s) from ${bucket}:`, rmErr.message); }
-    }
-  };
-  await removeAll("jhas", (result && result.jha_keys) || []);
-  await removeAll("reports", (result && result.report_keys) || []);
-  return filesLeft;
+  const batches = [];
+  for (const [bucket, keys] of [["jhas", (result && result.jha_keys) || []], ["reports", (result && result.report_keys) || []]]) {
+    for (let i = 0; i < keys.length; i += 100) batches.push({ bucket, batch: keys.slice(i, i + 100) });
+  }
+  const left = await mapLimit(batches, 4, async ({ bucket, batch }) => {
+    const { error: rmErr } = await sbClient.storage.from(bucket).remove(batch);
+    if (!rmErr) return 0;
+    console.warn(`Couldn't remove ${batch.length} object(s) from ${bucket}:`, rmErr.message);
+    return batch.length;
+  });
+  return left.reduce((n, x) => n + x, 0);
 }
 
 // A light in-memory cache for the reference-data lists (clients, contractors,
@@ -225,17 +229,33 @@ async function removeStoredPdfs(result) {
 // felt for long, long enough to kill the repeat-navigation round trips.
 const _cache = {};
 const _generation = {};
+// The read in flight for a key, so two callers in the same tick share one
+// walk: opening a job started listContacts from getJobRecord and from the
+// job screen's own mount effect at once, and with nothing stored yet both
+// missed and both paged the whole directory. A write to the table
+// (invalidate) drops the in-flight entry too, so the next caller reads
+// fresh rather than joining a walk that started before the write.
+const _inflight = {};
 const CACHE_TTL_MS = 30000;
 async function cached(key, fetcher) {
   const hit = _cache[key];
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
+  if (_inflight[key]) return _inflight[key];
   // A read that was already in flight when something wrote to this table must
   // not be the thing that repopulates the cache — it fetched the old rows.
   // The generation counter is what tells the two apart.
   const startedAt = _generation[key] || 0;
-  const value = await fetcher();
-  if ((_generation[key] || 0) === startedAt) _cache[key] = { value, at: Date.now() };
-  return value;
+  const read = (async () => {
+    try {
+      const value = await fetcher();
+      if ((_generation[key] || 0) === startedAt) _cache[key] = { value, at: Date.now() };
+      return value;
+    } finally {
+      if (_inflight[key] === read) delete _inflight[key];
+    }
+  })();
+  _inflight[key] = read;
+  return read;
 }
 // Floors anything that feeds a bill — rates, quantities, hours. A negative
 // Rates and quantities both come off the ticket screen, so they are floored
@@ -302,6 +322,7 @@ const jobNumberTakenMessage = jobNumber =>
   `Job ${jobNumber} already exists — job numbers have to be unique. Give this one a different number.`;
 
 function invalidate(...keys) {
+  for (const k of keys) delete _inflight[k];
   keys.forEach(k => {
     delete _cache[k];
     _generation[k] = (_generation[k] || 0) + 1;
@@ -794,12 +815,9 @@ export const Db = {
     // still holding the deleted job (whose per-job entries are gone below,
     // so tapping it errors).
     invalidate("job_numbers");
-    await OfflineCache.remove("jobs.recent");
-    await OfflineCache.remove("job." + jobId);
-    await OfflineCache.remove("job.reps." + jobId);
-    await OfflineCache.remove("jhas." + jobId);
-    await OfflineCache.remove("reports." + jobId);
-    await OfflineCache.remove("tickets." + jobId);
+    // Every key at once (they are distinct rows, and remove swallows its own
+    // failures), rather than one transaction awaited after another.
+    const gone = ["jobs.recent", "job." + jobId, "job.reps." + jobId, "jhas." + jobId, "reports." + jobId, "tickets." + jobId];
     // The half-entered ticket and assessment copies too, and for the same
     // reason the archive's clear sweeps them: they are keyed by the job's
     // dbId, so they outlive the job that gave them meaning and are counted
@@ -809,18 +827,14 @@ export const Db = {
     // dead. (A ticket already saved is keyed by its own id, and there is
     // nothing here to match that against.) Both paths: transferred or
     // deleted with its work, this job is gone either way.
-    await OfflineCache.remove("ticket.wip." + jobId);
-    await OfflineCache.remove("jha.wip." + jobId);
-    await OfflineCache.remove("jha.last." + jobId);
+    gone.push("ticket.wip." + jobId, "jha.wip." + jobId, "jha.last." + jobId);
     // A transfer moves the JHAs, reports and tickets onto the target job, so
     // the target's remembered history is now the one that is wrong — it names
     // none of what it has just been given.
     if (transferToId) {
-      await OfflineCache.remove("jhas." + transferToId);
-      await OfflineCache.remove("reports." + transferToId);
-      await OfflineCache.remove("tickets." + transferToId);
-      await OfflineCache.remove("jha.last." + transferToId);
+      gone.push("jhas." + transferToId, "reports." + transferToId, "tickets." + transferToId, "jha.last." + transferToId);
     }
+    await Promise.all(gone.map(k => OfflineCache.remove(k)));
     await dropClientJobLists();
     return { ...(data || {}), filesLeft };
   },
@@ -1482,14 +1496,20 @@ export const Db = {
   // enough for "Signed JHAs on file" to be real data instead of a mock array.
   async createJha({ jobDbId, template, hazards, signedBy, siteRep, pdfKey, dosimetry, unitNumber, details, workDate, clientKey = null }) {
     // Started before the open check, awaited after it (see createTicket).
-    const keyLookup = startKeyLookup("jhas", "*", clientKey);
+    let keyLookup = startKeyLookup("jhas", "*", clientKey);
     await this.assertJobOpen(jobDbId);
     // The same idempotency key tickets and reports carry (jhas.client_key,
     // unique): an assessment whose insert landed but whose answer was lost
     // on the radio replays from the outbox as a lookup of the row that
     // already exists, not as a second signed safety record for the day.
+    // The pre-started lookup is consumed once; the 23505 branch below calls
+    // this a second time, after the insert was refused, and must read the
+    // database again — re-awaiting the settled promise gave it the same
+    // null that led to the insert, and the row on file was never returned.
     const existing = async () => {
-      const { data: already, error: keyErr } = await keyLookup;
+      const pending = keyLookup || startKeyLookup("jhas", "*", clientKey);
+      keyLookup = null;
+      const { data: already, error: keyErr } = await pending;
       if (keyErr) throw keyErr;
       // The row that landed while its answer was lost never had its PDF
       // rendered either — the render is fired from the insert path, which
@@ -2026,7 +2046,12 @@ export const Db = {
   // and the contractor column on the dispatch board are two different facts
   // that quietly disagree.
   async getJobRecord(job) {
-    const contacts = await this.listContacts();
+    // Started here, awaited after the reps read below: neither needs the
+    // other, and on a cold app the directory is a full paged walk that the
+    // panel used to wait out before the reps read even began. The no-op
+    // catch marks a rejection handled until the await below raises it.
+    const contactsRead = this.listContacts();
+    contactsRead.catch(() => {});
 
     // Which people this particular job names. `jobs.client_contact_id` and
     // `contractor_contact_id` have been in the schema since the beginning and
@@ -2072,6 +2097,7 @@ export const Db = {
       repsUnknown = true;
     }
 
+    const contacts = await contactsRead;
     const byId = id => (id && contacts.find(c => c.id === id)) || null;
     const clientContact = byId(named.client_contact_id) || primaryContact(contacts, "client", job.clientId);
     const contractorContact = byId(named.contractor_contact_id) || primaryContact(contacts, "contractor", job.contractorId);

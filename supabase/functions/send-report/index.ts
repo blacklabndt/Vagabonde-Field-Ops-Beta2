@@ -46,19 +46,22 @@ Deno.serve(async (req) => {
     // signs a 14-day URL and attaches the raw PDF with the service role —
     // a private-data exfiltration path from vagabonde.ca's own domain.
     // Emailing a report is a Technician-or-office job; Helpers cannot.
-    const { data: caller } = await asUser.from("profiles").select("role").eq("id", user.id).single();
+    // The caller's role and the report are two reads under the caller's own
+    // RLS that need nothing from each other, so they go out together; the
+    // checks keep their order below. (RLS still applies to the report read,
+    // so a user who can't see the report can't email it either.)
+    const [{ data: caller }, { data: report, error: rErr }] = await Promise.all([
+      asUser.from("profiles").select("role").eq("id", user.id).single(),
+      asUser
+        .from("reports")
+        .select("id, filename, pdf_key, welds, result, jobs(job_number, project, clients(name))")
+        .eq("id", reportId).single()
+    ]);
     if (!["Admin", "Coordinator", "Technician"].includes(caller?.role ?? "")) {
       return new Response(JSON.stringify({ error: "Only a Technician, Coordinator or Admin can email a report." }), {
         status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }
-
-    // RLS still applies to this read, so a user who can't see the report
-    // can't email it either.
-    const { data: report, error: rErr } = await asUser
-      .from("reports")
-      .select("id, filename, pdf_key, welds, result, jobs(job_number, project, clients(name))")
-      .eq("id", reportId).single();
     if (rErr || !report) throw new Error("Report not found, or you don't have access to it");
     // Without a PDF there is no attachment and no link — the contractor gets
     // an email carrying nothing while the row is stamped as sent, which is
@@ -77,11 +80,13 @@ Deno.serve(async (req) => {
     let attachments = undefined;
     let attachmentNote = "";
 
-    const { data: signed } = await admin.storage
-      .from("reports").createSignedUrl(report.pdf_key, 60 * 60 * 24 * 14);
+    // The link and the bytes are independent storage calls; together.
+    const [{ data: signed }, { data: blob }] = await Promise.all([
+      admin.storage.from("reports").createSignedUrl(report.pdf_key, 60 * 60 * 24 * 14),
+      admin.storage.from("reports").download(report.pdf_key)
+    ]);
     link = signed?.signedUrl ?? "";
 
-    const { data: blob } = await admin.storage.from("reports").download(report.pdf_key);
     if (blob) {
       const bytes = new Uint8Array(await blob.arrayBuffer());
       if (bytes.length <= MAX_ATTACHMENT_BYTES) {

@@ -17,7 +17,7 @@ import type { InvoiceData, InvoiceSettings } from "./invoice.ts";
 import { LEVEL_LEGEND } from "./levels.ts";
 
 // Everything the invoice prints, and nothing else.
-export const TICKET_INVOICE_SELECT =
+const TICKET_INVOICE_SELECT =
   "id, work_date, total, status, delays, client_contact, approved_at, approved_by_email, approved_signature, approval_sent_to, " +
   "invoice_number, invoiced_at, " +
   "jobs(job_number, project, lsd, afe, area, clients(name, gst_rate), contractors(name)), " +
@@ -29,7 +29,7 @@ export const TICKET_INVOICE_SELECT =
 // in the rate card's order — so ordering by it keeps the printed bill in
 // the order the client agreed the card in. Every reader of the select
 // applies this; a copy that forgets prints the charges shuffled.
-export const TICKET_LINES_ORDER = ["line_order", { referencedTable: "ticket_lines" }] as const;
+const TICKET_LINES_ORDER = ["line_order", { referencedTable: "ticket_lines" }] as const;
 
 const CREW_SELECT =
   "straight_hours, ot_hours, mileage_km, profiles(name, level, id_code)";
@@ -48,7 +48,7 @@ type Client = any;
 // prints without its terms, and the alternative is a client rep who cannot
 // open the bill they were asked to sign at all. The money on the document is
 // not affected either way — it comes from the lines.
-export async function invoiceSettings(): Promise<InvoiceSettings> {
+async function invoiceSettings(): Promise<InvoiceSettings> {
   try {
     const admin = createClient(
       Deno.env.get("SUPABASE_URL")!,
@@ -76,28 +76,32 @@ export async function loadInvoice(
   // appSettings carries them); otherwise read here, best-effort.
   settingsGiven: InvoiceSettings | null = null
 ): Promise<{ data: InvoiceData | null; error: string | null }> {
-  const { data: ticket, error } = await client
-    .from("tickets")
-    .select(TICKET_INVOICE_SELECT)
-    .order(...TICKET_LINES_ORDER)
-    .eq("id", ticketId)
-    .maybeSingle();
-
-  if (error) return { data: null, error: error.message };
-  if (!ticket) return { data: null, error: "Ticket not found, or you don't have access to it." };
-
+  // Three reads that need nothing from each other, started together: this
+  // is the hottest read there is — the approval page's GET and POST, every
+  // approval email, and the archive rendering thousands of invoices.
+  //
   // Crew is read separately because ticket_crew is not reachable through the
   // ticket's own embed. Best-effort: a ticket with no crew recorded still has
   // a bill on it, and failing to list who was there must not stop it printing.
-  const { data: crewRows } = await client
-    .from("ticket_crew")
-    .select(CREW_SELECT)
-    .eq("ticket_id", ticketId);
+  // The settings are read here rather than in each of the three callers, for
+  // the same reason the column list is: three hand-written copies is how the
+  // emailed bill ends up carrying terms the page it links to does not.
+  const [{ data: ticket, error }, { data: crewRows }, settings] = await Promise.all([
+    client
+      .from("tickets")
+      .select(TICKET_INVOICE_SELECT)
+      .order(...TICKET_LINES_ORDER)
+      .eq("id", ticketId)
+      .maybeSingle(),
+    client
+      .from("ticket_crew")
+      .select(CREW_SELECT)
+      .eq("ticket_id", ticketId),
+    settingsGiven ? Promise.resolve(settingsGiven) : invoiceSettings()
+  ]);
 
-  // Read here rather than in each of the three callers, for the same reason
-  // the column list is: three hand-written copies is how the emailed bill
-  // ends up carrying terms the page it links to does not.
-  const settings = settingsGiven ?? await invoiceSettings();
+  if (error) return { data: null, error: error.message };
+  if (!ticket) return { data: null, error: "Ticket not found, or you don't have access to it." };
 
   return {
     error: null,

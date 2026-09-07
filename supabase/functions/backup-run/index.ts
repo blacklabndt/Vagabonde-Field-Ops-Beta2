@@ -673,12 +673,13 @@ async function restoreSources(db: SupabaseClient): Promise<string[]> {
 async function stepRetention(
   db: SupabaseClient, drive: DriveClient, rootFolderId: string, keep: number, c: RunCursor
 ): Promise<RunCursor> {
-  const folders = await drive.listFolders(rootFolderId);
+  // The drive's folders and the restores in flight: two services, together.
+  const [folders, sources] = await Promise.all([drive.listFolders(rootFolderId), restoreSources(db)]);
   // foldersToDelete only ever names a folder whose name is the stamp
   // exactly, so a before-restore copy — and anything the Admin put in the
   // same drive themselves — is not retention's business. The folder a
   // running restore is reading from is spared by name.
-  const doomed = foldersToDelete(folders.map(f => f.name), keep, await restoreSources(db));
+  const doomed = foldersToDelete(folders.map(f => f.name), keep, sources);
   for (const name of doomed) {
     const f = folders.find(x => x.name === name);
     if (f) await withRetry(`Removing ${name}`, () => drive.delete(f.id));

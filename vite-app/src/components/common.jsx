@@ -387,14 +387,18 @@ export function SearchSelect({
 
   // Close when the click lands anywhere else. mousedown rather than click, so
   // it closes before a button underneath receives its own press.
+  // Listening only while the list is open: closed, the handler could only
+  // ever set open to false, and every picker on a screen was running it
+  // for every mousedown anywhere.
   useEffect(() => {
+    if (!open) return undefined;
     const away = e => {
       if (boxRef.current && !boxRef.current.contains(e.target) &&
         !(listRef.current && listRef.current.contains(e.target))) setOpen(false);
     };
     document.addEventListener("mousedown", away);
     return () => document.removeEventListener("mousedown", away);
-  }, []);
+  }, [open]);
 
   const choose = o => { onPick(o); setText(""); setOpen(false); if (inputRef.current) inputRef.current.blur(); };
 

@@ -294,6 +294,9 @@ export function Flappy880({ onClose, me }) {
     // Setting canvas.width wipes the context, transform included, so the
     // scale has to go on afterwards and again on every refit.
     let lastDpr = 0;
+    // Whether the crashed board's one still has been painted since the
+    // buffer was last wiped — see step().
+    let crashPainted = false;
     const fit = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 3);
       // Mobile browsers fire resize when the URL bar collapses, dozens of
@@ -304,6 +307,8 @@ export function Flappy880({ onClose, me }) {
       canvas.width = Math.round(W * dpr);
       canvas.height = Math.round(H * dpr);
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // The buffer was just wiped; a crashed board must be painted again.
+      crashPainted = false;
     };
     fit();
     window.addEventListener("resize", fit);   // moving to another monitor can change it
@@ -355,7 +360,6 @@ export function Flappy880({ onClose, me }) {
       }
       raf = requestAnimationFrame(step);
     };
-    let crashPainted = false;
 
     const crash = () => {
       if (dead.current) return;

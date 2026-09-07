@@ -676,7 +676,9 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
   // person cannot go on twice however many times they are picked.
   const searchCrew = (text, max) => {
     const q = text.trim().toLowerCase();
-    const initials = p => String(p.displayName || "").split(/s+/).map(w => w[0] || "").join("").toLowerCase();
+    // Split on whitespace — this read /s+/ once, the letter s, and the
+    // initials arm of the picker never matched anybody.
+    const initials = p => String(p.displayName || "").split(/\s+/).map(w => w[0] || "").join("").toLowerCase();
     const hit = p => !q
       || String(p.displayName || "").toLowerCase().includes(q)
       || initials(p).startsWith(q)

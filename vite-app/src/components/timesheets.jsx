@@ -382,8 +382,16 @@ export function TimesheetsScreen({ currentUser }) {
     setBatchStopping(false);
     stopBatch.current = false;
     // The people just signed off have to leave the tab, and the approvals
-    // this wrote are what says so.
-    if (mine === loadSeq.current) load(period);
+    // this wrote are what says so — so the approvals are re-read, as the
+    // single-person button does, and not the period's crew rows: an
+    // approval writes timesheet_approvals alone, and load(period) was
+    // pulling the fortnight's thousands of entries again for nothing.
+    try {
+      const fresh = await Db.listApprovals({ start: period.start });
+      if (mine === loadSeq.current) setApprovals(fresh);
+    } catch (e) {
+      setError(e.message || "Couldn't re-read the approvals.");
+    }
   };
 
   return (

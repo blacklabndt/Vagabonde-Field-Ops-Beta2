@@ -91,14 +91,28 @@ export function isNetworkError(e) {
 }
 
 const oqListeners = new Set();
+// One read at a time, and one more after it if anything asked meanwhile:
+// a drain notifies once per synced item, and each notify materialises the
+// whole outbox — a queued report carries its PDF — so N items were N+1
+// full reads on the device that queued them for having a bad connection.
+// The list is always re-read from the store, never projected in memory,
+// because an enqueue from the ticket editor mid-flush must not be lost.
+let oqNotifying = false;
+let oqNotifyAgain = false;
 function oqNotify() {
   // Nobody listening, nothing to read: setOwner runs at sign-in after
   // React has torn the badge's subscription down and before it is remade,
   // and the remade one reads the list itself.
   if (!oqListeners.size) return;
+  if (oqNotifying) { oqNotifyAgain = true; return; }
+  oqNotifying = true;
   // A read that fails (IndexedDB gone, private mode) must not become an
   // unhandled rejection in whoever's save path triggered it.
-  oqGetAll().then(items => oqListeners.forEach(fn => fn(items))).catch(() => {});
+  oqGetAll().then(items => oqListeners.forEach(fn => fn(items))).catch(() => {})
+    .then(() => {
+      oqNotifying = false;
+      if (oqNotifyAgain) { oqNotifyAgain = false; oqNotify(); }
+    });
 }
 
 let oqFlushing = null;
@@ -197,8 +211,13 @@ export const OfflineQueue = {
   // One flush at a time: the load-time call and an `online` event that fires
   // moments later would otherwise both be walking the same list, and a ticket
   // whose handler was still running would be replayed — and re-sent — twice.
+  //
+  // A caller that joins a flush already running gets its answer marked
+  // `joined`: the drain is one event however many `online`s a truck
+  // between towers fires during it, and only the caller that started it
+  // should act on the result (attachAutoFlush's onSynced).
   async flush(handlers) {
-    if (oqFlushing) return oqFlushing;
+    if (oqFlushing) return oqFlushing.then(r => ({ ...r, joined: true }));
     oqFlushing = (async () => {
       // Replaying calls the same writes a person would, so without this a
       // truck coming back into signal would throw a handful of "Ticket
@@ -225,7 +244,7 @@ export const OfflineQueue = {
   // once per item as the badge's count shrinks.
   attachAutoFlush(handlers, onSynced = null) {
     const tryFlush = () => this.flush(handlers)
-      .then(r => { if (onSynced && r && r.synced) onSynced(); })
+      .then(r => { if (onSynced && r && r.synced && !r.joined) onSynced(); })
       .catch(() => {});
     window.addEventListener("online", tryFlush);
     tryFlush();

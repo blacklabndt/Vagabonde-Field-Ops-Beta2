@@ -241,9 +241,14 @@ export function App() {
   const pendingRoute = useRef(LANDING_ROUTE);
   // The goto parameter is a one-time instruction, consumed above — left
   // in the URL it would re-route every later manual reload to the chat.
+  // The hash is the app's own route (route.js) and stays, and so does any
+  // other query parameter — the same rule the backup panel's strip keeps.
   useEffect(() => {
     if (window.location.search.includes("goto=")) {
-      window.history.replaceState({}, "", window.location.pathname);
+      const params = new URLSearchParams(window.location.search);
+      params.delete("goto");
+      const rest = params.toString();
+      window.history.replaceState({}, "", window.location.pathname + (rest ? `?${rest}` : "") + window.location.hash);
     }
   }, []);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -564,7 +569,7 @@ export function App() {
   useEffect(() => OfflineQueue.subscribe(setQueued), [currentUser ? currentUser.id : null]);
   const [cacheState, setCacheState] = useState({ servingCached: false, at: null });
   useEffect(() => OfflineCache.subscribe(setCacheState), []);
-  const retryQueue = () => OfflineQueue.flush(queueHandlers).then(r => { if (r && r.synced) onSyncedRef.current(); return r; });
+  const retryQueue = () => OfflineQueue.flush(queueHandlers).then(r => { if (r && r.synced && !r.joined) onSyncedRef.current(); return r; });
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);

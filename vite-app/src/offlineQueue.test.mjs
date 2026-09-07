@@ -314,3 +314,40 @@ test("a flagged failure is a lost connection even with the radio showing bars", 
   assert.equal(isNetworkError(new Error("Failed to send a request to the Edge Function")), false,
     "unflagged, the same words are just words — the flag is the evidence");
 });
+
+test("a caller that joins a running flush is told so, and onSynced fires once per drain", async () => {
+  // A truck between towers fires `online` several times during one drain.
+  // Every one of those joins the flush already running and gets the same
+  // answer — and the reload the answer triggers must run once, for the
+  // caller that started the drain, not once per event.
+  await queuedAt(1_000, "ticket", { n: 1 });
+
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const handlers = { ticket: async () => { await gate; } };
+
+  const listeners = [];
+  globalThis.window.addEventListener = (type, fn) => { if (type === "online") listeners.push(fn); };
+  globalThis.window.removeEventListener = () => {};
+  let synced = 0;
+  const detach = OfflineQueue.attachAutoFlush(handlers, () => { synced++; });
+  // The load-time flush is now parked on the gate; two `online`s and a
+  // Retry press arrive while it runs.
+  listeners[0](); listeners[0]();
+  const joined = OfflineQueue.flush(handlers);
+  release();
+
+  const r = await joined;
+  assert.equal(r.synced, 1);
+  assert.equal(r.joined, true, "the later caller knows it did not start this drain");
+  await eventually(async () => (await OfflineQueue.list()).length === 0, "the drain");
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal(synced, 1, "one reload for one drain, however many events joined it");
+
+  const own = await OfflineQueue.flush(handlers);
+  assert.equal(own.joined, undefined, "a flush nobody was running is the caller's own");
+
+  detach();
+  globalThis.window.addEventListener = () => {};
+  globalThis.window.removeEventListener = () => {};
+});

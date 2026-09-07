@@ -42,10 +42,16 @@ Deno.serve(async (req) => {
 
     // RLS still applies to this read, so a user who can't see the assessment
     // can't email it either.
-    const { data: jha, error: jErr } = await asUser
-      .from("jhas")
-      .select("id, signed_by, pdf_key, template, work_date, status, site_rep, profiles(name), jobs(job_number, project, clients(name))")
-      .eq("id", jhaId).single();
+    // The assessment and the caller's role, two reads under the caller's own
+    // RLS that need nothing from each other, go out together; the checks
+    // keep their order.
+    const [{ data: jha, error: jErr }, { data: caller }] = await Promise.all([
+      asUser
+        .from("jhas")
+        .select("id, signed_by, pdf_key, template, work_date, status, site_rep, profiles(name), jobs(job_number, project, clients(name))")
+        .eq("id", jhaId).single(),
+      asUser.from("profiles").select("role").eq("id", user.id).single()
+    ]);
     if (jErr || !jha) throw new Error("Assessment not found, or you don't have access to it");
     if (!jha.pdf_key) throw new Error("This assessment has no PDF yet — render it first");
 
@@ -54,7 +60,6 @@ Deno.serve(async (req) => {
     // worker names, cert numbers, dosimetry and signatures, and the send
     // signs a 14-day URL with the service role. The tech who filed it may
     // send it; otherwise it takes a Technician, Coordinator or Admin.
-    const { data: caller } = await asUser.from("profiles").select("role").eq("id", user.id).single();
     const mayEmailJha = (jha as any).signed_by === user.id
       || ["Admin", "Coordinator", "Technician"].includes(caller?.role ?? "");
     if (!mayEmailJha) {
@@ -76,11 +81,13 @@ Deno.serve(async (req) => {
     let attachments = undefined;
     let attachmentNote = "";
 
-    const { data: signed } = await admin.storage
-      .from("jhas").createSignedUrl(jha.pdf_key, 60 * 60 * 24 * 14);
+    // The link and the bytes are independent storage calls; together.
+    const [{ data: signed }, { data: blob }] = await Promise.all([
+      admin.storage.from("jhas").createSignedUrl(jha.pdf_key, 60 * 60 * 24 * 14),
+      admin.storage.from("jhas").download(jha.pdf_key)
+    ]);
     link = signed?.signedUrl ?? "";
 
-    const { data: blob } = await admin.storage.from("jhas").download(jha.pdf_key);
     if (blob) {
       const bytes = new Uint8Array(await blob.arrayBuffer());
       if (bytes.length <= MAX_ATTACHMENT_BYTES) {

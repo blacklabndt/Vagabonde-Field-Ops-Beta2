@@ -69,8 +69,11 @@ export function EquipmentScreen({ currentUser }) {
   };
   // Active accounts only: a locked account (delete-user, with work on file)
   // is no longer someone a survey meter can be signed out to.
-  const refreshStats = () => { Db.getEquipmentStats().then(setStats).catch(() => {}); Db.listActiveProfiles().then(setPeople).catch(() => {}); };
-  useEffect(() => { refreshStats(); }, []);
+  const refreshStats = () => { Db.getEquipmentStats().then(setStats).catch(() => {}); };
+  // The roster once, for the assign-to dropdown: an equipment write cannot
+  // change who is on it, and re-reading it after every save was a paged
+  // walk of profiles per edit.
+  useEffect(() => { refreshStats(); Db.listActiveProfiles().then(setPeople).catch(() => {}); }, []);
   // Filter and page in one effect: as two, arriving on this screen (and every
   // filter tap that was already on page 1) fetched the same page twice.
   const lastFilter = useRef(null);
@@ -88,7 +91,7 @@ export function EquipmentScreen({ currentUser }) {
     return () => clearTimeout(t);
   }, [filter, search, page, pageSize]);
 
-  const refresh = () => { fetchPage(page, filter); refreshStats(); };
+  const refresh = () => { fetchPage(page, filter, search); refreshStats(); };
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
   return (

@@ -474,6 +474,10 @@ function renderBody(text, jobNums, openJobNumber) {
   return out;
 }
 
+// What the pinned strip renders, joined, so an unchanged strip keeps its
+// array (name arrives late from the directory, so it is part of the key).
+const pinKey = pins => (pins || []).map(p => [p.id, p.pinnedAt, p.name, p.body, p.imageKey, p.gifUrl, p.audioKey, p.fileName].join("\u0001")).join("\u0002");
+
 const MUTED = "color-mix(in srgb, var(--color-text) 55%, transparent)";
 const TINY_BTN = { background: "transparent", border: "none", cursor: "pointer", color: MUTED, padding: 2, lineHeight: 1 };
 
@@ -838,7 +842,10 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
           // itself so the answer cannot drift from the room's.
           setReplyTarget(rt => (rt && !reconcileWindow([rt], page, readAt).length ? null : rt));
           if (!initial && fresh && stickToBottom.current && document.visibilityState === "visible") noteRead();
-          setPins(pinned);
+          // Identity matters here as it does for the rows: an equal-but-new
+          // array re-renders the whole screen on every poll and every
+          // return to the tab, for a strip that has not changed.
+          setPins(prev => (pinKey(prev) === pinKey(pinned) ? prev : pinned));
           if (initial) setHasMore(more);
           setLoadError("");
         })
