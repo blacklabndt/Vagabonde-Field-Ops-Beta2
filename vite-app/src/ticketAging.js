@@ -30,23 +30,6 @@ export const AGING_BUCKETS = [
 // puts integer-like keys first in numeric order whatever order they went in.
 export const AGING_KEYS = AGING_BUCKETS.map(b => b.key);
 
-// The same edges the database uses, for anything that has a ticket's age in
-// days rather than a bucket already chosen. A work date in the future — a
-// ticket dated ahead — is a negative age and reads as current, which is what
-// the office means by it.
-export function agingBucket(days) {
-  // null and "" are not zero here, whatever Number() says about them: a
-  // ticket whose age is unknown has no bucket, and calling it current would
-  // file it under the one nobody chases.
-  if (days === null || days === undefined || days === "") return null;
-  const n = Number(days);
-  if (!Number.isFinite(n)) return null;
-  if (n < 30) return "current";
-  if (n < 60) return "30";
-  if (n < 90) return "60";
-  return "90";
-}
-
 // What a client with no client record on the job is called. It is a real
 // group — those tickets are outstanding money too — and calling it nothing
 // would leave a blank row somebody has to guess at.

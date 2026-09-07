@@ -92,6 +92,10 @@ export function isNetworkError(e) {
 
 const oqListeners = new Set();
 function oqNotify() {
+  // Nobody listening, nothing to read: setOwner runs at sign-in after
+  // React has torn the badge's subscription down and before it is remade,
+  // and the remade one reads the list itself.
+  if (!oqListeners.size) return;
   // A read that fails (IndexedDB gone, private mode) must not become an
   // unhandled rejection in whoever's save path triggered it.
   oqGetAll().then(items => oqListeners.forEach(fn => fn(items))).catch(() => {});
@@ -215,8 +219,14 @@ export const OfflineQueue = {
     return () => oqListeners.delete(fn);
   },
 
-  attachAutoFlush(handlers) {
-    const tryFlush = () => this.flush(handlers).catch(() => {});
+  // onSynced, when given, is told once after any flush that sent at least
+  // one item — a partial drain that ended still offline included — so the
+  // caller can re-read what the outbox just changed, once, rather than
+  // once per item as the badge's count shrinks.
+  attachAutoFlush(handlers, onSynced = null) {
+    const tryFlush = () => this.flush(handlers)
+      .then(r => { if (onSynced && r && r.synced) onSynced(); })
+      .catch(() => {});
     window.addEventListener("online", tryFlush);
     tryFlush();
     return () => window.removeEventListener("online", tryFlush);

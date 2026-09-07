@@ -2,37 +2,15 @@
 //
 // Run with: node --test src/ticketAging.test.mjs
 //
-// Three things are worth pinning here. The edges: 29 days is current and 30
-// is not, 59 is the 30 bucket and 60 is not, 89 is the 60 bucket and 90 is
-// not — off by one in either direction moves somebody's invoice into the
-// wrong column on a Monday morning. Null money: a role that cannot see
+// Two things are worth pinning here (the bucket edges are the database's,
+// in ticket_aging(), and nothing client-side re-derives them). Null money: a role that cannot see
 // prices gets null totals from the database, and a rollup that turns those
 // into 0 prints "$0.00" against a client who is owed thousands. And the sort
 // order, which is what makes the table answer "who owes me the most".
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agingBucket, rollUpAging, isMissingTicketAging, AGING_KEYS, NO_CLIENT } from "./ticketAging.js";
-
-test("the bucket edges are 30, 60 and 90 days, and the older side of each is out", () => {
-  assert.equal(agingBucket(0), "current");
-  assert.equal(agingBucket(29), "current");
-  assert.equal(agingBucket(30), "30");
-  assert.equal(agingBucket(59), "30");
-  assert.equal(agingBucket(60), "60");
-  assert.equal(agingBucket(89), "60");
-  assert.equal(agingBucket(90), "90");
-  assert.equal(agingBucket(900), "90");
-});
-
-test("a ticket dated ahead of today is current, not a negative bucket", () => {
-  assert.equal(agingBucket(-1), "current");
-});
-
-test("nothing that isn't a number gets a bucket", () => {
-  assert.equal(agingBucket(null), null);
-  assert.equal(agingBucket("later"), null);
-});
+import { rollUpAging, isMissingTicketAging, AGING_KEYS, NO_CLIENT } from "./ticketAging.js";
 
 const row = (client, bucket, count, total, clientId) =>
   ({ clientId: clientId || (client ? client.toLowerCase() : null), client, bucket, count, total });

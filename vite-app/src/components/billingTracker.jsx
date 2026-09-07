@@ -115,10 +115,13 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
   const [rowNotes, setRowNotes] = useState({});
 
   // The four tiles are computed over every ticket, independent of the page
-  // showing below — loaded on mount and refreshed whenever the visible page
-  // or filter changes, since a status flip elsewhere in the app would move a
-  // ticket between buckets. (The empty-deps version never re-ran, so the
-  // tiles silently drifted from the table below them.)
+  // showing below — loaded on mount and refreshed when the filter changes,
+  // since a status flip elsewhere in the app would move a ticket between
+  // buckets. (The empty-deps version never re-ran, so the tiles silently
+  // drifted from the table below them.) Not on a page turn: both reads are
+  // whole-book aggregates, and Next → Next → Next was running them again
+  // for an answer that cannot change with the page. Every action here that
+  // moves a ticket calls loadTiles itself.
   const loadStats = () =>
     Db.getTicketTrackerStats().then(setStats).catch(e => setError(e.message || "Couldn't load the tracker totals."));
 
@@ -137,7 +140,7 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
       });
 
   const loadTiles = () => { loadStats(); loadAging(); };
-  useEffect(() => { loadTiles(); }, [page, filter]);
+  useEffect(() => { loadTiles(); }, [filter]);
 
   // A request token, so a slow earlier page cannot land after a newer one.
   // Tapping through filters or pages fires overlapping reads, and whichever
@@ -322,6 +325,7 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
       if (edit) { onOpenTicket({ ...row, status: "Draft" }); return; }
       noteOn(row.id, `Approval cancelled — ${row.id} is a draft again.`);
       await fetchPage(page, filter);
+      loadTiles();
     } catch (e) {
       setWithdrawingId("");
       noteOn(row.id, e.message || "Couldn't cancel that approval.", true);

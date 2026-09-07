@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { money, todayLocal, localDate, dayMonth, initialsOf, crewRoleFor, hours, lineTotal, gstOn, gstLabel, gstRateOf, seesPrices, saneQuantityCeiling, SANE_CREW_HOURS } from "../data.js";
+import { money, todayLocal, localDate, dayMonth, initialsOf, crewRoleFor, hours, lineTotal, gstOn, gstLabel, gstRateOf, seesPrices, saneQuantityCeiling, SANE_CREW_HOURS, contactsForOrg } from "../data.js";
 import { Db } from "../db.js";
 import { Blueprint, Btn, TagX, Field, ErrorBox, emailIn, NoJobSelected, QueuedPanel, NumField, Loading, useScreenFoot, SearchSelect } from "./common.jsx";
 import { OfflineQueue } from "../offlineQueue.js";
@@ -252,14 +252,17 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
   // invoice, so it belongs to the day rather than to the job.
   const [delays, setDelays] = useState("");
   // Changing where the approval goes: the box, and this client's people on
-  // file to pick from (fetched the first time the box opens).
+  // file to pick from (read the first time the box opens). Out of the
+  // directory this device already holds — Db.listContacts is cached in
+  // memory and on the device — rather than a fresh paged read of the
+  // organisation, which needed signal in the one screen used without it.
   const [editingTo, setEditingTo] = useState(false);
   const [clientContacts, setClientContacts] = useState([]);
   useEffect(() => {
     if (!editingTo || !job || !job.clientId) return;
     let live = true;
-    Db.listContactsForOrg("client", job.clientId)
-      .then(rows => { if (live) setClientContacts(rows || []); })
+    Db.listContacts()
+      .then(rows => { if (live) setClientContacts(contactsForOrg(rows, "client", job.clientId)); })
       .catch(() => { /* the box still takes a typed address */ });
     return () => { live = false; };
   }, [editingTo, job ? job.clientId : null]);

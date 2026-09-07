@@ -124,6 +124,17 @@ export function primaryContact(contacts, orgType, orgId) {
   return mine.find(c => c.is_primary) || mine[0] || null;
 }
 
+// Everyone on file for an organisation, primary first then by name — the
+// rep dropdowns are fed from this rather than from the primary alone, so a
+// night foreman who isn't the default is one pick away instead of a retype.
+// One definition: it used to be written out in three dialogs, over the
+// whole directory, on every keystroke. Callers memoize on (contacts, id).
+export function contactsForOrg(contacts, orgType, orgId) {
+  if (!orgId) return [];
+  return (contacts || []).filter(c => c.org_type === orgType && c.org_id === orgId)
+    .sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0) || (a.name || "").localeCompare(b.name || ""));
+}
+
 // Roles that can be added to a ticket crew, and the crew_role each carries.
 // Kept apart from ROLE_PRESETS so the crew grouping does not change every
 // time an office role is added.

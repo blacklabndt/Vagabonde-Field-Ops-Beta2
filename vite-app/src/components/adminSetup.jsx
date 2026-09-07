@@ -330,17 +330,20 @@ function RecentErrorsPanel() {
   const [loadingMore, setLoadingMore] = useState(false);
   const PAGE = 20;
 
-  const load = (functionName = fn) => {
+  // The dropdown's names are read with the first page and on Refresh —
+  // filtering by one of them cannot change the list, and that read walks
+  // the whole log.
+  const load = (functionName = fn, withNames = false) => {
     setLoading(true);
     // The reason the last read failed is not the reason for this one, and
     // leaving it up made every later Refresh look like it had failed too.
     setErr("");
-    Promise.all([Db.listFunctionErrors(PAGE, { functionName }), Db.listFunctionErrorNames().catch(() => null)])
+    Promise.all([Db.listFunctionErrors(PAGE, { functionName }), withNames ? Db.listFunctionErrorNames().catch(() => null) : null])
       .then(([rows, seen]) => { setErrors(rows); setMore(rows.length === PAGE); if (seen) setNames(seen); })
       .catch(e => setErr(e.message || "Couldn't load recent errors."))
       .finally(() => setLoading(false));
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(fn, true); }, []);
 
   const loadMore = async () => {
     const last = errors[errors.length - 1];
@@ -388,7 +391,7 @@ function RecentErrorsPanel() {
               {names.map(n => <option key={n} value={n}>{n}</option>)}
             </select>
           )}
-          <Btn variant="secondary" onClick={() => load()} disabled={loading || clearing}>{loading ? "Loading…" : "Refresh"}</Btn>
+          <Btn variant="secondary" onClick={() => load(fn, true)} disabled={loading || clearing}>{loading ? "Loading…" : "Refresh"}</Btn>
           <Btn variant="danger" onClick={clear} disabled={loading || clearing || !errors.length}>{clearing ? "Clearing…" : "Clear"}</Btn>
         </span>
       </div>

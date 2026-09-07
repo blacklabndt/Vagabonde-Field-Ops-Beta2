@@ -47,8 +47,6 @@ export function FilesScreen({ currentUser }) {
     const mine = ++loadSeq.current;
     setLoading(true);
     setError("");
-    // Anything that reloads may have changed the tree the search walks.
-    Db.forgetFileTree();
     try {
       const { folders, files } = await Db.listFiles(at);
       if (mine !== loadSeq.current) return;
@@ -79,6 +77,10 @@ export function FilesScreen({ currentUser }) {
     }
     setBusy("");
     if (problems.length) setError(problems.join(" "));
+    // A change to the bucket is what dates the tree the search walks — not
+    // a folder click, which used to forget it and cost search a fresh walk
+    // of every folder on the next keystroke.
+    Db.forgetFileTree();
     await load();
   };
 
@@ -89,6 +91,7 @@ export function FilesScreen({ currentUser }) {
       await Db.createFolder(prefix, newFolder);
       setNewFolder("");
       setAdding(false);
+      Db.forgetFileTree();
       await load();
     } catch (e) { setError(e.message || "Couldn't create the folder."); }
   };
@@ -106,7 +109,7 @@ export function FilesScreen({ currentUser }) {
   const removeFile = async f => {
     if (!canDelete) { setError("Deleting a file is an Admin's or Coordinator's — ask one."); return; }
     if (!confirm(`Delete “${f.name}”? This can't be undone.`)) return;
-    try { await Db.deleteSharedFile(f.path); await load(); }
+    try { await Db.deleteSharedFile(f.path); Db.forgetFileTree(); await load(); }
     catch (e) { setError(e.message || "Couldn't delete that file."); }
   };
 
@@ -114,7 +117,7 @@ export function FilesScreen({ currentUser }) {
     if (!canDelete) { setError("Deleting a whole folder is an Admin's or Coordinator's — ask one."); return; }
     if (!confirm(`Delete the folder “${f.name}” and everything inside it? This can't be undone.`)) return;
     setBusy("Deleting…");
-    try { await Db.deleteFolder(f.path); await load(); }
+    try { await Db.deleteFolder(f.path); Db.forgetFileTree(); await load(); }
     catch (e) { setError(e.message || "Couldn't delete that folder."); }
     setBusy("");
   };

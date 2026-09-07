@@ -550,17 +550,21 @@ export function App() {
   // Re-attached per signed-in account: the queue is scoped to whoever
   // queued each item (shared tablets), so a sign-in is also the moment that
   // person's own outbox gets its flush — the mount-time one ran as nobody.
+  // onSynced reaches loadMyTickets through a ref: the handler is defined
+  // further down, and the flush must call the current one, not the one
+  // this effect closed over at sign-in.
+  const onSyncedRef = useRef(() => {});
   useEffect(() => {
     OfflineQueue.setOwner(currentUser ? currentUser.id : null);
     if (!currentUser) return undefined;
-    return OfflineQueue.attachAutoFlush(queueHandlers);
+    return OfflineQueue.attachAutoFlush(queueHandlers, () => onSyncedRef.current());
   }, [queueHandlers, currentUser ? currentUser.id : null]);
   // Re-subscribed per signed-in account: the list is filtered to the owner,
   // so a sign-in must re-read it, not keep the previous person's.
   useEffect(() => OfflineQueue.subscribe(setQueued), [currentUser ? currentUser.id : null]);
   const [cacheState, setCacheState] = useState({ servingCached: false, at: null });
   useEffect(() => OfflineCache.subscribe(setCacheState), []);
-  const retryQueue = () => OfflineQueue.flush(queueHandlers);
+  const retryQueue = () => OfflineQueue.flush(queueHandlers).then(r => { if (r && r.synced) onSyncedRef.current(); return r; });
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -1043,13 +1047,12 @@ export function App() {
   // …and again on arriving at the screen. Keyed on `screen` alone: keyed on
   // both, signing in ran this a second time for the same list.
   useEffect(() => { if (currentUser && screen === "mytickets") loadMyTickets(); }, [screen]);
+  onSyncedRef.current = () => { if (currentUser) loadMyTickets(); };
   // …and whenever the outbox drains: a queued draft that just synced is a
-  // draft the badge didn't know about.
-  const queuedBefore = useRef(0);
-  useEffect(() => {
-    if (currentUser && queued.length < queuedBefore.current) loadMyTickets();
-    queuedBefore.current = queued.length;
-  }, [queued.length]);
+  // draft the badge didn't know about. Told by the flush itself (onSynced
+  // below), once per drain — watching the badge's count shrink ran this
+  // reload once per synced item, two paged reads each, on the marginal
+  // connection that had queued the work in the first place.
   // The same set Open tickets shows: drafts still to be sent to the client.
   const openMyTicketsCount = myTickets.filter(t => t.status === "Draft").length;
 
@@ -1114,8 +1117,11 @@ export function App() {
     // Either one is worth a warning before the tap goes through — a shared
     // tablet handed over mid-ticket used to lose the day without a word.
     try {
-      const wip = await OfflineCache.keys("ticket.wip.");
-      const jhaWip = await OfflineCache.keys("jha.wip.");
+      // One walk of the store's keys, not one per prefix: keys() has no
+      // index and enumerates everything cached either way.
+      const all = await OfflineCache.keys("");
+      const wip = all.filter(k => k.startsWith("ticket.wip."));
+      const jhaWip = all.filter(k => k.startsWith("jha.wip."));
       const drafts = wip.length + jhaWip.length;
       const parts = [];
       if (drafts) parts.push(`${drafts === 1 ? "a half-entered ticket or hazard assessment" : `${drafts} half-entered tickets or assessments`} on this device that ${drafts === 1 ? "hasn't" : "haven't"} been saved yet — signing out discards ${drafts === 1 ? "it" : "them"}`);
@@ -1229,12 +1235,17 @@ export function App() {
   // Answers whether the ticket screen actually opened: Job detail's Create
   // ticket dialog is holding the work date and the reps somebody just typed,
   // and it can only keep them if it knows the record never arrived.
+  // The record already held is reused when it is provably this job's and
+  // complete — the same test openTicketDraft makes — so Job detail's own
+  // buttons, which wait on that record before they enable, do not read it
+  // again behind "Opening…". Home's "+ Ticket" and the tracker fetch.
+  const heldRecordFor = job => (jobRecord.job === job.id && !jobRecord.repsUnknown ? jobRecord : null);
   const startTicketForJob = async (job, seed = null) => {
     if (!job) return false;
     // Nothing changes until the record is in hand: the job and the seed used
     // to be set before the await, so a failure left Home pointing at a job
     // nobody had opened.
-    const record = await recordFor(job, "ticket");
+    const record = heldRecordFor(job) || await recordFor(job, "ticket");
     if (!record) return false;
     setJobRecord(record);
     setActiveJob(job);
@@ -1254,7 +1265,7 @@ export function App() {
   // assessment opened naming the previous job's contractor rep.
   const startJhaForJob = async job => {
     if (!job) return;
-    const record = await recordFor(job, "hazard assessment");
+    const record = heldRecordFor(job) || await recordFor(job, "hazard assessment");
     if (!record) return;
     setJobRecord(record);
     gotoContext("jha");
@@ -1364,7 +1375,7 @@ export function App() {
       ) : <div className="page">No job selected — pick one from Home.</div>;
       break;
     case "jha":
-      body = <JhaBuilderScreen job={activeJob} jobRecord={jobRecord} contacts={contacts} currentUser={currentUser} onSubmitted={() => gotoContext("job")} onCancel={() => gotoContext("job")} />;
+      body = <JhaBuilderScreen job={activeJob} jobRecord={jobRecord} currentUser={currentUser} onSubmitted={() => gotoContext("job")} onCancel={() => gotoContext("job")} />;
       break;
     case "upload":
       body = <UploadMobileScreen job={activeJob} jobRecord={jobRecord} currentUser={currentUser} onSent={() => gotoContext("job")} />;

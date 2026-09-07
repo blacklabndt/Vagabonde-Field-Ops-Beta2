@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
-import { money, todayLocal, localDate, dayMonth, initialsOf, ticketDateStamp, lastNumbers, JOB_FIELDS, EMPTY_JOB_RECORD, seesPrices as pricesFor, fileSize, reportFileRefusal, MAX_REPORT_LABEL, decimalString } from "../data.js";
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import { money, todayLocal, localDate, dayMonth, initialsOf, ticketDateStamp, lastNumbers, JOB_FIELDS, EMPTY_JOB_RECORD, seesPrices as pricesFor, fileSize, reportFileRefusal, MAX_REPORT_LABEL, decimalString, contactsForOrg } from "../data.js";
 import { acceptsNumberText } from "../numberInput.js";
 import { serialsOnProfile, newSerials, mergedSerials, isMissingSetOwnDosimetry, dosimetryAskedFor, markDosimetryAsked } from "../dosimetryPrompt.js";
 import { Db } from "../db.js";
@@ -206,13 +206,18 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
   // than retyped. Db caches it, so this costs nothing on a second open.
   const [contacts, setContacts] = useState([]);
   useEffect(() => { Db.listContacts().then(setContacts).catch(() => setContacts([])); }, []);
-  const forOrg = (type, id) => (id ? contacts.filter(c => c.org_type === type && c.org_id === id) : [])
-    .slice().sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0) || (a.name || "").localeCompare(b.name || ""));
   // The contractor can be retyped in the same edit, and a contractor that
   // isn't on file yet has no people on file either — so the rep list follows
   // the draft, not the saved job.
   const contractorRenamed = draft && (draft.contractor || "").trim().toLowerCase() !== (job.contractor || "").trim().toLowerCase();
   const contractorIdForDraft = contractorRenamed ? null : job.contractorId;
+  // The two rep editors' people, from data.js's contactsForOrg, held on the
+  // directory and the id: the edit form re-renders on every keystroke and
+  // the directory is a thousand rows on the live project.
+  const clientPeople = useMemo(() => contactsForOrg(contacts, "client", job.clientId), [contacts, job.clientId]);
+  const contractorPeople = useMemo(() => contactsForOrg(contacts, "contractor", contractorIdForDraft), [contacts, contractorIdForDraft]);
+  // The send dialogs offer the saved job's contractor, not the draft's.
+  const contractorPeopleOnFile = useMemo(() => contactsForOrg(contacts, "contractor", job.contractorId), [contacts, job.contractorId]);
 
   // Confirmation that the save actually landed, rather than the panel just
   // flipping back to read-only and leaving you to guess.
@@ -666,14 +671,14 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
                   three boxes because nobody should have to type a "·". */}
               <RepEditor
                 heading="Client representative"
-                options={forOrg("client", job.clientId)}
+                options={clientPeople}
                 value={draft.clientRepDetail}
                 onChange={v => setDraft(p => ({ ...p, clientRepDetail: v }))}
                 emptyNote={job.clientId ? "" : "No client on this job."}
               />
               <RepEditor
                 heading="Contractor representative"
-                options={forOrg("contractor", contractorIdForDraft)}
+                options={contractorPeople}
                 value={draft.contractorRepDetail}
                 onChange={v => setDraft(p => ({ ...p, contractorRepDetail: v }))}
                 emptyNote={contractorIdForDraft ? "" : "Name a contractor above first — their people are filed against them."}
@@ -730,7 +735,7 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
           onSubmit={async () => { setShowUpload(false); await refreshReports(); }} />
       )}
       {showTicket && (
-        <CreateTicketDialog job={job} jobRecord={jobRecord} currentUser={currentUser} onClose={() => setShowTicket(false)}
+        <CreateTicketDialog job={job} jobRecord={jobRecord} contacts={contacts} currentUser={currentUser} onClose={() => setShowTicket(false)}
           onSubmit={async seed => {
             // Closed only once the ticket screen is actually open. The
             // dialog used to close first, so a job record that wouldn't
@@ -753,8 +758,8 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
 
       {sendingJha && (
         <SendPdfDialog title="Send assessment" file={sendingJha.file} job={job}
-          clientContacts={forOrg("client", job.clientId)}
-          contractorContacts={forOrg("contractor", job.contractorId)}
+          clientContacts={clientPeople}
+          contractorContacts={contractorPeopleOnFile}
           defaultMessage="Attached: the signed hazard assessment for the work noted below. Let us know if you have questions."
           send={(to, message) => Db.sendJhaEmail({ jhaId: sendingJha.id, to, cc: "", message })}
           onClose={() => setSendingJha(null)}
@@ -763,8 +768,8 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
 
       {sendingReport && (
         <SendPdfDialog title="Send report" file={sendingReport.file} job={job}
-          clientContacts={forOrg("client", job.clientId)}
-          contractorContacts={forOrg("contractor", job.contractorId)}
+          clientContacts={clientPeople}
+          contractorContacts={contractorPeopleOnFile}
           defaultMessage="Attached: interpreted RT report for the welds noted below. Let us know if you have questions."
           send={(to, message) => Db.sendReportEmail({ reportId: sendingReport.id, to, cc: "", message })}
           onClose={() => setSendingReport(null)}
@@ -1639,7 +1644,7 @@ function UploadReportDialog({ job, jobRecord, currentUser, onClose, onSubmit }) 
   );
 }
 
-function CreateTicketDialog({ job, jobRecord, currentUser, onClose, onSubmit }) {
+function CreateTicketDialog({ job, jobRecord, contacts, currentUser, onClose, onSubmit }) {
   const miss = useMissingFields();
   const [workDate, setWorkDate] = useState(todayLocal);
   // Raising a ticket means work happened, and work needs a hazard assessment
@@ -1662,15 +1667,14 @@ function CreateTicketDialog({ job, jobRecord, currentUser, onClose, onSubmit }) 
   // — and two taps must not raise two tickets' worth of seeds.
   const [busy, setBusy] = useState(false);
   useEffect(() => OfflineCache.subscribe(s => setProvisional(s.servingCached)), []);
-  // The directory, so both rep fields can offer everyone on file for this
-  // job's client and contractor rather than only the job's primary.
-  const [contacts, setContacts] = useState([]);
-  useEffect(() => { Db.listContacts().then(setContacts).catch(() => setContacts([])); }, []);
-
-  const forOrg = (type, id) => (id ? contacts.filter(c => c.org_type === type && c.org_id === id) : [])
-    .slice().sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0) || (a.name || "").localeCompare(b.name || ""));
-  const clientContacts = forOrg("client", job.clientId);
-  const contractorContacts = forOrg("contractor", job.contractorId);
+  // The directory is the job page's own (it used to be read again here),
+  // so both rep fields offer everyone on file for this job's client and
+  // contractor rather than only the job's primary. Memoized on the directory
+  // and the id: this dialog re-renders on every keystroke in a rep's name.
+  const clientContacts = useMemo(() => contactsForOrg(contacts, "client", job.clientId), [contacts, job.clientId]);
+  const contractorContacts = useMemo(() => contactsForOrg(contacts, "contractor", job.contractorId), [contacts, job.contractorId]);
+  const clientRepOnFile = useMemo(() => (clientContacts.find(c => contactLabel(c) === contactLabel(clientRep)) || {}).id || "", [clientContacts, clientRep]);
+  const contractorRepOnFile = useMemo(() => (contractorContacts.find(c => contactLabel(c) === contactLabel(contractorRep)) || {}).id || "", [contractorContacts, contractorRep]);
 
   const d = localDate(workDate);
   const initials = initialsOf(currentUser.name);
@@ -1750,7 +1754,7 @@ function CreateTicketDialog({ job, jobRecord, currentUser, onClose, onSubmit }) 
       <Field label="Client representative">
         {clientContacts.length > 0 && (
           <select className="input" style={{ marginBottom: 6 }} aria-label="Client contact on file"
-            value={(clientContacts.find(c => contactLabel(c) === contactLabel(clientRep)) || {}).id || ""}
+            value={clientRepOnFile}
             onChange={e => {
               const c = clientContacts.find(x => String(x.id) === String(e.target.value));
               setClientRep(c ? { name: c.name, phone: c.phone || "", email: c.email || "" } : { name: "", phone: "", email: "" });
@@ -1768,7 +1772,7 @@ function CreateTicketDialog({ job, jobRecord, currentUser, onClose, onSubmit }) 
       <Field label="Contractor representative">
         {contractorContacts.length > 0 && (
           <select className="input" style={{ marginBottom: 6 }} aria-label="Contractor contact on file"
-            value={(contractorContacts.find(c => contactLabel(c) === contactLabel(contractorRep)) || {}).id || ""}
+            value={contractorRepOnFile}
             onChange={e => {
               const c = contractorContacts.find(x => String(x.id) === String(e.target.value));
               setContractorRep(c ? { name: c.name, phone: c.phone || "", email: c.email || "" } : { name: "", phone: "", email: "" });

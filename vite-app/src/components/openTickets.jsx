@@ -155,7 +155,8 @@ export function OpenTicketsScreen({ tickets, loading, onOpenTicket, currentUser,
   useEffect(() => {
     let live = true;
     (async () => {
-      const keys = [...await OfflineCache.keys(TICKET_WIP_PREFIX), ...await OfflineCache.keys(JHA_WIP_PREFIX)];
+      // One walk of the store's keys for both prefixes — keys() has no index.
+      const keys = (await OfflineCache.keys("")).filter(k => k.startsWith(TICKET_WIP_PREFIX) || k.startsWith(JHA_WIP_PREFIX));
       // The record's own saved-at stamp is the whole point of the read — the
       // key list carries no times. A copy that has just gone (discarded on
       // the screen it belongs to) reads back as nothing and is skipped.

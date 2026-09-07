@@ -12,6 +12,7 @@
 import { registerSW } from "virtual:pwa-register";
 
 const CHECK_EVERY_MS = 30 * 60 * 1000;
+const CHECK_AT_MOST_EVERY_MS = 5 * 60 * 1000;
 
 const listeners = new Set();
 let ready = false;
@@ -41,7 +42,18 @@ export function initUpdateWatcher() {
     },
     onRegisteredSW(_url, reg) {
       if (!reg) return;
-      const check = () => reg.update().catch(() => {});
+      // A check is a fetch of sw.js past the HTTP cache. A truck between
+      // towers fires `online` all afternoon, and a tablet coming out of a
+      // pocket fires visibilitychange each time — so the moments below ask
+      // at most once in five minutes; the first one after a gap still asks
+      // at once.
+      let lastCheck = 0;
+      const check = () => {
+        const now = Date.now();
+        if (now - lastCheck < CHECK_AT_MOST_EVERY_MS) return;
+        lastCheck = now;
+        reg.update().catch(() => {});
+      };
       setInterval(check, CHECK_EVERY_MS);
       // Waking the app and regaining signal are the field's page loads.
       document.addEventListener("visibilitychange", () => { if (!document.hidden) check(); });

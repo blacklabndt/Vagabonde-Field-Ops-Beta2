@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
-import { primaryContact, seesPrices as pricesFor } from "../data.js";
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import { primaryContact, contactsForOrg, seesPrices as pricesFor } from "../data.js";
 import { attentionItems } from "../attention.js";
 import { Db } from "../db.js";
 import { OfflineQueue } from "../offlineQueue.js";
@@ -134,7 +134,10 @@ export function HomeScreen({ onCreateJob, onOpenJob, onStartTicket, currentUser,
       // The count rides on the first row, so an empty page also reports a
       // total of zero: the board would claim there is no work at all, with
       // no pager left to get back. Start again at page 1 instead.
-      if (p > 0 && !res.rows.length) { setPage(0); fetchPage(0, f, q, sf); return; }
+      // Start again at page 1 instead — the state change alone does it: page
+      // is a dependency of the load effect, which fetches on the way back.
+      // (An explicit fetchPage(0) here ran the same search twice.)
+      if (p > 0 && !res.rows.length) { setPage(0); return; }
       setRows(res.rows);
       setTotal(res.total);
       // Served from this device because the network is down. Not an error —
@@ -572,16 +575,14 @@ function NewJobDialog({ currentUser, clients, contractors, contacts, onClose, on
 
   const contactFor = (type, id) => primaryContact(contacts, type, id);
 
-  // Everyone on file for an organisation, primary first — the rep dropdowns
-  // are fed from this rather than from the primary alone, so a night foreman
-  // who isn't the default is one pick away instead of a retype.
-  const contactsFor = (type, id) => (id ? contacts.filter(c => c.org_type === type && c.org_id === id) : [])
-    .slice().sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0) || (a.name || "").localeCompare(b.name || ""));
-
+  // Everyone on file for the two organisations (data.js's contactsForOrg),
+  // held on the directory and the id: this dialog re-renders on every
+  // keystroke in a project name or an AFE, and the directory is a thousand
+  // rows on the live project.
   const clientId = (clientList.find(c => c.name === form.client) || {}).id;
   const contractorId = (contractorList.find(c => c.name === form.contractor) || {}).id;
-  const clientContacts = contactsFor("client", clientId);
-  const contractorContacts = contactsFor("contractor", contractorId);
+  const clientContacts = useMemo(() => contactsForOrg(contacts, "client", clientId), [contacts, clientId]);
+  const contractorContacts = useMemo(() => contactsForOrg(contacts, "contractor", contractorId), [contacts, contractorId]);
 
   // Picking a name fills the whole person. "" is the manual option: it clears
   // the three fields so the next thing typed isn't half of someone else.

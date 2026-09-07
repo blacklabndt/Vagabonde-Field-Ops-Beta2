@@ -50,7 +50,7 @@ function priorityOf(r) {
   return { total, band: total <= 5 ? "Low" : total <= 7 ? "Med" : "High" };
 }
 
-export function JhaBuilderScreen({ job, jobRecord, contacts, currentUser, onSubmitted, onCancel }) {
+export function JhaBuilderScreen({ job, jobRecord, currentUser, onSubmitted, onCancel }) {
   const [hazards, setHazards] = useState(() => SEED_HAZARDS.map(h => ({ ...h })));
   const [extra, setExtra] = useState([]);
   const [ratings, setRatings] = useState({});

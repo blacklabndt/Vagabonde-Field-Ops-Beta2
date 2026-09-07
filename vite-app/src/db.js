@@ -4,7 +4,6 @@ import { OfflineCache } from "./offlineCache.js";
 import { Toasts } from "./toastBus.js";
 import { OfflineQueue, isNetworkError } from "./offlineQueue.js";
 import { RESPONSE_ROW_CAP, fetchAllPages, fetchAllKeyset } from "./paging.js";
-import { backupSettingsPatch } from "./backupPanelLogic.js";
 import { ticketFingerprint } from "./ticketFingerprint.js";
 
 // Thin data-access layer over the tables that are wired to Supabase so far
@@ -1829,7 +1828,12 @@ export const Db = {
   // show a stored secret, so an empty box is the normal state and treating
   // it as a deletion would silently break the connection on every save.
   // backupSettingsPatch is where that lives, and where it is tested.
+  // Loaded when called, not at the top of this file: db.js is in every
+  // screen's chunk, and a static import here put the backup panel's logic
+  // (and the Edmonton date math behind nextRunAt) into the shell every
+  // field phone downloads. The panel is the only caller.
   async saveBackupSettings(form) {
+    const { backupSettingsPatch } = await import("./backupPanelLogic.js");
     const { error } = await sbClient.from("app_settings").upsert(backupSettingsPatch(form, Date.now()));
     if (error) throw error;
   },
@@ -3489,11 +3493,19 @@ export const Db = {
     return toAdd.length + toFill.length + toMove.length;
   },
 
+  // Every override there is — reference data for the Rate admin table, so
+  // the concurrent walk is the right one; unpaged, PostgREST stopped at
+  // 1,000 without a word.
   async listOverrides() {
-    const { data, error } = await sbClient
-      .from("rate_overrides").select("*, jobs(job_number, client_id)").order("id");
-    if (error) throw error;
-    return data;
+    return fetchAllPages(async (page, size) => {
+      const { data, error, count } = await sbClient
+        .from("rate_overrides")
+        .select("*, jobs(job_number, client_id)", page === 0 ? { count: "exact" } : {})
+        .order("id")
+        .range(page * size, page * size + size - 1);
+      if (error) throw error;
+      return { rows: data || [], total: count ?? (data || []).length };
+    });
   },
 
   async createOverride({ jobId, description, basis, bidRef }) {

@@ -56,9 +56,25 @@ const utf8 = s => new TextEncoder().encode(s);
 class Writer {
   constructor() { this.parts = []; this.length = 0; }
   bytes(b) { this.parts.push(b); this.length += b.length; }
-  u16(n) { this.bytes(new Uint8Array([n & 0xFF, (n >>> 8) & 0xFF])); }
-  u32(n) { this.bytes(new Uint8Array([n & 0xFF, (n >>> 8) & 0xFF, (n >>> 16) & 0xFF, (n >>> 24) & 0xFF])); }
 }
+
+// A fixed-size record written into one buffer. Each header used to go in
+// as thirteen or fifteen two- and four-byte arrays, and a year's archive
+// of ten thousand PDFs handed the Blob some 300,000 parts, most of them
+// two bytes of payload under many more of object — at the moment memory
+// is already tightest. Little-endian throughout, as the format is.
+class Record {
+  constructor(size) { this.buf = new Uint8Array(size); this.view = new DataView(this.buf.buffer); this.at = 0; }
+  u16(n) { this.view.setUint16(this.at, n & 0xFFFF, true); this.at += 2; return this; }
+  u32(n) { this.view.setUint32(this.at, n >>> 0, true); this.at += 4; return this; }
+  done() {
+    if (this.at !== this.buf.length) throw new Error(`zip record: wrote ${this.at} of ${this.buf.length} bytes`);
+    return this.buf;
+  }
+}
+const LOCAL_HEADER = 30;
+const CENTRAL_HEADER = 46;
+const END_RECORD = 22;
 
 // files: [{ name, data: Uint8Array, crc? }] -> Blob
 //
@@ -77,16 +93,18 @@ export function makeZip(files, when = new Date()) {
     const offset = w.length;
 
     // Local file header
-    w.u32(0x04034B50);
-    w.u16(20);            // version needed: 2.0
-    w.u16(0x0800);        // flags: UTF-8 names
-    w.u16(0);             // method: stored
-    w.u16(time); w.u16(date);
-    w.u32(crc);
-    w.u32(data.length);   // compressed size == uncompressed, stored
-    w.u32(data.length);
-    w.u16(name.length);
-    w.u16(0);             // no extra field
+    w.bytes(new Record(LOCAL_HEADER)
+      .u32(0x04034B50)
+      .u16(20)            // version needed: 2.0
+      .u16(0x0800)        // flags: UTF-8 names
+      .u16(0)             // method: stored
+      .u16(time).u16(date)
+      .u32(crc)
+      .u32(data.length)   // compressed size == uncompressed, stored
+      .u32(data.length)
+      .u16(name.length)
+      .u16(0)             // no extra field
+      .done());
     w.bytes(name);
     w.bytes(data);
 
@@ -95,20 +113,22 @@ export function makeZip(files, when = new Date()) {
 
   const centralStart = w.length;
   for (const e of central) {
-    w.u32(0x02014B50);
-    w.u16(20);            // version made by
-    w.u16(20);            // version needed
-    w.u16(0x0800);
-    w.u16(0);
-    w.u16(time); w.u16(date);
-    w.u32(e.crc);
-    w.u32(e.size); w.u32(e.size);
-    w.u16(e.name.length);
-    w.u16(0); w.u16(0);   // extra, comment
-    w.u16(0);             // disk number
-    w.u16(0);             // internal attrs
-    w.u32(0);             // external attrs
-    w.u32(e.offset);
+    w.bytes(new Record(CENTRAL_HEADER)
+      .u32(0x02014B50)
+      .u16(20)            // version made by
+      .u16(20)            // version needed
+      .u16(0x0800)
+      .u16(0)
+      .u16(time).u16(date)
+      .u32(e.crc)
+      .u32(e.size).u32(e.size)
+      .u16(e.name.length)
+      .u16(0).u16(0)      // extra, comment
+      .u16(0)             // disk number
+      .u16(0)             // internal attrs
+      .u32(0)             // external attrs
+      .u32(e.offset)
+      .done());
     w.bytes(e.name);
   }
 
@@ -119,12 +139,14 @@ export function makeZip(files, when = new Date()) {
   const centralSize = w.length - centralStart;
 
   // End of central directory
-  w.u32(0x06054B50);
-  w.u16(0); w.u16(0);
-  w.u16(central.length); w.u16(central.length);
-  w.u32(centralSize);
-  w.u32(centralStart);
-  w.u16(0);               // no comment
+  w.bytes(new Record(END_RECORD)
+    .u32(0x06054B50)
+    .u16(0).u16(0)
+    .u16(central.length).u16(central.length)
+    .u32(centralSize)
+    .u32(centralStart)
+    .u16(0)               // no comment
+    .done());
 
   // The pieces are handed to the Blob as they are, rather than copied into
   // one buffer first: a year's archive is hundreds of megabytes, and holding
