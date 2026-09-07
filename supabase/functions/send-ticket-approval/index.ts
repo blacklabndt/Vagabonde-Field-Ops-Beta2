@@ -62,9 +62,13 @@ Deno.serve(async (req) => {
     // that need nothing from each other, go out together — "Chase all
     // unsigned" is thousands of these. The checks keep their order.
     const [{ data: ticket, error: tErr }, { data: caller }] = await Promise.all([
+      // Only what the two gates read: the bill, its job and the work date
+      // come from loadInvoice's own read below, so the three-table embed
+      // this once carried was two RLS-checked subqueries per send for
+      // nothing.
       asUser
         .from("tickets")
-        .select("id, technician_id, work_date, total, status, delays, client_contact, jobs(job_number, project, lsd, afe, area, clients(name), contractors(name))")
+        .select("id, technician_id, status")
         .eq("id", ticketId).single(),
       asUser.from("profiles").select("role").eq("id", user.id).single()
     ]);
@@ -85,8 +89,6 @@ Deno.serve(async (req) => {
         status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }
-
-    const job = ticket.jobs as any;
 
     // 30 days to sign. Long enough to survive a rep's holiday, short enough
     // that a stale forwarded email stops opening a ticket nobody has signed.
@@ -114,6 +116,10 @@ Deno.serve(async (req) => {
     const settings = await settingsRead;
     const { data: invoiceData, error: invErr } = await loadInvoice(admin, ticketId, toList, settings.invoice);
     if (invErr || !invoiceData) throw new Error(invErr ?? "Ticket not found");
+    // The job and the work date the email names, off the same read the
+    // attached bill is printed from.
+    const job = invoiceData.job as any;
+    const workDate = invoiceData.ticket.work_date;
     const lines = invoiceData.lines ?? [];
 
     // Usually absent: a ticket goes out for signing before it is invoiced,
@@ -163,7 +169,7 @@ Deno.serve(async (req) => {
       <div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#5980a6;margin-bottom:6px">Daily ticket ${esc(ticket.id)}${invoiceNo != null ? ` &middot; Invoice # ${esc(String(invoiceNo))}` : ""}</div>
       <div style="font-size:22px;font-weight:600;margin-bottom:4px">${esc(job.project)}</div>
       <div style="color:#6b6d6e;margin-bottom:18px">${esc(job.job_number)} · ${esc(job.clients?.name)}${job.lsd ? " · " + esc(job.lsd) : ""}${job.afe ? " · AFE " + esc(job.afe) : ""}</div>
-      <div style="color:#6b6d6e;margin-bottom:10px">Work performed ${esc(ticket.work_date)}</div>
+      <div style="color:#6b6d6e;margin-bottom:10px">Work performed ${esc(workDate)}</div>
       <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-top:1px solid rgba(29,31,32,.2);border-bottom:1px solid rgba(29,31,32,.2)">
         ${rows}
       </table>
@@ -185,7 +191,7 @@ Deno.serve(async (req) => {
     const text = [
       `Daily ticket ${ticket.id}${invoiceNo != null ? ` · Invoice # ${invoiceNo}` : ""} — ${job.project}`,
       `${job.job_number} · ${job.clients?.name ?? ""}`,
-      `Work performed ${ticket.work_date}`,
+      `Work performed ${workDate}`,
       "",
       ...lines.map(l => `${l.label} — ${l.quantity} ${l.unit ?? ""} — ${money(lineTotal(l))}`),
       "",

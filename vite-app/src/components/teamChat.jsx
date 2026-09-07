@@ -1430,7 +1430,7 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
   // broken image, not a picture.
   const openImage = async m => {
     try {
-      const src = m.gifUrl || await Db.signedUrl("chat-media", m.imageKey);
+      const src = m.gifUrl || await Db.signedUrl("chat-media", m.imageKey, { fresh: true });
       setLightbox(src);
     } catch (e) {
       setSendError(e.message || "Couldn't open the picture.");

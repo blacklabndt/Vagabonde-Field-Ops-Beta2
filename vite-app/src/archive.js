@@ -289,12 +289,16 @@ export async function buildArchive({ jobs, mode, from, to, by = "", onProgress =
     // uniqueName and the manifest are order-dependent and a build must be
     // byte-stable build to build. One at a time, a busy year's thousands
     // of downloads were the latency-bound hour this dialog warns about.
-    const fetched = (bucket, items) => mapLimit(items, INVOICE_CONCURRENCY, async it => {
+    // One pool over both lists, so the budget really is four in flight —
+    // two pools of four were eight.
+    const wanted = [...jhas.map(it => ["jhas", it]), ...reports.map(it => ["reports", it])];
+    const got = await mapLimit(wanted, INVOICE_CONCURRENCY, async ([bucket, it]) => {
       if (!it.pdfKey) return null;
       try { return { bytes: await db.downloadObject(bucket, it.pdfKey) }; }
       catch (e) { return { error: e.message || "download failed" }; }
     });
-    const [jhaBytes, reportBytes] = await Promise.all([fetched("jhas", jhas), fetched("reports", reports)]);
+    const jhaBytes = got.slice(0, jhas.length);
+    const reportBytes = got.slice(jhas.length);
     jhas.forEach((j, i) => {
       if (!j.pdfKey) { notOnFile.push(`JHA of ${j.workDate || j.at}`); return; }
       say(`JHA ${j.workDate || ""}`);
@@ -326,17 +330,16 @@ export async function buildArchive({ jobs, mode, from, to, by = "", onProgress =
     let details = new Map(), crews = new Map(), detailsFailed = false;
     if (ids.length) {
       say(`${ids.length} ticket${ids.length === 1 ? "" : "s"}`);
-      try {
-        details = await db.listTicketsForArchive(ids);
-      } catch (e) {
+      // Two independent reads, together; their failures are still named in
+      // this order, details before crew.
+      const [d, c] = await Promise.allSettled([db.listTicketsForArchive(ids), db.listCrewForTickets(ids)]);
+      if (d.status === "fulfilled") details = d.value;
+      else {
         detailsFailed = true;
-        missing.push(`The details of ${ids.length} ticket(s): ${e.message || "read failed"}`);
+        missing.push(`The details of ${ids.length} ticket(s): ${d.reason?.message || "read failed"}`);
       }
-      try {
-        crews = await db.listCrewForTickets(ids);
-      } catch (e) {
-        missing.push(`The crew hours on ${ids.length} ticket(s): ${e.message || "read failed"}`);
-      }
+      if (c.status === "fulfilled") crews = c.value;
+      else missing.push(`The crew hours on ${ids.length} ticket(s): ${c.reason?.message || "read failed"}`);
     }
     // Rendered a few at a time, filed one at a time below: `add` and
     // uniqueName are order-dependent, and the manifest has to come out the

@@ -29,6 +29,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { esc, sendMail, appSettings, wrapEmail } from "../_shared/mail.ts";
+import type { AppSettings } from "../_shared/mail.ts";
 import { renderInvoice, invoiceCss, invoiceTotals, moneyCents, edmontonStamp, gstPercentOf } from "../_shared/invoice.ts";
 import type { InvoiceData } from "../_shared/invoice.ts";
 import { loadInvoice } from "../_shared/ticketInvoice.ts";
@@ -157,14 +158,15 @@ async function readBounded(req: Request, max: number): Promise<Uint8Array | null
 // is the auth user's), plus the configured reply-to as the office copy.
 // Nothing to send to is not an error; it is an install with no addresses.
 // deno-lint-ignore no-explicit-any
-async function officeRecipients(admin: any, row: any) {
-  // Two independent reads, together — a rep on a phone is waiting on the
+async function officeRecipients(admin: any, row: any, settingsRead: Promise<AppSettings>) {
+  // The settings row was read once at the top of the request; the sender's
+  // address is the one read left here — a rep on a phone is waiting on the
   // receipt page behind this.
   const [settings, sentBy] = await Promise.all([
-    appSettings(),
+    settingsRead,
     row?.approval_sent_by ? admin.auth.admin.getUserById(row.approval_sent_by) : Promise.resolve(null)
   ]);
-  const to = sentBy?.data?.user?.email ?? "";
+  const to: string = sentBy?.data?.user?.email ?? "";
   const office = settings.replyTo && settings.replyTo !== to ? settings.replyTo : "";
   // The settings go back with the addresses so the send does not read them
   // a second time.
@@ -174,8 +176,8 @@ async function officeRecipients(admin: any, row: any) {
 // The rep pressed "Query this ticket": the same people who hear about an
 // approval hear what was asked, with the way forward spelled out.
 // deno-lint-ignore no-explicit-any
-async function notifyQuery(admin: any, row: any, who: string, text: string) {
-  const { to, office, settings } = await officeRecipients(admin, row);
+async function notifyQuery(admin: any, row: any, who: string, text: string, settingsRead: Promise<AppSettings>) {
+  const { to, office, settings } = await officeRecipients(admin, row, settingsRead);
   if (!to && !office) return;
   const job = row?.jobs ?? {};
   const lines = [
@@ -197,8 +199,8 @@ async function notifyQuery(admin: any, row: any, who: string, text: string) {
 }
 
 // deno-lint-ignore no-explicit-any
-async function notifyApproval(admin: any, row: any, d: InvoiceData, signer: string, approvedAt: string) {
-  const { to, office, settings } = await officeRecipients(admin, row);
+async function notifyApproval(admin: any, row: any, d: InvoiceData, signer: string, approvedAt: string, settingsRead: Promise<AppSettings>) {
+  const { to, office, settings } = await officeRecipients(admin, row, settingsRead);
   if (!to && !office) return;
   const job = row?.jobs ?? {};
   const totals = invoiceTotals(d);
@@ -239,6 +241,17 @@ async function handle(req: Request): Promise<Response> {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
 
+  // One settings read per request, started now and handed to the invoice
+  // and to the office notices — a signature used to read the same one-row
+  // table twice, the second time between the sign and the receipt page.
+  // The no-op catch marks a rejection handled until somebody awaits it.
+  // The invoice's copy is best-effort (a settings hiccup must not stop a
+  // rep opening their bill), so a failure hands loadInvoice null and it
+  // falls back to its own read, exactly as before.
+  const settingsRead = appSettings();
+  settingsRead.catch(() => {});
+  const invoiceSettingsRead = settingsRead.then(s => s.invoice, () => null);
+
   // Cast because the select list is built at runtime: supabase-js can only
   // infer a row type from a literal, and falls back to an error type when the
   // string is concatenated. Only the token columns are read off this — the
@@ -270,7 +283,7 @@ async function handle(req: Request): Promise<Response> {
   // Loaded through the shared reader, so this page, the emailed copy and the
   // office view cannot drift apart in what they print. Service role here: the
   // person following the link has no account, which is the whole point.
-  const { data: invoiceData } = await loadInvoice(admin, ticket.id as string);
+  const { data: invoiceData } = await loadInvoice(admin, ticket.id as string, "", await invoiceSettingsRead);
   const invoice = () => renderInvoice(invoiceData!);
   const header = invoice();
 
@@ -383,7 +396,7 @@ async function handle(req: Request): Promise<Response> {
         // telling was attempted, to buy a retry nobody has asked for. The
         // failure is on the error log below and the query is on the tracker
         // either way.
-        try { await notifyQuery(admin, row, who, text); }
+        try { await notifyQuery(admin, row, who, text, settingsRead); }
         catch (e) { await logError("approve-ticket", "Queried, but the office wasn't told: " + (e as Error).message, { ticket: ticket.id }); }
       }
       // The same receipt whether the office was mailed or the cooldown held
@@ -467,7 +480,7 @@ async function handle(req: Request): Promise<Response> {
     // the office address copied when one is configured. Best effort: a mail
     // failure is logged and never stands between the rep and their receipt.
     try {
-      await notifyApproval(admin, row, invoiceData!, name, signedRows[0].approved_at ?? approvedAt);
+      await notifyApproval(admin, row, invoiceData!, name, signedRows[0].approved_at ?? approvedAt, settingsRead);
     } catch (e) {
       await logError("approve-ticket", "Approved, but the office wasn't told: " + (e as Error).message, { ticket: ticket.id });
     }

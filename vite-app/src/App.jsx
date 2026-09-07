@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, Suspense, lazy } from "react";
 import { sbClient, forgetStoredSession } from "./config.js";
 import { TABS, CONTEXT_TABS, EMPTY_JOB_RECORD, Store } from "./data.js";
-import { Db } from "./db.js";
+import { Db, forgetChatMediaUrls } from "./db.js";
 import { tabList, Blueprint, Btn, ErrorBox, ErrorBoundary, TagX, Toast, Loading, Switch } from "./components/common.jsx";
 import { Toasts } from "./toastBus.js";
 import { forgetHeldDrafts } from "./chatDrafts.js";
@@ -626,6 +626,7 @@ export function App() {
     setContextScreen("");
     forgetHeldDrafts();
     forgetDosimetryAsked();
+    forgetChatMediaUrls();
     setCurrentUser(null);
   };
 

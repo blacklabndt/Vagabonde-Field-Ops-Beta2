@@ -25,6 +25,10 @@ const EXPORT_LINE_WALKS = 4;
 const SIGNED_URL_LIFE_S = 60 * 10;
 const SIGNED_URL_REUSE_MS = 8 * 60 * 1000;
 const _chatMediaUrls = new Map();
+// Sign-out's: the next account on a shared tablet is not handed links
+// minted under the last one's token. Exported on its own so App.jsx can
+// reach it beside forgetHeldDrafts without touching the Db object.
+export function forgetChatMediaUrls() { _chatMediaUrls.clear(); }
 
 // The idempotency-key lookup a field save starts before its open check, so
 // the two round trips overlap. A builder does nothing until something waits
