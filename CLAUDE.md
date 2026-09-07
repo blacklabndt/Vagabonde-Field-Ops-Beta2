@@ -317,6 +317,12 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
 - In-app help is `vite-app/src/help.js`, pure data keyed by screen key with
   a test that every TABS key has an entry under 200 words; the top bar's "?"
   opens it for the active screen. Keep it true when a screen changes. The
+  button is for the first two days: `helpWindow.js` (pure, tested) keeps the
+  account's first sight of it on this device as a `Store` preference
+  (`help.firstSeen.<id>`, localStorage — sign-out clears the device cache,
+  not Store, so signing back in does not restart the clock) and
+  `helpOffered` nulls `helpEntry` in App.jsx after `HELP_WINDOW_MS`, on
+  every screen at once. A record that is not a time keeps the button. The
   error log pages by keyset (`listFunctionErrors(limit, { before,
   functionName })`, the timestamp double-quoted inside the or()) and filters
   by function name.

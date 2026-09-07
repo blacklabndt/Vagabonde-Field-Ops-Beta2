@@ -10,6 +10,7 @@ import { QueueBadge, QueueDialog } from "./components/queuePanel.jsx";
 import { FeatureRequestDialog } from "./components/featureRequest.jsx";
 import { HelpDialog } from "./components/helpDialog.jsx";
 import { helpFor } from "./help.js";
+import { helpOffered, noteHelpFirstSeen } from "./helpWindow.js";
 import { OfflineQueue } from "./offlineQueue.js";
 import { ticketFingerprint, replacedNewerWork } from "./ticketFingerprint.js";
 import { overwroteKey } from "./overwriteNote.js";
@@ -315,6 +316,13 @@ export function App() {
   // screen. It is not part of the address: help is a thing you open on the
   // screen you are on, not somewhere a reload should land you.
   const [showHelp, setShowHelp] = useState(false);
+  // When this account first saw the "?" on this device. Two days after
+  // that the button leaves every screen (helpWindow.js); the record is a
+  // Store preference, so sign-out does not restart the clock.
+  const [helpFirstSeen, setHelpFirstSeen] = useState(null);
+  useEffect(() => {
+    setHelpFirstSeen(noteHelpFirstSeen(Store, currentUser ? currentUser.id : null, Date.now()));
+  }, [currentUser ? currentUser.id : null]);
   const [egg, setEgg] = useState(false);
   // Every save in the app arrives here, from db.js by way of the toast bus.
   const [toast, setToast] = useState(null);
@@ -1087,7 +1095,9 @@ export function App() {
   const allowedTabs = TABS.filter(t => myTabs.includes(t.key) && !CONTEXT_TABS.includes(t.key));
   // Read from `screen` rather than remembered when the button was pressed,
   // so the panel and the section name in the bar are always the same screen.
-  const helpEntry = helpFor(screen);
+  // Null once this account's two days are up — the button and its dialog
+  // leave every screen together.
+  const helpEntry = helpOffered(helpFirstSeen, Date.now()) ? helpFor(screen) : null;
   const goto = key => { if (myTabs.includes(key)) { if (key === "ticket") setActiveTicket(null); setContextScreen(""); setScreen(key); setMenuOpen(false); } };
   // Reached from a button inside another screen (a job card, "Start JHA",
   // "New ticket") rather than the tab menu — always allowed, even when the
