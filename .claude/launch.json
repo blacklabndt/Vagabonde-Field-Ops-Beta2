@@ -2,13 +2,13 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "beta1-dev",
+      "name": "beta2-dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "vite-app", "run", "dev"],
       "port": 5173
     },
     {
-      "name": "beta1-preview",
+      "name": "beta2-preview",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "vite-app", "run", "preview", "--", "--port", "4173"],
       "port": 4173

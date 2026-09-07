@@ -1,5 +1,5 @@
 {
-  "name": "vagabonde-field-ops-beta1",
+  "name": "vagabonde-field-ops-beta2",
   "private": true,
   "description": "Repo-root build entry. The app itself lives in vite-app/.",
   "scripts": {

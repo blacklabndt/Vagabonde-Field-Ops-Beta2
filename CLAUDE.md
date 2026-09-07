@@ -1,6 +1,10 @@
-# VagaboNDE Field Ops — Beta 1
+# VagaboNDE Field Ops — Beta 2
 
-RT weld-inspection field app for a crew in Grande Prairie, AB. React PWA
+RT weld-inspection field app for a crew in Grande Prairie, AB. Beta 2 opened
+on 7 Sept 2026 from Beta 1's last commit (7cb2b93, repo
+`Vagabonde-Field-Ops-Beta1`, now the frozen release); it deploys to the SAME
+Supabase project and Worker, so Beta 1's repo must not be deployed from again
+or it will put the old build back over this one. React PWA
 (`vite-app/`) over Supabase (project `eielmvxzdwwprmmfamlq`), deployed as
 Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
 `/backup/oauth/*` proxies in `worker/index.js`).
@@ -13,7 +17,7 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   sign-out; `appShape.test.mjs` pins App.jsx's own ordering.
 - Build: `npm --prefix vite-app run build`
 - Deploy: `npm run build && npx wrangler deploy` (from repo root)
-- Dev server: use the `.claude/launch.json` `beta1-dev` config, not Bash
+- Dev server: use the `.claude/launch.json` `beta2-dev` config, not Bash
 
 ## Rules that are not in the code
 

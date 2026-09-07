@@ -1,4 +1,4 @@
-# VagaboNDE Field Ops — Beta 1
+# VagaboNDE Field Ops — Beta 2
 
 The field operations app for VagaboNDE Full Service NDE, Grande Prairie:
 jobs, JHAs, report uploads, billing tickets rendered as the client-facing
@@ -6,7 +6,13 @@ field invoice, timesheets with approval PDFs, equipment, rates, and an
 offline-first field path — a React PWA over Supabase, deployed on a
 Cloudflare Worker.
 
-This folder is the Beta 1 cut: the same code that has been running live,
+This folder is Beta 2, opened on 7 September 2026 from the last commit of
+Beta 1 (`Vagabonde-Field-Ops-Beta1`, which stays as the frozen Beta 1
+release). It deploys to the same Supabase project and the same Cloudflare
+Worker as Beta 1 did, so a deploy from the Beta 1 repo would now put an
+older build back over this one — deploy from here only.
+
+Beta 1 itself was the same code that had been running live,
 promoted to its own standalone repository. Nothing was rewritten for the
 promotion — the source had already been through five lead-developer review
 passes, and its correctness lives in details a rewrite would only re-risk.
