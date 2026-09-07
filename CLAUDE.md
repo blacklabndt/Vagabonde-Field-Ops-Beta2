@@ -398,7 +398,11 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
 - The files phase carries unchanged files over ON the drive
   (`docs/superpowers/specs/2026-09-07-backup-carries-unchanged-files-over-design.md`):
   once per run it picks a base — the newest stamped folder other than its
-  own (`chooseBaseFolder`, pure) — and for an object in a write-once bucket
+  own (`chooseBaseFolder`, pure), the run's own set aside by folder ID and
+  never by the row's `folder_name`: the first slice reads its row before it
+  makes the folder, and on a small database the tables phase finishes
+  inside that slice, so the name was "" and the run took its own empty
+  folder as the base (found live, 7 Sept) — and for an object in a write-once bucket
   (`WRITE_ONCE_BUCKETS`: reports, chat-media; keys never reused) whose name
   and size the base's `files/` already holds, `DriveClient.copy` makes the
   night's copy server-side (`carryOverId`). jhas, timesheets and shared are

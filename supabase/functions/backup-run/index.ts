@@ -436,7 +436,7 @@ async function advance(db: SupabaseClient, run: Run, secret: string): Promise<Re
     let units = 0;
     while (!outOfBudget(deadline, Date.now()) && cursor.phase !== "done") {
       if (cursor.phase === "tables") cursor = await stepTables(db, conn.drive, tablesFolder, cursor);
-      else if (cursor.phase === "files") cursor = await stepFiles(db, conn.drive, filesFolder, cursor, deadline, conn.rootFolderId, String(current.folder_name ?? ""));
+      else if (cursor.phase === "files") cursor = await stepFiles(db, conn.drive, filesFolder, cursor, deadline, conn.rootFolderId, folderId);
       else if (cursor.phase === "manifest") cursor = await stepManifest(db, conn.drive, folderId, cursor, String(current.kind));
       else if (cursor.phase === "retention") cursor = await stepRetention(db, conn.drive, conn.rootFolderId, conn.keep, cursor);
       else cursor.phase = "done";
@@ -576,7 +576,7 @@ async function addAuthEmails(db: SupabaseClient, rows: Record<string, unknown>[]
 
 async function stepFiles(
   db: SupabaseClient, drive: DriveClient, filesFolder: string, c: RunCursor, deadline: number,
-  rootFolderId: string, ownFolderName: string
+  rootFolderId: string, ownFolderId: string
 ): Promise<RunCursor> {
   if (c.bucketIndex >= BUCKETS.length) { c.phase = "manifest"; return c; }
   const bucket = BUCKETS[c.bucketIndex];
@@ -587,10 +587,17 @@ async function stepFiles(
   // "none" included. A base is a saving and never a requirement: any
   // trouble finding or listing it means every object goes the long way
   // round, which is what every object did before.
+  //
+  // The run's own folder is set aside by ID, never by the row's
+  // folder_name: the first slice reads its row before it makes the folder,
+  // and on a small database the tables phase finishes inside that same
+  // slice — so the name was "" here, the newest stamped folder was the
+  // run's own, and its files/ was empty until the run filled it.
   if (!c.baseLooked) {
     try {
-      const folders = await withRetry("Looking for last night's folder", () => drive.listFolders(rootFolderId));
-      const baseName = chooseBaseFolder(folders.map(f => f.name), ownFolderName);
+      const folders = (await withRetry("Looking for last night's folder", () => drive.listFolders(rootFolderId)))
+        .filter(f => f.id !== ownFolderId);
+      const baseName = chooseBaseFolder(folders.map(f => f.name), "");
       const base = baseName ? folders.find(f => f.name === baseName) : undefined;
       const sub = base
         ? (await withRetry("Opening last night's folder", () => drive.listFolders(base.id))).find(f => f.name === FILES_FOLDER)
