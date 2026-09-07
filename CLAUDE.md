@@ -514,6 +514,42 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   `backup-restore` on `x-internal-secret` OR an Admin JWT (`backupDoor` in
   `backupCommon.ts`).
 
+## Rules the 0.92 optimization pass added (Sept 2026)
+
+- `cached()` in db.js shares one in-flight read between callers in the
+  same tick (`_inflight`), and `invalidate()` drops that entry too; a
+  field save starts its idempotency-key lookup (`startKeyLookup`, resolves
+  with its error rather than rejecting) and createTicket its first mint
+  beside `assertJobOpen`, awaited in the old order so the job's refusal
+  still wins. A pre-started lookup is consumed ONCE — createJha's 23505
+  branch reads again, because re-awaiting the settled promise returned
+  the same null that led to the insert.
+- `OfflineQueue.flush` answers `joined: true` to a caller that joined a
+  flush already running; `attachAutoFlush(handlers, onSynced)` and App's
+  retryQueue act only on their own drain, so the outbox reload runs once
+  however many `online`s a truck fires (tested). `oqNotify` coalesces its
+  re-reads and never projects the list in memory.
+- `Db.signedUrl(bucket, key, { fresh })` remembers chat-media links in
+  memory (never OfflineCache, never another bucket — chat-media objects
+  are never rewritten in place) for eight of their ten minutes; a caller
+  whose load failed, and the lightbox by its own promise, pass `fresh`.
+  `forgetChatMediaUrls()` runs at sign-out beside forgetHeldDrafts.
+- `contactsForOrg` in data.js is the one definition of "an organisation's
+  people, primary first", memoized where a dialog re-renders per keystroke;
+  the ticket editor's rep box reads the cached directory. A ChatRow is a
+  memoized message with its handlers behind one ref (`rowHandlers`);
+  `pinKey` decides whether the pinned strip's array is replaced, and it
+  carries the quote because that is the one field that moves.
+- `mapLimit` lives in paging.js (archive.js re-exports it). The archive
+  downloads and renders through ONE pool of four; the line export walks
+  four disjoint batches at once, each a sequential keyset walk.
+- `appSettings()` also carries the invoice's three settings as `invoice`;
+  `sendMail({ settings })` and `loadInvoice(client, id, fallback,
+  settings)` take a row the caller already read. One read per request,
+  started early with a no-op `.catch` sink where an early return could
+  otherwise leave a rejection nobody awaited — fatal in the Edge runtime.
+  Never memoized across requests.
+
 ## Verification habits that caught real bugs
 
 - "curl works" ≠ "a browser renders it": Supabase rewrites HTML to

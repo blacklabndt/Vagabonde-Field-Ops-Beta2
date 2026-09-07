@@ -19,7 +19,7 @@ passes, and its correctness lives in details a rewrite would only re-risk.
 What changed is the packaging: the Worker and its `wrangler.jsonc` moved
 inside the project (they sat above it in the prototype workspace), and the
 repo root is the project root. The version the app reports is
-`vite-app/package.json`'s — `0.9.0-Beta` today — stamped into the bundle at
+`vite-app/package.json`'s — `0.92-beta 2` today — stamped into the bundle at
 build time with the commit and the date, and shown at the bottom of the
 drawer on every device.
 

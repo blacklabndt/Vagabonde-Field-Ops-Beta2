@@ -1,7 +1,7 @@
 {
   "name": "vagabonde-field-ops",
   "private": true,
-  "version": "0.9.0-Beta",
+  "version": "0.92-beta 2",
   "type": "module",
   "scripts": {
     "dev": "vite",
