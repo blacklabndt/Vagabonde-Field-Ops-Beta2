@@ -4,7 +4,7 @@ import { heldDraftFor, holdDraft, heldComposerFor, holdComposer } from "../chatD
 import { initialsOf } from "../data.js";
 // The merge every message path funnels through — see chatMerge.js,
 // where the regression tests hold the door on the "Someone" bug.
-import { mergeIn, reconcileWindow } from "../chatMerge.js";
+import { mergeIn, reconcileWindow, quotedKey } from "../chatMerge.js";
 import { Blueprint, Btn, Dialog, ErrorBox, Loading, Switch, openMinted } from "./common.jsx";
 
 // Team chat — one room for the whole crew.
@@ -135,7 +135,7 @@ function ChatAudio({ audioKey }) {
   const onError = () => {
     if (retried.current) { setFailed(true); return; }
     retried.current = true;
-    Db.signedUrl("chat-media", audioKey).then(setUrl).catch(() => setFailed(true));
+    Db.signedUrl("chat-media", audioKey, { fresh: true }).then(setUrl).catch(() => setFailed(true));
   };
   if (failed) {
     return <div style={{ fontSize: 12, color: "color-mix(in srgb, var(--color-text) 55%, transparent)", padding: "6px 0" }}>Couldn't load the voice note.</div>;
@@ -347,7 +347,7 @@ function ChatImage({ imageKey, onSized, onOpen }) {
   const onError = () => {
     if (retried.current) { setFailed(true); return; }
     retried.current = true;
-    Db.signedUrl("chat-media", imageKey).then(setUrl).catch(() => setFailed(true));
+    Db.signedUrl("chat-media", imageKey, { fresh: true }).then(setUrl).catch(() => setFailed(true));
   };
 
   if (failed) {
@@ -476,7 +476,9 @@ function renderBody(text, jobNums, openJobNumber) {
 
 // What the pinned strip renders, joined, so an unchanged strip keeps its
 // array (name arrives late from the directory, so it is part of the key).
-const pinKey = pins => (pins || []).map(p => [p.id, p.pinnedAt, p.name, p.body, p.imageKey, p.gifUrl, p.audioKey, p.fileName].join("\u0001")).join("\u0002");
+// quoted is the one field that moves for a given message (the quote goes
+// null when the quoted message dies), and the pin dialog shows it.
+const pinKey = pins => (pins || []).map(p => [p.id, p.pinnedAt, p.name, p.body, p.imageKey, p.gifUrl, p.audioKey, p.fileName, quotedKey(p.quoted)].join("\u0001")).join("\u0002");
 
 const MUTED = "color-mix(in srgb, var(--color-text) 55%, transparent)";
 const TINY_BTN = { background: "transparent", border: "none", cursor: "pointer", color: MUTED, padding: 2, lineHeight: 1 };

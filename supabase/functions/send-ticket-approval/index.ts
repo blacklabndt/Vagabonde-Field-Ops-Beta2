@@ -47,6 +47,17 @@ Deno.serve(async (req) => {
     const toList = recipients(to, "to");
     const ccList = optionalRecipients(cc, "cc");
 
+    // The settings read starts here, beside the authority reads, and is
+    // awaited where its answer is first needed. The no-op catch is
+    // load-bearing: appSettings throws on a read error, and a request that
+    // returns before that await (ticket not found, already approved, the
+    // 403) would otherwise leave a rejection nobody awaited — fatal in the
+    // Edge runtime, mid-chase. The await below still rethrows the same
+    // error in the same place. Not in the Promise.all: a settings failure
+    // must not pre-empt "Ticket not found".
+    const settingsRead = appSettings();
+    settingsRead.catch(() => {});
+
     // The ticket and the caller's role, two reads under the caller's own RLS
     // that need nothing from each other, go out together — "Chase all
     // unsigned" is thousands of these. The checks keep their order.
@@ -100,7 +111,7 @@ Deno.serve(async (req) => {
     // One settings read for the whole send: the invoice's terms, the app
     // address the link is built on, and the mail transport. It throws on a
     // read error the way sendMail's own would have.
-    const settings = await appSettings();
+    const settings = await settingsRead;
     const { data: invoiceData, error: invErr } = await loadInvoice(admin, ticketId, toList, settings.invoice);
     if (invErr || !invoiceData) throw new Error(invErr ?? "Ticket not found");
     const lines = invoiceData.lines ?? [];

@@ -158,12 +158,13 @@ async function readBounded(req: Request, max: number): Promise<Uint8Array | null
 // Nothing to send to is not an error; it is an install with no addresses.
 // deno-lint-ignore no-explicit-any
 async function officeRecipients(admin: any, row: any) {
-  const settings = await appSettings();
-  let to = "";
-  if (row?.approval_sent_by) {
-    const { data } = await admin.auth.admin.getUserById(row.approval_sent_by);
-    to = data?.user?.email ?? "";
-  }
+  // Two independent reads, together — a rep on a phone is waiting on the
+  // receipt page behind this.
+  const [settings, sentBy] = await Promise.all([
+    appSettings(),
+    row?.approval_sent_by ? admin.auth.admin.getUserById(row.approval_sent_by) : Promise.resolve(null)
+  ]);
+  const to = sentBy?.data?.user?.email ?? "";
   const office = settings.replyTo && settings.replyTo !== to ? settings.replyTo : "";
   // The settings go back with the addresses so the send does not read them
   // a second time.

@@ -284,32 +284,37 @@ export async function buildArchive({ jobs, mode, from, to, by = "", onProgress =
     }
     if (servedCached) missing.push("Read from this device's offline copy rather than the server — this job may be incomplete.");
 
-    for (const j of jhas) {
-      if (!j.pdfKey) { notOnFile.push(`JHA of ${j.workDate || j.at}`); continue; }
+    // The PDFs are downloaded a few at a time (the same pool the invoices
+    // render through below) and then filed in the list's order, because
+    // uniqueName and the manifest are order-dependent and a build must be
+    // byte-stable build to build. One at a time, a busy year's thousands
+    // of downloads were the latency-bound hour this dialog warns about.
+    const fetched = (bucket, items) => mapLimit(items, INVOICE_CONCURRENCY, async it => {
+      if (!it.pdfKey) return null;
+      try { return { bytes: await db.downloadObject(bucket, it.pdfKey) }; }
+      catch (e) { return { error: e.message || "download failed" }; }
+    });
+    const [jhaBytes, reportBytes] = await Promise.all([fetched("jhas", jhas), fetched("reports", reports)]);
+    jhas.forEach((j, i) => {
+      if (!j.pdfKey) { notOnFile.push(`JHA of ${j.workDate || j.at}`); return; }
       say(`JHA ${j.workDate || ""}`);
-      try {
-        const bytes = await db.downloadObject("jhas", j.pdfKey);
-        const name = uniqueName(used, j.file || "jha.pdf", "jha.pdf");
-        add(`${folder}/JHAs/${name}`, bytes);
-        j.archived = `JHAs/${name}`;
-        summary.jhas++;
-      } catch (e) {
-        missing.push(`JHA ${j.file || j.pdfKey}: ${e.message || "download failed"}`);
-      }
-    }
-    for (const r of reports) {
-      if (!r.pdfKey) { notOnFile.push(`Report ${r.file}`); continue; }
+      const got = jhaBytes[i];
+      if (got.error) { missing.push(`JHA ${j.file || j.pdfKey}: ${got.error}`); return; }
+      const name = uniqueName(used, j.file || "jha.pdf", "jha.pdf");
+      add(`${folder}/JHAs/${name}`, got.bytes);
+      j.archived = `JHAs/${name}`;
+      summary.jhas++;
+    });
+    reports.forEach((r, i) => {
+      if (!r.pdfKey) { notOnFile.push(`Report ${r.file}`); return; }
       say(`report ${r.file}`);
-      try {
-        const bytes = await db.downloadObject("reports", r.pdfKey);
-        const name = uniqueName(used, r.file || "report.pdf", "report.pdf");
-        add(`${folder}/Reports/${name}`, bytes);
-        r.archived = `Reports/${name}`;
-        summary.reports++;
-      } catch (e) {
-        missing.push(`Report ${r.file}: ${e.message || "download failed"}`);
-      }
-    }
+      const got = reportBytes[i];
+      if (got.error) { missing.push(`Report ${r.file}: ${got.error}`); return; }
+      const name = uniqueName(used, r.file || "report.pdf", "report.pdf");
+      add(`${folder}/Reports/${name}`, got.bytes);
+      r.archived = `Reports/${name}`;
+      summary.reports++;
+    });
 
     // The job's tickets in two reads rather than two each. Asked per ticket,
     // a year was some thirty thousand sequential round trips before the zip

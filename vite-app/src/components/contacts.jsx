@@ -222,7 +222,7 @@ export function ContactsScreen({ currentUser }) {
               ) : (
                 <div style={{ display: "grid", gap: 12 }}>
                   {shown.map(c => (
-                    <ContactCard key={c.id} contact={c} orgName={org.name} canRemove={isAdmin}
+                    <ContactCard key={c.id} contact={c} canRemove={isAdmin}
                       onSave={form => saveContact(c.id, form)}
                       onMakePrimary={() => makePrimary(c)}
                       onRemove={() => removeContact(c)} />
@@ -272,7 +272,7 @@ export function ContactsScreen({ currentUser }) {
   );
 }
 
-function ContactCard({ contact, orgName, onSave, onMakePrimary, onRemove, canRemove }) {
+function ContactCard({ contact, onSave, onMakePrimary, onRemove, canRemove }) {
   const [editing, setEditing] = useState(false);
   const muted = "color-mix(in srgb, var(--color-text) 60%, transparent)";
 

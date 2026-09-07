@@ -20,6 +20,12 @@ function assertJobRowOpen(job) {
 // batches are disjoint tickets, so they need not wait on each other.
 const EXPORT_LINE_WALKS = 4;
 
+// A signed storage link lives ten minutes; a chat-media one is handed out
+// again while under eight (see Db.signedUrl).
+const SIGNED_URL_LIFE_S = 60 * 10;
+const SIGNED_URL_REUSE_MS = 8 * 60 * 1000;
+const _chatMediaUrls = new Map();
+
 // The idempotency-key lookup a field save starts before its open check, so
 // the two round trips overlap. A builder does nothing until something waits
 // on it, hence the Promise.resolve; a lookup that fails resolves with its
@@ -245,7 +251,10 @@ async function cached(key, fetcher) {
   // not be the thing that repopulates the cache — it fetched the old rows.
   // The generation counter is what tells the two apart.
   const startedAt = _generation[key] || 0;
-  const read = (async () => {
+  // Declared before the async body runs, so a fetcher that threw
+  // synchronously could not hit the finally below before `read` exists.
+  let read;
+  read = (async () => {
     try {
       const value = await fetcher();
       if ((_generation[key] || 0) === startedAt) _cache[key] = { value, at: Date.now() };
@@ -1603,11 +1612,18 @@ export const Db = {
   // Read is open to anyone with the tab; write is re-checked at the database
   // (see the equipment write policy) since Admin/Coordinator-only is a real
   // permission boundary, not just a hidden button.
+  // Every piece there is — paged, since this was the one all-of-them read
+  // left that PostgREST would have capped at 1,000 without a word.
   async listEquipment() {
     return OfflineCache.readThrough("equipment.all", async () => {
-    const { data, error } = await sbClient
-      .from("equipment").select("*, profiles(name)").order("type").order("serial_number");
-    if (error) throw error;
+    const data = await fetchAllPages(async (page, size) => {
+      const { data: rows, error, count } = await sbClient
+        .from("equipment").select("*, profiles(name)", page === 0 ? { count: "exact" } : {})
+        .order("type").order("serial_number").order("id")
+        .range(page * size, page * size + size - 1);
+      if (error) throw error;
+      return { rows: rows || [], total: count ?? (rows || []).length };
+    });
     return data.map(e => ({
       id: e.id, type: e.type, serial: e.serial_number,
       calibrationDue: e.calibration_due, assignedTo: e.assigned_to,
@@ -1725,11 +1741,32 @@ export const Db = {
   // Both buckets are private: a stored object has no public URL, so viewing a
   // PDF means minting a signed one at click time. 10 minutes is plenty to open
   // it and short enough that a copied link dies quickly.
-  async signedUrl(bucket, pdfKey) {
+  //
+  // chat-media links are remembered in memory for most of their life: a
+  // room of photos signed one link per picture on mount, and a pinned one
+  // twice (the strip and the row). Never through OfflineCache — a
+  // ten-minute link written to the device would be handed out dead — and
+  // only for that bucket, whose objects are never rewritten in place. A
+  // caller whose link failed to load passes `fresh` to mint past the memo.
+  async signedUrl(bucket, pdfKey, { fresh = false } = {}) {
     if (!pdfKey) return null;
-    const { data, error } = await sbClient.storage.from(bucket).createSignedUrl(pdfKey, 60 * 10);
-    if (error) throw error;
-    return data.signedUrl;
+    const mint = async () => {
+      const { data, error } = await sbClient.storage.from(bucket).createSignedUrl(pdfKey, SIGNED_URL_LIFE_S);
+      if (error) throw error;
+      return data.signedUrl;
+    };
+    if (bucket !== "chat-media") return mint();
+    const held = _chatMediaUrls.get(pdfKey);
+    if (held && !fresh) {
+      if (held.url && Date.now() - held.at < SIGNED_URL_REUSE_MS) return held.url;
+      if (held.pending) return held.pending;
+    }
+    const pending = mint().then(
+      url => { _chatMediaUrls.set(pdfKey, { url, at: Date.now() }); return url; },
+      e => { if (_chatMediaUrls.get(pdfKey)?.pending === pending) _chatMediaUrls.delete(pdfKey); throw e; }
+    );
+    _chatMediaUrls.set(pdfKey, { pending });
+    return pending;
   },
 
   // ── Email (Postmark, via Supabase Edge Functions) ────────────────────
@@ -2891,6 +2928,13 @@ export const Db = {
     // needs the other's answer, so they go out together; they are awaited
     // in the old order so the job's refusal still wins over the key's.
     const keyLookup = startKeyLookup("tickets", "id, total", clientKey);
+    // The first mint goes out beside them too: next_ticket_number is a pure
+    // read (max + 1 over the tickets and the burned numbers, nothing
+    // reserved), so a mint the open check then refuses burns nothing. It is
+    // consumed on the first attempt only; a collision mints fresh. Resolved
+    // with its error rather than rejected, so a refusal thrown while it is
+    // still in flight leaves nothing unhandled.
+    let firstMint = this.nextTicketNumber(initials, workDate).then(v => ({ v }), e => ({ e }));
     await this.assertJobOpen(jobDbId);
     lines = lines.map(cleanLine);
     const total = totalOf(lines);
@@ -2906,7 +2950,14 @@ export const Db = {
 
     let id = null;
     for (let attempt = 0; ; attempt++) {
-      id = await this.nextTicketNumber(initials, workDate);
+      if (firstMint) {
+        const minted = await firstMint;
+        firstMint = null;
+        if (minted.e) throw minted.e;
+        id = minted.v;
+      } else {
+        id = await this.nextTicketNumber(initials, workDate);
+      }
       // Inserted at zero, not at the total these lines are about to add up
       // to. The row and its lines are two separate requests and therefore two
       // separate transactions, so for the length of the first one the ticket
@@ -3004,8 +3055,13 @@ export const Db = {
     }
     // Cascade has taken the crew and lines with the row; these are the
     // belt-and-braces sweep and expect to find nothing.
-    await sbClient.from("ticket_crew").delete().eq("ticket_id", ticketId).then(() => {}, () => {});
-    await sbClient.from("ticket_lines").delete().eq("ticket_id", ticketId).then(() => {}, () => {});
+    // Together: neither can fail loudly or affect the other, and Open
+    // tickets cancels drafts one after another, so these sat on that path
+    // twice per ticket.
+    await Promise.all([
+      sbClient.from("ticket_crew").delete().eq("ticket_id", ticketId).then(() => {}, () => {}),
+      sbClient.from("ticket_lines").delete().eq("ticket_id", ticketId).then(() => {}, () => {})
+    ]);
     await forgetTicketWip(ticketId);
   },
 
