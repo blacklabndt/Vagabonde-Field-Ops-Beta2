@@ -1053,10 +1053,12 @@ async function stepJobTables(
 async function putJobs(
   db: SupabaseClient, c: JobRestoreCursor, rows: Record<string, unknown>[], refs: JobRefs
 ): Promise<number> {
-  const decided = jobsToRestore(rows, {
-    ids: await liveValues(db, "jobs", "id", rows.map(r => String(r.id ?? ""))),
-    numbers: await liveValues(db, "jobs", "job_number", rows.map(r => String(r.job_number ?? "")))
-  });
+  // Two independent lookups, together.
+  const [ids, numbers] = await Promise.all([
+    liveValues(db, "jobs", "id", rows.map(r => String(r.id ?? ""))),
+    liveValues(db, "jobs", "job_number", rows.map(r => String(r.job_number ?? "")))
+  ]);
+  const decided = jobsToRestore(rows, { ids, numbers });
   for (const note of decided.skipped) addRestoreNote(c.skipped, note);
   for (const note of decided.collisions) addRestoreNote(c.collisions, note);
   // A job that is already here is a parent the children still follow. It is
@@ -1136,19 +1138,22 @@ async function putJobChildren(
   db: SupabaseClient, c: JobRestoreCursor, table: string, rows: Record<string, unknown>[]
 ): Promise<number> {
   const key = "id";
-  const live = await liveValues(db, table, key, rows.map(r => String(r[key] ?? "")));
+  const ids = rows.map(r => String(r[key] ?? ""));
 
   let ready: Record<string, unknown>[];
   if (table === "tickets") {
-    // A number deliberately retired is not free either.
-    const burned = await liveValues(db, "burned_ticket_numbers", "id", rows.map(r => String(r.id ?? "")));
-    // Which job each live ticket of that number is on. A ticket already here
+    // Three independent lookups over the same ids, together. A number
+    // deliberately retired is not free either; and which job each live
+    // ticket of that number is on matters, because a ticket already here
     // under the job it came back under is that same ticket — the second
     // press of the button — and saying "collision" about twenty of those
     // would read as twenty invoices in danger.
-    const decided = ticketsToRestore(rows, {
-      ids: live, burned, jobOf: await liveTicketJobs(db, rows.map(r => String(r.id ?? "")))
-    });
+    const [live, burned, jobOf] = await Promise.all([
+      liveValues(db, table, key, ids),
+      liveValues(db, "burned_ticket_numbers", "id", ids),
+      liveTicketJobs(db, ids)
+    ]);
+    const decided = ticketsToRestore(rows, { ids: live, burned, jobOf });
     for (const note of decided.skipped) addRestoreNote(c.skipped, note);
     for (const note of decided.collisions) addRestoreNote(c.collisions, note);
     const techs = await liveValues(db, "profiles", "id",
@@ -1160,6 +1165,7 @@ async function putJobChildren(
     // ticket in the backup.
     ready = ticketsForLoad(blankUnknown(decided.rows, "technician_id", techs));
   } else {
+    const live = await liveValues(db, table, key, ids);
     const decided = childRowsToRestore(table, rows, live);
     for (const note of decided.skipped) addRestoreNote(c.skipped, note);
     ready = decided.rows;
@@ -1173,10 +1179,11 @@ async function putJobChildren(
       ready = crew.rows;
     }
     if (table === "jhas") {
-      ready = blankUnknown(ready, "signed_by", await liveValues(db, "profiles", "id",
-        ready.map(r => String(r.signed_by ?? ""))));
-      ready = blankUnknown(ready, "closed_by", await liveValues(db, "profiles", "id",
-        ready.map(r => String(r.closed_by ?? ""))));
+      // One lookup over both columns' people, used for each.
+      const people = await liveValues(db, "profiles", "id",
+        ready.flatMap(r => [String(r.signed_by ?? ""), String(r.closed_by ?? "")]));
+      ready = blankUnknown(ready, "signed_by", people);
+      ready = blankUnknown(ready, "closed_by", people);
     }
   }
 
@@ -1278,13 +1285,25 @@ async function readJobRefs(
     return { ids, byName };
   };
 
+  // Six reads — three tables out of the backup, three walked live — that
+  // depend on nothing but the drive and the database, started together.
+  // They used to run one after another, every slice, inside the same
+  // hundred-second budget the load itself has to fit in.
+  const [backupContactRows, liveContactRows, clientRows, contractorRows, liveClients, liveContractors] =
+    await Promise.all([
+      readTable(drive, allParts, "contacts"),
+      readEveryRow(db, "contacts", "id, name, org_id"),
+      readTable(drive, allParts, "clients"),
+      readTable(drive, allParts, "contractors"),
+      liveOrgs("clients"),
+      liveOrgs("contractors")
+    ]);
   const backupContacts = new Map<string, { name: string; org_id: string }>();
-  for (const r of await readTable(drive, allParts, "contacts")) {
+  for (const r of backupContactRows) {
     backupContacts.set(String(r.id ?? ""), {
       name: String(r.name ?? ""), org_id: String(r.org_id ?? "")
     });
   }
-  const liveContactRows = await readEveryRow(db, "contacts", "id, name, org_id");
   const contactIds = new Set<string>();
   const byOrgAndName = new Map<string, string>();
   for (const r of liveContactRows) {
@@ -1293,11 +1312,11 @@ async function readJobRefs(
   }
 
   return {
-    clientNames: namesFrom(await readTable(drive, allParts, "clients")),
-    contractorNames: namesFrom(await readTable(drive, allParts, "contractors")),
+    clientNames: namesFrom(clientRows),
+    contractorNames: namesFrom(contractorRows),
     contacts: backupContacts,
-    liveClients: await liveOrgs("clients"),
-    liveContractors: await liveOrgs("contractors"),
+    liveClients,
+    liveContractors,
     liveContacts: { ids: contactIds, byOrgAndName }
   };
 }

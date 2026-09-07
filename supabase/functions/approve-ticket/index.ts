@@ -31,7 +31,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { esc, sendMail, appSettings, wrapEmail } from "../_shared/mail.ts";
 import { renderInvoice, invoiceCss, invoiceTotals, moneyCents, edmontonStamp, gstPercentOf } from "../_shared/invoice.ts";
 import type { InvoiceData } from "../_shared/invoice.ts";
-import { loadInvoice, TICKET_INVOICE_SELECT } from "../_shared/ticketInvoice.ts";
+import { loadInvoice } from "../_shared/ticketInvoice.ts";
 import { hashToken, invoiceFingerprint } from "../_shared/approvalToken.ts";
 
 // A signature is a typed name and, optionally, a small PNG. Anything bigger
@@ -165,14 +165,16 @@ async function officeRecipients(admin: any, row: any) {
     to = data?.user?.email ?? "";
   }
   const office = settings.replyTo && settings.replyTo !== to ? settings.replyTo : "";
-  return { to, office };
+  // The settings go back with the addresses so the send does not read them
+  // a second time.
+  return { to, office, settings };
 }
 
 // The rep pressed "Query this ticket": the same people who hear about an
 // approval hear what was asked, with the way forward spelled out.
 // deno-lint-ignore no-explicit-any
 async function notifyQuery(admin: any, row: any, who: string, text: string) {
-  const { to, office } = await officeRecipients(admin, row);
+  const { to, office, settings } = await officeRecipients(admin, row);
   if (!to && !office) return;
   const job = row?.jobs ?? {};
   const lines = [
@@ -182,6 +184,7 @@ async function notifyQuery(admin: any, row: any, who: string, text: string) {
     "The ticket shows as Queried in the billing tracker. Put right what needs it and email it for approval again — a resend clears the query and sends a fresh link — or reply to the rep directly."
   ].filter(Boolean);
   await sendMail({
+    settings,
     from: "billing",
     to: to || office,
     cc: to && office ? office : undefined,
@@ -194,7 +197,7 @@ async function notifyQuery(admin: any, row: any, who: string, text: string) {
 
 // deno-lint-ignore no-explicit-any
 async function notifyApproval(admin: any, row: any, d: InvoiceData, signer: string, approvedAt: string) {
-  const { to, office } = await officeRecipients(admin, row);
+  const { to, office, settings } = await officeRecipients(admin, row);
   if (!to && !office) return;
   const job = row?.jobs ?? {};
   const totals = invoiceTotals(d);
@@ -207,6 +210,7 @@ async function notifyApproval(admin: any, row: any, d: InvoiceData, signer: stri
     "It is locked now and sits under Approved in the billing tracker, ready to invoice."
   ].filter(Boolean);
   await sendMail({
+    settings,
     from: "billing",
     to: to || office,
     cc: to && office ? office : undefined,
@@ -243,7 +247,10 @@ async function handle(req: Request): Promise<Response> {
     // queried_at is deliberately NOT read here any more: the mail gate below
     // is a conditional update, and a copy of that timestamp taken at the top
     // of the request is the stale read the gate was once decided from.
-    .select(TICKET_INVOICE_SELECT + ", approval_expires_at, approval_sent_by")
+    // Only what the token check and the office notices read: the bill —
+    // lines, job and client — is loadInvoice's read below, and taking it
+    // here as well pulled every line of the ticket twice per page load.
+    .select("id, status, approved_at, approval_expires_at, approval_sent_by, jobs(job_number, project, clients(name))")
     .eq("approval_token", await hashToken(token)).maybeSingle();
   // deno-lint-ignore no-explicit-any
   const ticket = row as any;

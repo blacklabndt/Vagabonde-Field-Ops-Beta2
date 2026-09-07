@@ -92,7 +92,11 @@ Deno.serve(async (req) => {
     // 20260903010110) — mailed a client a $0.00 summary beside an attachment
     // showing the real bill. Sending the authority check still belongs to the
     // caller above; only the numbers come from here.
-    const { data: invoiceData, error: invErr } = await loadInvoice(admin, ticketId, toList);
+    // One settings read for the whole send: the invoice's terms, the app
+    // address the link is built on, and the mail transport. It throws on a
+    // read error the way sendMail's own would have.
+    const settings = await appSettings();
+    const { data: invoiceData, error: invErr } = await loadInvoice(admin, ticketId, toList, settings.invoice);
     if (invErr || !invoiceData) throw new Error(invErr ?? "Ticket not found");
     const lines = invoiceData.lines ?? [];
 
@@ -127,7 +131,7 @@ Deno.serve(async (req) => {
     // domain, where the page arrives as source code; a rep handed that
     // cannot sign, and the ticket would still sit as "Awaiting approval".
     // Refuse instead, and say what to set.
-    const appBase = ((await appSettings()).approvalBaseUrl ?? "").replace(/\/+$/, "");
+    const appBase = (settings.approvalBaseUrl ?? "").replace(/\/+$/, "");
     if (!appBase) {
       throw new Error("The app address isn't set, so an approval link can't be built — an Admin can set it on the Admin screen (App address).");
     }
@@ -190,6 +194,7 @@ Deno.serve(async (req) => {
     // Resend being unconfigured makes that the *normal* path, not the rare
     // one. send-report already had this order; now they match.
     await sendMail({
+      settings,
       from: "billing",
       to: toList, cc: ccList,
       subject: `Field invoice ${ticket.id} for approval — ${job.project} (${money(grand)})`,

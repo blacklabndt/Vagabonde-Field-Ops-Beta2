@@ -58,8 +58,6 @@ export const SLICE_ALIVE_MS = 3 * 60_000;
 export const RETRIES = 3;
 export const BACKOFF_MS = [1_000, 4_000, 10_000];
 
-export const PHASES = ["tables", "files", "manifest", "retention", "done"];
-
 export function newRunCursor(startedAt: string): RunCursor {
   return {
     phase: "tables",

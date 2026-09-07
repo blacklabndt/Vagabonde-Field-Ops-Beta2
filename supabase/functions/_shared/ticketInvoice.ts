@@ -71,7 +71,10 @@ export async function invoiceSettings(): Promise<InvoiceSettings> {
 export async function loadInvoice(
   client: Client,
   ticketId: string,
-  fallbackContact = ""
+  fallbackContact = "",
+  // The invoice settings when the caller has read the row already (mail.ts's
+  // appSettings carries them); otherwise read here, best-effort.
+  settingsGiven: InvoiceSettings | null = null
 ): Promise<{ data: InvoiceData | null; error: string | null }> {
   const { data: ticket, error } = await client
     .from("tickets")
@@ -94,7 +97,7 @@ export async function loadInvoice(
   // Read here rather than in each of the three callers, for the same reason
   // the column list is: three hand-written copies is how the emailed bill
   // ends up carrying terms the page it links to does not.
-  const settings = await invoiceSettings();
+  const settings = settingsGiven ?? await invoiceSettings();
 
   return {
     error: null,

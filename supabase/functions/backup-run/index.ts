@@ -38,10 +38,13 @@ import {
 } from "../_shared/backupManifest.ts";
 import type { DriveClient } from "../_shared/drive.ts";
 import {
-  adminClient, backupDoor, connectDrive, corsHeaders, ensureFolder,
+  adminClient, backupDoor, connectDrive, corsHeaders, ensureFolder, ensureFolders, mapLimit,
   internalSecret, json, kick, logError, readManifest
 } from "../_shared/backupCommon.ts";
 import type { Connection } from "../_shared/backupCommon.ts";
+
+// How many backup folders listBackups reads the manifests of at once.
+const MANIFEST_READS = 4;
 import {
   BUDGET_MS, RETRIES, afterFilesPage, afterTablePart, countsOf, foldIntoIndex,
   forgetIndex, newRunCursor, nextPhaseAfterManifest, outOfBudget, pausePage,
@@ -425,10 +428,9 @@ async function advance(db: SupabaseClient, run: Run, secret: string): Promise<Re
     cursor = reviveCursor(current.cursor, String(current.started_at ?? new Date().toISOString()));
 
     const folderId = await ensureRunFolder(db, conn, current);
-    const tablesFolder = await withRetry("Opening the tables folder",
-      () => ensureFolder(conn.drive, folderId, TABLES_FOLDER));
-    const filesFolder = await withRetry("Opening the files folder",
-      () => ensureFolder(conn.drive, folderId, FILES_FOLDER));
+    // One listing of the run's folder for both children.
+    const [tablesFolder, filesFolder] = await withRetry("Opening the backup's folders",
+      () => ensureFolders(conn.drive, folderId, [TABLES_FOLDER, FILES_FOLDER]));
 
     let units = 0;
     while (!outOfBudget(deadline, Date.now()) && cursor.phase !== "done") {
@@ -691,8 +693,10 @@ async function stepRetention(
 async function listBackups(db: SupabaseClient): Promise<Record<string, unknown>[]> {
   const conn = await connectDrive(db);
   const folders = await conn.drive.listFolders(conn.rootFolderId);
-  const out: Record<string, unknown>[] = [];
-  for (const folder of folders) {
+  // Each folder's manifest is two provider calls; read a few folders at a
+  // time rather than one after another, with an Admin waiting on the panel.
+  // The sort below fixes the order whatever order the answers came in.
+  const out = await mapLimit(folders, MANIFEST_READS, async folder => {
     const entry: Record<string, unknown> = { folderId: folder.id, name: folder.name };
     try {
       const m = await readManifest(conn.drive, folder.id);
@@ -711,8 +715,8 @@ async function listBackups(db: SupabaseClient): Promise<Record<string, unknown>[
       entry.incomplete = true;
       entry.error = (e as Error).message;
     }
-    out.push(entry);
-  }
+    return entry;
+  });
   // Newest first: the stamp sorts into date order, so this is a reverse sort.
   return out.sort((a, b) => String(b.name).localeCompare(String(a.name)));
 }

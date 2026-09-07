@@ -27,7 +27,7 @@
 // and a request without it is not the database.
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { sendMail, corsHeaders, wrapEmail, esc } from "../_shared/mail.ts";
+import { sendMail, appSettings, corsHeaders, wrapEmail, esc } from "../_shared/mail.ts";
 
 const SUBJECT = "VagaboNDE Field Ops — needs attention";
 
@@ -156,26 +156,31 @@ Deno.serve(async (req) => {
     // Admin profile, which the service role does not have — so the same
     // three facts are read from the columns directly. The refresh token is
     // read for its existence alone and never leaves this isolate.
-    const { data: s, error: sErr } = await admin.from("app_settings")
-      .select("backup_refresh_token, backup_connection_error, backup_next_run_at")
-      .maybeSingle();
+    // Three independent reads, started together. The most recently finished
+    // run, backup or restore, is ordered by finished_at with nulls last: a
+    // run in either of these two states has one, and a row that somehow does
+    // not must not sort above the run that actually finished last. Only the
+    // function names are read off the errors — the window is the filter.
+    const [
+      { data: s, error: sErr },
+      { data: runs, error: rErr },
+      { data: errorRows, error: eErr }
+    ] = await Promise.all([
+      admin.from("app_settings")
+        .select("backup_refresh_token, backup_connection_error, backup_next_run_at")
+        .maybeSingle(),
+      admin.from("backup_runs")
+        .select("kind, status, error, started_at, finished_at")
+        .in("status", ["complete", "failed"])
+        .order("finished_at", { ascending: false, nullsFirst: false })
+        .limit(1),
+      admin.from("function_errors")
+        .select("function_name")
+        .gte("created_at", new Date(now - ERRORS_WINDOW_MS).toISOString())
+        .limit(ERROR_SCAN)
+    ]);
     if (sErr) throw sErr;
-
-    // The most recently finished run, backup or restore. Ordered by
-    // finished_at with nulls last: a run in either of these two states has
-    // one, and a row that somehow does not must not sort above the run that
-    // actually finished last.
-    const { data: runs, error: rErr } = await admin.from("backup_runs")
-      .select("kind, status, error, started_at, finished_at")
-      .in("status", ["complete", "failed"])
-      .order("finished_at", { ascending: false, nullsFirst: false })
-      .limit(1);
     if (rErr) throw rErr;
-
-    const { data: errorRows, error: eErr } = await admin.from("function_errors")
-      .select("function_name, created_at")
-      .gte("created_at", new Date(now - ERRORS_WINDOW_MS).toISOString())
-      .limit(ERROR_SCAN);
     if (eErr) throw eErr;
 
     const items = attentionItems({
@@ -216,9 +221,12 @@ ${items.map(i => `
     // each is tried on its own and the refusals are named in the answer.
     let sent = 0;
     const refused: string[] = [];
+    // One settings read for every copy, not one per Admin.
+    const settings = await appSettings();
     for (const address of to) {
       try {
         await sendMail({
+          settings,
           from: "reports",
           to: address,
           subject: SUBJECT,

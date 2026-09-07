@@ -21,7 +21,11 @@ const TEST_SENDER = "VagaboNDE Field Ops <onboarding@resend.dev>";
 // with the service role — the table is Admin-only under RLS.
 export async function appSettings() {
   const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-  const { data, error } = await admin.from("app_settings").select("resend_api_key, from_reports, from_billing, reply_to, klipy_api_key, approval_base_url").maybeSingle();
+  // The invoice's three settings ride on the same read, so a function that
+  // sends a bill reads the row once and hands the answer to loadInvoice and
+  // sendMail alike (send-ticket-approval read it three times per email,
+  // and the bulk chase sends thousands).
+  const { data, error } = await admin.from("app_settings").select("resend_api_key, from_reports, from_billing, reply_to, klipy_api_key, approval_base_url, invoice_terms, invoice_remit_to, business_number").maybeSingle();
   // supabase-js reports failures in `error`, not by throwing. A transient
   // read error must surface, not silently demote a configured install to
   // the env fallbacks or the test sender — that sent mail under rotated
@@ -35,9 +39,16 @@ export async function appSettings() {
     fromBilling: row.from_billing || Deno.env.get("MAIL_FROM_BILLING") || TEST_SENDER,
     replyTo: row.reply_to || Deno.env.get("MAIL_REPLY_TO") || undefined,
     klipyApiKey: row.klipy_api_key || Deno.env.get("KLIPY_API_KEY") || "",
-    approvalBaseUrl: row.approval_base_url || Deno.env.get("APPROVAL_BASE_URL") || ""
+    approvalBaseUrl: row.approval_base_url || Deno.env.get("APPROVAL_BASE_URL") || "",
+    // The same three loadInvoice reads for itself when nobody hands them in.
+    invoice: {
+      terms: row.invoice_terms ?? null,
+      remitTo: row.invoice_remit_to ?? null,
+      businessNumber: row.business_number ?? null
+    }
   };
 }
+export type AppSettings = Awaited<ReturnType<typeof appSettings>>;
 
 // Resend's own ceiling is 40 MB per message after encoding, but a 7 MB raw
 // PDF is deliberately still the cap: base64 inflates it by ~33%, corporate
@@ -65,8 +76,11 @@ export async function sendMail(opts: {
   replyTo?: string;
   attachments?: Attachment[];
   tag?: string;
+  // A settings row the caller has already read this request. Never held
+  // across requests: a warm isolate would send under a rotated key.
+  settings?: AppSettings;
 }) {
-  const settings = await appSettings();
+  const settings = opts.settings ?? await appSettings();
   if (!settings.apiKey) {
     throw new Error("Email isn't set up yet — an Admin can add the Resend API key on the Admin screen.");
   }

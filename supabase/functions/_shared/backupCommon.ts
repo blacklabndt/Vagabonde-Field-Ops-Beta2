@@ -172,6 +172,7 @@ async function refreshWithRetry(
 export async function connectDrive(db: SupabaseClient): Promise<Connection> {
   const { data, error } = await db.from("app_settings").select(
     "backup_provider, backup_refresh_token, backup_account, backup_root_folder_id, backup_keep, " +
+    "backup_connection_error, " +
     "backup_client_id_google, backup_client_secret_google, backup_client_id_microsoft, " +
     "backup_client_secret_microsoft, backup_client_id_dropbox, backup_client_secret_dropbox"
   ).maybeSingle();
@@ -194,8 +195,13 @@ export async function connectDrive(db: SupabaseClient): Promise<Connection> {
     await db.from("app_settings").update({ backup_connection_error: why }).eq("id", true);
     throw new Error(`The drive connection needs renewing: ${why}`);
   }
-  // A refresh that worked clears a stale complaint.
-  await db.from("app_settings").update({ backup_connection_error: null }).eq("id", true);
+  // A refresh that worked clears a stale complaint — when there is one.
+  // This runs at the top of every slice, and an unconditional write here
+  // was one UPDATE of the settings row every hundred seconds for the length
+  // of a backup, for a column that was already null.
+  if (row.backup_connection_error) {
+    await db.from("app_settings").update({ backup_connection_error: null }).eq("id", true);
+  }
 
   const drive = makeDrive(provider, token);
   let rootFolderId = String(row.backup_root_folder_id ?? "");
@@ -216,6 +222,36 @@ export async function connectDrive(db: SupabaseClient): Promise<Connection> {
 export async function ensureFolder(drive: DriveClient, parentId: string, name: string): Promise<string> {
   const found = (await drive.listFolders(parentId)).find(f => f.name === name);
   return found ? found.id : await drive.createFolder(parentId, name);
+}
+
+// Several siblings under one parent from a single listing — a slice used to
+// list the run's folder twice, once per child, at its top. Find-then-create
+// in that order, one name at a time, for the same reason as above.
+export async function ensureFolders(drive: DriveClient, parentId: string, names: string[]): Promise<string[]> {
+  const found = await drive.listFolders(parentId);
+  const out: string[] = [];
+  for (const name of names) {
+    const hit = found.find(f => f.name === name);
+    out.push(hit ? hit.id : await drive.createFolder(parentId, name));
+  }
+  return out;
+}
+
+// Run `fn` over `items` a few at a time, answering in the input's order.
+// Kept small: a provider answers a handful of concurrent reads gladly and
+// starts refusing dozens.
+export async function mapLimit<T, R>(items: T[], n: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(n, items.length)) }, worker));
+  return out;
 }
 
 // One backup's manifest, read out of its own folder. A folder with none is a

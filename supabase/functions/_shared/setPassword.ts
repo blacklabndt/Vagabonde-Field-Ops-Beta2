@@ -46,6 +46,7 @@ export async function sendSetPasswordLink(admin: any, email: string, name: strin
       ];
 
   await sendMail({
+    settings,
     from: "reports",
     to: email,
     subject,

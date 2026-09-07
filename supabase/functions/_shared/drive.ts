@@ -52,14 +52,6 @@ async function ok(res: Response, what: string): Promise<Response> {
   throw e;
 }
 
-function concat(parts: Uint8Array[]): Uint8Array {
-  let size = 0;
-  for (const p of parts) size += p.byteLength;
-  const out = new Uint8Array(size);
-  let at = 0;
-  for (const p of parts) { out.set(p, at); at += p.byteLength; }
-  return out;
-}
 
 const utf8 = (s: string) => new TextEncoder().encode(s);
 
@@ -255,7 +247,10 @@ export class GoogleDrive implements DriveClient {
 
     if (body.byteLength <= RESUMABLE_BYTES) {
       const boundary = "vgb" + crypto.randomUUID().replace(/-/g, "");
-      const payload = concat([
+      // A Blob over the three parts, not a concatenation: concat copied the
+      // whole file into a fresh buffer — a third copy of it in memory, in a
+      // function that also holds a table's worth of rows.
+      const payload = new Blob([
         utf8(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name, parents: [folderId] })}\r\n--${boundary}\r\nContent-Type: ${contentType}\r\n\r\n`),
         body,
         utf8(`\r\n--${boundary}--\r\n`)
