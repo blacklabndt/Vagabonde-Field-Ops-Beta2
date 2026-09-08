@@ -59,6 +59,12 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
   // rather than printing "$0.00" against every ticket.
   const priced = seesPrices(currentUser);
   const [filter, setFilter] = useState("All");
+  // The tick column and the Mark invoiced button it feeds are one thing,
+  // and an Admin's alone: mark_tickets_invoiced raises 42501 for every
+  // other role, and a Coordinator holds this tab. Header, cells, the empty
+  // row's colSpan and the button all take this one test, or the table
+  // loses a column.
+  const picking = filter === "Approved" && currentUser.role === "Admin";
   // Search and a work-date window, sent to the server with the status — the
   // tracker holds every ticket ever raised, and finding one by client or
   // job used to mean paging.
@@ -656,10 +662,7 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
         {(q || from || to) && (
           <Btn variant="ghost" style={{ minHeight: 36 }} onClick={() => { setQ(""); setFrom(""); setTo(""); }}>Clear</Btn>
         )}
-        {/* Invoicing is an Admin's alone: mark_tickets_invoiced raises 42501
-            for anyone else, and a Coordinator holds this tab. The button is
-            the courtesy, the RPC the gate. */}
-        {filter === "Approved" && currentUser.role === "Admin" && (
+        {picking && (
           <Btn variant="primary" style={{ minHeight: 36, marginLeft: "auto" }} disabled={marking || !pickedIds.length}
             onClick={() => setInvoiced(pickedIds, true)}
             title="Moves the ticked tickets from Approved to Invoiced.">
@@ -678,7 +681,7 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
         <TableScroll><table className="table table-wide">
           <thead>
             <tr>
-              {filter === "Approved" && (
+              {picking && (
                 <th style={{ width: 34 }}>
                   <input type="checkbox" aria-label="Select every approved ticket on this page"
                     checked={approvedOnPage.length > 0 && approvedOnPage.every(r => picked[r.id])}
@@ -690,7 +693,7 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
           </thead>
           <tbody>
             {!loading && !rows.length && (
-              <tr><td colSpan={filter === "Approved" ? 10 : 9} style={{ color: "color-mix(in srgb, var(--color-text) 55%, transparent)" }}>
+              <tr><td colSpan={picking ? 10 : 9} style={{ color: "color-mix(in srgb, var(--color-text) 55%, transparent)" }}>
                 {(q || from || to) ? "No tickets match that search." : filter === "All" ? "No tickets raised yet." : `No tickets are ${filter.toLowerCase()}.`}
               </td></tr>
             )}
@@ -699,7 +702,7 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
               const flagged = !!t.chasedAt;
               return (
                 <tr key={t.id}>
-                  {filter === "Approved" && (
+                  {picking && (
                     <td>
                       {t.status === "Approved" && (
                         <input type="checkbox" aria-label={`Select ticket ${t.id}`} checked={!!picked[t.id]}
