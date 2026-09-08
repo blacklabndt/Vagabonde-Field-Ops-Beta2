@@ -147,17 +147,28 @@ for (const file of walk(root).filter(f => /\.(jsx?|mjs)$/.test(f))) {
 // returns a second time. Read per top-level component: the first
 // `  if (…) return` at two-space indent marks the returns, and any hook
 // call after it in the same function is reported.
-const HOOK_CALL = /^  (?:const |let )?.*\buse(?:State|Effect|Ref|Memo|Callback|LayoutEffect|Id|Reducer|Context|RowsPerPage|MissingFields|ScreenFoot|Debounced|ModalPanel|LabelFirstControl)\(/;
+// Any `useSomething(` at one indent. A named list approved the hook nobody
+// had added to it yet — React's own useTransition and useSyncExternalStore
+// were never in it, and neither is the next custom hook anyone writes.
+const HOOK_CALL = /^  (?:const |let )?.*\buse[A-Z]\w*\s*\(/;
 for (const file of walk(root).filter(f => /\.jsx$/.test(f))) {
   const lines = fs.readFileSync(file, "utf8").split(/\r?\n/);
   let fn = null, firstReturn = null;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-    const m = l.match(/^(?:export )?function ([A-Z]\w*)\(/);
+    // A component is not always a bare `function Foo(`: memo and forwardRef
+    // wrap one, and ChatRow and Blueprint are both declared that way.
+    const m = l.match(/^(?:export )?function ([A-Z]\w*)\(/)
+      || l.match(/^(?:export )?const [A-Z]\w* = (?:React\.)?(?:memo|forwardRef)\(function ([A-Z]\w*)\(/);
     if (m) { fn = m[1]; firstReturn = null; continue; }
     if (!fn) continue;
     if (/^}/.test(l)) { fn = null; continue; }
-    if (firstReturn === null && /^  if \(.*\) (?:return\b|\{[^}]*\breturn\b)/.test(l)) firstReturn = i + 1;
+    // Both shapes of early return: the whole thing on one line, and a brace
+    // opened here whose `return` is on the next line. App's own
+    // `if (checkingSession) {` is the second, and it was invisible.
+    if (firstReturn === null
+      && (/^  if \(.*\) (?:return\b|\{[^}]*\breturn\b)/.test(l)
+        || (/^  if \(.*\) \{\s*$/.test(l) && /^\s*return\b/.test(lines[i + 1] || "")))) firstReturn = i + 1;
     if (firstReturn !== null && HOOK_CALL.test(l)) {
       report(file, `line ${i + 1}: a hook in ${fn} sits below the early return at line ${firstReturn}`);
     }

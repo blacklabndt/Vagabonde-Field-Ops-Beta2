@@ -942,6 +942,11 @@ test("the shared modules read nothing from the world around them", () => {
     assert.ok(!/Deno\.env|process\.env/.test(src), `${f} must not read the environment`);
     // Erasable TypeScript only: an enum or a namespace does not strip.
     assert.ok(!/^\s*(?:export\s+)?(?:const\s+)?enum\s/m.test(src), `${f} must not declare an enum`);
+    // Nor does a constructor parameter property: `constructor(private token:
+    // string)` strips to a constructor that never assigns, and drive.ts's
+    // three clients all take their token that way.
+    assert.ok(!/constructor\s*\([^)]*\b(?:public|private|protected|readonly)\s/.test(src),
+      `${f} must not use a constructor parameter property`);
     // No literal control character may reach a source file (git would call
     // it binary); dropboxArg's high range is written as escapes.
     assert.ok(!/[\x00-\x08\x0e-\x1f\x7f]/.test(src), `${f} must hold no control characters`);

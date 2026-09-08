@@ -213,7 +213,13 @@ test("a refresh of the backup state does not rewrite the schedule boxes", () => 
   const load = /const load = useCallback\(\(([^)]*)\) => \{([\s\S]*?)\n  \}, \[\]\);/.exec(src);
   assert.ok(load, "load() should still be a useCallback with no dependencies");
   assert.match(load[1], /seed/, "load() takes a flag saying whether to refill the form");
-  assert.match(load[2], /if \(seed\) \{[\s\S]*setForm\(/, "the only setForm in load() is behind that flag");
+  // Every setForm in load() has to be inside the seed block, not merely one
+  // of them: an unconditional one above it would rewrite the boxes again.
+  const seedBlock = /if \(seed\) \{([\s\S]*?)\n {8}\}/.exec(load[2]);
+  assert.ok(seedBlock, "load() must still guard its form fill with the seed flag");
+  assert.equal((load[2].match(/setForm\(/g) || []).length,
+    (seedBlock[1].match(/setForm\(/g) || []).length,
+    "every setForm in load() must sit inside the seed block");
   // Exactly two callers seed: the mount effect and the save.
   assert.equal((src.match(/load\(true\)/g) || []).length, 2);
 });

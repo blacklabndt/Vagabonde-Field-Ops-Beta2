@@ -14,7 +14,10 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
 - Test: `npm --prefix vite-app test` (render-name scan + node --test). The
   scan also refuses a hook below a component's first early return — the
   mistake that crashed the ticket screen and, once, the lapsed-session
-  sign-out; `appShape.test.mjs` pins App.jsx's own ordering.
+  sign-out; `appShape.test.mjs` pins App.jsx's own ordering. Both count
+  any `useSomething(` (a named list once approved the hook nobody had added
+  to it), the scan sees the brace-and-newline return shape and components
+  wrapped in memo or forwardRef, which it did not until 8 Sept.
 - Build: `npm --prefix vite-app run build`
 - Deploy: `npm run build && npx wrangler deploy` (from repo root)
 - Dev server: use the `.claude/launch.json` `beta2-dev` config, not Bash

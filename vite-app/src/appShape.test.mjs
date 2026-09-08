@@ -21,6 +21,8 @@ test("every early return in App comes after the last hook call", () => {
   const firstReturn = src.search(/\n  if \(checkingSession\)/);
   assert.ok(firstReturn > 0, "the checkingSession early return should exist");
   const body = src.slice(firstReturn);
-  const stray = body.match(/\n  (const |let )?[^\n]*\buse(State|Effect|Ref|Memo|Callback|LayoutEffect|Id)\(/);
+  // Any `useSomething(`, not a list: App calls useModalPanel, which a named
+  // list did not hold, and the next custom hook would not be in it either.
+  const stray = body.match(/\n  (const |let )?[^\n]*\buse[A-Z]\w*\s*\(/);
   assert.equal(stray, null, `a hook sits below the first early return: ${stray && stray[0].trim()}`);
 });
