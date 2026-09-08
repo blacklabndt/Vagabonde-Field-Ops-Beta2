@@ -424,11 +424,9 @@ tbody tr.clickable { cursor: pointer; }
 }
 .drawer > button:not(.active):hover { background: color-mix(in srgb, var(--color-text) 6%, transparent); }
 .drawer > button:active { background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
-/* Wraps rather than squeezes: the row carries a button and two labelled
-   switches now, which is wider than a phone's drawer. */
 .drawer-foot {
   flex: none; padding: 14px 18px 0;
-  display: flex; align-items: center; flex-wrap: wrap; gap: 12px; row-gap: 10px; font-size: 13px;
+  display: flex; align-items: center; gap: 12px; font-size: 13px;
 }
 /* Only the first footer block pushes to the bottom; the theme row sits under
    it rather than fighting it for the same auto margin. */

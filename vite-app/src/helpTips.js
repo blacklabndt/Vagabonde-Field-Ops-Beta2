@@ -1,8 +1,9 @@
 // The screen tips. The first time an account opens a screen on this device
 // it gets one popup saying what that screen is for — the words in help.js —
 // with "Ok" to close it and "No more tips" to stop them on every screen at
-// once. There is no clock: a screen already introduced stays quiet, and a
-// screen nobody has opened yet still has its introduction waiting.
+// once, for good. There is no clock: a screen already introduced stays
+// quiet, and a screen nobody has opened yet still has its introduction
+// waiting.
 //
 // Two kinds of record, both device preferences in Store (localStorage) and
 // both kept per account: `help.seen.<id>.<screen>` for a screen that has
@@ -48,17 +49,10 @@ export function noteTipSeen(store, userId, screenKey) {
 }
 
 // "No more tips": one press, every screen, this account on this device.
+// There is deliberately no way back — an account that has said it knows the
+// app is not asked again, and a switch offering to start the tips over is
+// one more control in the drawer for something nobody comes back to.
 export function stopTips(store, userId) {
   if (!userId) return;
   store.save(tipsOffKey(userId), true);
-}
-
-// The drawer's way back. Turning tips on again forgets which screens have
-// been introduced, because by the time anybody reaches for that switch they
-// have opened most of the screens once and the switch would otherwise do
-// nothing they can see. `screenKeys` is the list to forget — TABS' keys.
-export function startTips(store, userId, screenKeys) {
-  if (!userId) return;
-  store.save(tipsOffKey(userId), false);
-  for (const key of screenKeys || []) store.save(tipSeenKey(userId, key), false);
 }

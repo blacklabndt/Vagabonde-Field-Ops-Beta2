@@ -383,9 +383,9 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   stored `true` counts, so a bad record leaves the help where it is.
   App.jsx marks a screen seen as the popup goes UP, not on Ok, so Escape or
   the backdrop does not bring it back; the tip is gated on the screen it was
-  raised for still being the screen underneath. The drawer's "Screen tips"
-  switch is the way back and forgets the screens already seen, because
-  anyone reaching for it has opened most of them once. The
+  raised for still being the screen underneath. "No more tips" is one-way by
+  Kyle's decision — no drawer switch, no way to start them again: an account
+  that says it knows the app is not asked twice. The
   error log pages by keyset (`listFunctionErrors(limit, { before,
   functionName })`, the timestamp double-quoted inside the or()) and filters
   by function name.

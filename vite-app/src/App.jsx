@@ -10,7 +10,7 @@ import { QueueBadge, QueueDialog } from "./components/queuePanel.jsx";
 import { FeatureRequestDialog } from "./components/featureRequest.jsx";
 import { HelpTip } from "./components/helpTip.jsx";
 import { helpFor } from "./help.js";
-import { tipDue, noteTipSeen, stopTips, startTips, tipsAreOff } from "./helpTips.js";
+import { tipDue, noteTipSeen, stopTips } from "./helpTips.js";
 import { OfflineQueue } from "./offlineQueue.js";
 import { ticketFingerprint, replacedNewerWork } from "./ticketFingerprint.js";
 import { overwroteKey } from "./overwriteNote.js";
@@ -328,25 +328,19 @@ export function App() {
   // screen. It is not part of the address: a tip is a thing that happens on
   // the screen you are on, not somewhere a reload should land you.
   const [tipScreen, setTipScreen] = useState(null);
-  // Bumped when the drawer switches tips back on, so the screen underneath
-  // introduces itself again there and then rather than at the next change.
-  const [tipsRestarted, setTipsRestarted] = useState(0);
   // Raised as the popup goes up, not when Ok is pressed: a tip closed with
   // Escape or the backdrop has still been seen, and coming back on the next
   // visit is how a tip turns into a nuisance. The records are per account
   // per screen in Store (helpTips.js), so sign-out does not start the tour
-  // again and the next person on the tablet gets their own.
+  // again and the next person on the tablet gets their own. There is no way
+  // back: "No more tips" is the account saying it knows the app, and it is
+  // meant to be the last word on the subject.
   const userId = currentUser ? currentUser.id : null;
   useEffect(() => {
     if (!userId || !helpFor(screen) || !tipDue(Store, userId, screen)) { setTipScreen(null); return; }
     noteTipSeen(Store, userId, screen);
     setTipScreen(screen);
-  }, [userId, screen, tipsRestarted]);
-  // What the drawer's switch shows. Read from the store rather than assumed,
-  // so the switch tells the truth about an account that turned tips off on
-  // this tablet weeks ago.
-  const [tipsSilenced, setTipsSilenced] = useState(false);
-  useEffect(() => { setTipsSilenced(tipsAreOff(Store, userId)); }, [userId, tipsRestarted]);
+  }, [userId, screen]);
   const [egg, setEgg] = useState(false);
   // Every save in the app arrives here, from db.js by way of the toast bus.
   const [toast, setToast] = useState(null);
@@ -1602,18 +1596,7 @@ export function App() {
                   phone. The tabs are what the account may open; this is
                   for everyone. */}
               <Btn variant="secondary" onClick={() => { setMenuOpen(false); setShowFeature(true); }}>Feature request</Btn>
-              {/* The way back from "No more tips" — and the only one, so it
-                  forgets the screens already introduced as it goes: an
-                  account reaching for this has opened most of them once, and
-                  a switch that turned tips on and then showed none would
-                  read as broken. */}
-              <span style={{ marginLeft: "auto", color: "color-mix(in srgb, var(--color-text) 65%, transparent)" }}>Screen tips</span>
-              <Switch on={!tipsSilenced} label="Screen tips"
-                onClick={() => {
-                  if (tipsSilenced) { startTips(Store, userId, TABS.map(t => t.key)); setTipsSilenced(false); setTipsRestarted(n => n + 1); setMenuOpen(false); }
-                  else { stopTips(Store, userId); setTipsSilenced(true); setTipScreen(null); }
-                }} />
-              <span style={{ color: "color-mix(in srgb, var(--color-text) 65%, transparent)" }}>Animations</span>
+              <span style={{ marginLeft: "auto", color: "color-mix(in srgb, var(--color-text) 65%, transparent)" }}>Animations</span>
               <Switch on={motion === "on"} onClick={() => setMotion(motion === "on" ? "off" : "on")} label="Animations" />
             </div>
             {/* Which build this device is on — name, commit, day — so "is
@@ -1685,7 +1668,7 @@ export function App() {
         <HelpTip
           screenKey={tipScreen}
           onOk={() => setTipScreen(null)}
-          onNoMore={() => { stopTips(Store, userId); setTipsSilenced(true); setTipScreen(null); }}
+          onNoMore={() => { stopTips(Store, userId); setTipScreen(null); }}
         />
       )}
       {updateReady && !updateDeferred && <UpdateBanner onLater={() => setUpdateDeferred(true)} />}

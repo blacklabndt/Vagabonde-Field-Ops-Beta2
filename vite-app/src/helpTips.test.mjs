@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  tipSeenKey, tipsOffKey, tipsAreOff, tipDue, noteTipSeen, stopTips, startTips
+  tipSeenKey, tipsOffKey, tipsAreOff, tipDue, noteTipSeen, stopTips
 } from "./helpTips.js";
 
 function fakeStore() {
@@ -53,16 +53,17 @@ test("a record that is not the word yes leaves the help where it is", () => {
   assert.equal(tipDue(store, "abc", "board"), true);
 });
 
-test("turning tips back on forgets the screens already seen", () => {
+// The switch is one-way on purpose: there is no drawer control to start the
+// tips again, so nothing in this module may quietly offer one.
+test("stopping the tips is the last word on them", () => {
   const store = fakeStore();
-  noteTipSeen(store, "abc", "board");
-  noteTipSeen(store, "abc", "chat");
   stopTips(store, "abc");
-  startTips(store, "abc", ["board", "chat", "ticket"]);
-  assert.equal(tipsAreOff(store, "abc"), false);
-  assert.equal(tipDue(store, "abc", "board"), true);
-  assert.equal(tipDue(store, "abc", "chat"), true);
-  assert.equal(tipDue(store, "abc", "ticket"), true);
+  stopTips(store, "abc");
+  assert.equal(tipsAreOff(store, "abc"), true);
+  assert.equal(tipDue(store, "abc", "board"), false);
+  // A screen visited after the switch went off is not marked seen by the
+  // popup that never appeared, but it stays quiet all the same.
+  assert.equal(tipDue(store, "abc", "equipment"), false);
 });
 
 test("no account means no record and nothing due", () => {
@@ -71,6 +72,5 @@ test("no account means no record and nothing due", () => {
   assert.equal(tipDue(store, "abc", ""), false);
   noteTipSeen(store, null, "board");
   stopTips(store, "");
-  startTips(store, null, ["board"]);
   assert.deepEqual(Object.keys(store.rows), []);
 });
