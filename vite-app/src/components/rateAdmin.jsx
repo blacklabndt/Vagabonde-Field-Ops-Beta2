@@ -46,7 +46,9 @@ export function RateAdminScreen() {
   };
   const loadOverrides = async () => {
     try { setOverrides(await Db.listOverrides()); }
-    catch (e) { console.error("Couldn't load overrides:", e.message); }
+    // "None on file." is what the table says over an empty list, so a failed
+    // read reads as a job with no special price on it. These are prices.
+    catch (e) { Toasts.show(`Couldn't read the job-level overrides: ${e.message || "the read failed."} The list below is not the whole story.`, "error"); }
   };
   // Who follows the house card is a courtesy, not the rates themselves — a
   // failed read leaves the count off the header rather than a red box over a

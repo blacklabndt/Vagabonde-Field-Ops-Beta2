@@ -168,12 +168,16 @@ export function UploadMobileScreen({ job, jobRecord, currentUser, onSent }) {
         // unaccounted files in the list for the retry.
         removeItem(it.key);
       }
-      if (queuedCount) {
+      // The email failure comes first: the outbox has its own badge and panel
+      // for what queued, but a report that uploaded and was never emailed has
+      // nothing else to say so — and the queued panel replaces this whole
+      // screen, taking the message with it.
+      if (failedAt) {
+        setError(`Uploaded, but the email didn't go out: ${failedAt} The reports are on file and show as Pending — resend from Job detail.${queuedCount ? " Anything with no signal is in the outbox." : ""}`);
+      } else if (queuedCount) {
         setQueued(true);
       } else if (!recipient) {
         setError("Uploaded. No contractor email is on this job, so nothing was sent — add one in the job record and send from Job detail.");
-      } else if (failedAt) {
-        setError(`Uploaded, but the email didn't go out: ${failedAt} The reports are on file and show as Pending.`);
       } else {
         onSent();
       }

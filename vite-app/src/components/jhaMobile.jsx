@@ -296,7 +296,9 @@ export function JhaBuilderScreen({ job, jobRecord, currentUser, onSubmitted, onC
 
   useEffect(() => {
     Db.listActiveProfiles().then(setPeople)
-      .catch(e => console.error("Couldn't load the crew list:", e.message));
+      // With no directory the helper list offers "Working alone today" and
+      // nothing else, and the assessment files with one worker on it.
+      .catch(e => setError(`Couldn't load the crew list: ${e.message || "the read failed."} A helper can't be named until it loads — this assessment would file with only you on it.`));
   }, []);
 
   // Worker (1)'s kit, re-derived when either half of it arrives. Kept apart

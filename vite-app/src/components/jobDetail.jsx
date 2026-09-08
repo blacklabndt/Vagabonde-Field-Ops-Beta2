@@ -176,9 +176,20 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
     if (refreshed && thenEdit) onOpenTicket(t.id);
     return true;
   };
+  // Read here rather than through the three refreshers, which swallow their
+  // own failures: a failed first load left three cards reading "None on file
+  // yet" and the delete dialog saying nothing had been filed against the
+  // job, with its button enabled and no typed confirmation.
   const refresh = async () => {
     setLoading(true);
-    await Promise.all([refreshJhas(), refreshReports(), refreshTickets()]);
+    setStatusError("");
+    const out = await Promise.allSettled([
+      Db.listJhasForJob(job.dbId).then(setJhas),
+      Db.listReportsForJob(job.dbId).then(setReports),
+      Db.listTicketsForJob(job.dbId).then(setTickets)
+    ]);
+    const bad = out.find(r => r.status === "rejected");
+    if (bad) setStatusError(`Couldn't read what's filed against ${job.id}: ${(bad.reason && bad.reason.message) || "the read failed."} The cards below are incomplete — reload before deleting anything.`);
     setLoading(false);
   };
   useEffect(() => { if (job && job.dbId) { setTicketPage(0); refresh(); } }, [job ? job.dbId : null]);
@@ -213,7 +224,10 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
   // The contact directory, so the record's rep fields can be picked rather
   // than retyped. Db caches it, so this costs nothing on a second open.
   const [contacts, setContacts] = useState([]);
-  useEffect(() => { Db.listContacts().then(setContacts).catch(() => setContacts([])); }, []);
+  // An empty directory is what the send dialog reports as "No client contacts
+  // on file for this job", and what the record's rep pickers offer. A failed
+  // read must not be mistaken for either.
+  useEffect(() => { Db.listContacts().then(setContacts).catch(e => { setContacts([]); Toasts.show(`Couldn't read the contact directory: ${e.message || "the read failed."} Reps have to be typed until it loads.`, "error"); }); }, []);
   // The contractor can be retyped in the same edit, and a contractor that
   // isn't on file yet has no people on file either — so the rep list follows
   // the draft, not the saved job.

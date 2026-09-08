@@ -44,7 +44,11 @@ export function ContactsScreen({ currentUser }) {
     if (!q) { setPeople([]); return undefined; }
     let live = true;
     const t = setTimeout(() => {
-      Db.searchPeople(q).then(rows => { if (live) setPeople(rows); }).catch(() => { if (live) setPeople([]); });
+      // Routed to the same error box the organisation picker beside it uses:
+      // an empty list reads as "Nobody on file matches", which a failed
+      // search is not.
+      Db.searchPeople(q).then(rows => { if (live) setPeople(rows); })
+        .catch(e => { if (live) { setPeople([]); setError(e.message || "Couldn't search for people — that isn't an answer about who's on file."); } });
     }, 200);
     return () => { live = false; clearTimeout(t); };
   }, [personQ]);

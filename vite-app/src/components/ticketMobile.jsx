@@ -312,7 +312,14 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
         }
         setCrew(seedCrew(list));
       })
-      .catch(e => console.error("Couldn't load crew list:", e.message));
+      .catch(e => {
+        console.error("Couldn't load crew list:", e.message);
+        // Without the directory a new ticket has no crew row and no picker,
+        // so it would save with nobody's hours on it — the day's pay. A
+        // reopened draft brought its own crew and only loses the "add
+        // someone" box.
+        if (!ticket && !wipRestored.current) setLoadError(`Couldn't load the crew list: ${e.message || "the read failed."} Nobody's hours could be entered on this ticket — check your connection and open it again.`);
+      });
   }, [job ? job.clientId : null]);
 
   // The ticket-number preview is the one thing here that varies by day. A
