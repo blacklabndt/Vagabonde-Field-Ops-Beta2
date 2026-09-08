@@ -2805,8 +2805,9 @@ export const Db = {
     // a ticket getting approved or cancelled while this walks (which is
     // exactly what happens on a busy morning) would shift the offsets and drop
     // a still-unsigned ticket out of the chase without a word.
+    // The later of two stamps, either of which may be missing.
+    const later = (a, b) => (!a ? (b || null) : !b ? a : (Date.parse(a) >= Date.parse(b) ? a : b));
     const data = await fetchAllKeyset(async after => {
-      const later = (a, b) => (!a ? (b || null) : !b ? a : (Date.parse(a) >= Date.parse(b) ? a : b));
       let query = sbClient
         .from("tickets").select("id, client_contact, chased_at, queried_at, approval_sent_at")
         .eq("status", "Awaiting approval");

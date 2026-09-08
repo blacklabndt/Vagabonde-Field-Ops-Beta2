@@ -475,7 +475,7 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
       // and "stopped — 0 not attempted" reads as a run cut short.
       if (out.stopped && out.remaining) parts.push(`stopped — ${out.remaining} not attempted`);
       if (queried.length) parts.push(`${queried.length} left alone — the client has a question open`);
-      if (recent.length) parts.push(`${recent.length} left alone — chased in the last 3 days`);
+      if (recent.length) parts.push(`${recent.length} left alone — sent or chased in the last 3 days`);
       if (noEmail.length) parts.push(`${noEmail.length} skipped — no client email on file`);
       // Named, not just counted. "37 failed to send" is a number the office
       // can do nothing with; the ticket numbers are the ones somebody now has
@@ -1018,7 +1018,7 @@ function ChaseDialog({ plan, onClose, onSend }) {
           </div>
           <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
             <Skip n={queried.length} why="with a question open — a resend would rub the question out" />
-            <Skip n={recent.length} why="chased in the last 3 days" />
+            <Skip n={recent.length} why="sent or chased in the last 3 days" />
             <Skip n={noEmail.length} why="with no client email on file" />
           </ul>
         </div>
