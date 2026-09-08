@@ -1105,8 +1105,20 @@ test("every write a slice makes to its own run is conditional on still holding i
   }
   // The guard is only half of it: the three writes that carry on afterwards
   // have to read the match back and stop when there is none.
-  assert.equal((src.match(/stillHoldsRun\(/g) ?? []).length, 3,
-    "the cursor write, the completion and the failure each check what they matched");
+  // — the cursor write, the completion and the failure; the folder write,
+  // which status alone cannot tell a reclaim from; and the clock move on
+  // app_settings, which is the claim on a scheduled run.
+  assert.equal((src.match(/stillHoldsRun\(/g) ?? []).length, 5,
+    "the cursor write, the completion, the failure, the folder write and the clock move each check what they matched");
+  // Two slices both believe "running" after a reclaim, so the folder write
+  // needs the one condition that tells them apart: no folder yet.
+  assert.match(src, /\.update\(\{ folder_id: folderId, folder_name: name \}\)[\s\S]{0,120}\.is\("folder_id", null\)/,
+    "the folder write is conditional on folder_id still being null");
+  assert.match(src, /if \(!folderId\) return \{ ok: true, runId, superseded: true \};/,
+    "a slice that lost the folder stops");
+  // The clock moves only for the tick that read the due time it replaces.
+  assert.match(src, /\.eq\("backup_next_run_at", s\.backup_next_run_at\)\.select\("id"\)/,
+    "the clock move is conditional on the due time the tick read");
   assert.match(src, /if \(!stillHoldsRun\(held\)\) return \{ ok: true, runId, superseded: true \};/,
     "a superseded slice returns rather than carrying on round the loop");
 });
