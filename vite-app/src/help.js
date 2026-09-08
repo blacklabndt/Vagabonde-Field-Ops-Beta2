@@ -103,7 +103,7 @@ export const HELP = {
     body: [
       "Every ticket across every job, paged on the server, with the four running totals worked out by the database rather than by adding up the rows on screen.",
       "Per row: resend the approval link, flag a ticket as chased, cancel an approval request so the ticket can be re-priced, and mark approved tickets as invoiced.",
-      "\"Chase all unsigned\" re-sends the approval link to everything still waiting. It leaves alone anything chased in the last three days or carrying an open client query, sends three at a time so the mail service is not overrun, waits out a rate limit instead of writing the ticket off, has a Stop, and names by number anything that failed.",
+      "\"Chase all unsigned\" re-sends the approval link to everything still waiting. It leaves alone anything sent or chased in the last three days or carrying an open client query, sends three at a time so the mail service is not overrun, waits out a rate limit instead of writing the ticket off, has a Stop, and names by number anything that failed.",
       "A client rep can send a question back from the approval page. That query shows on the row, and resending the link clears it.",
       "The money, the chase and the accounting export are for Admins and Technicians only. Other roles are handed no totals at all, which is exactly why the buttons are hidden — a chase from an account that cannot see prices would mail every client a $0.00 approval."
     ]
