@@ -40,6 +40,12 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
   Nothing is waiting there now. The latest is
+  `20260908053815_the_token_hook_reads_profiles.sql` — `grant select` on
+  profiles (and USAGE on public) to `supabase_auth_admin`, the role Auth
+  calls the SECURITY INVOKER `custom_access_token_hook` as; live had it all
+  along, the baseline dropped it, and a fresh replay issued every token
+  with no tab_access claim while the hook swallowed the denial. Probe
+  beside it. Before it,
   `20260908044141_withdrawing_an_approval_is_the_offices_too.sql` —
   `withdraw_ticket_approval` states its own gate (the ticket's technician,
   an Admin, or a Coordinator) instead of borrowing `private.can_write_ticket`,
