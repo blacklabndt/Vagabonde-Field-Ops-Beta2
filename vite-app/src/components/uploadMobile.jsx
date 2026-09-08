@@ -141,7 +141,9 @@ export function UploadMobileScreen({ job, jobRecord, currentUser, onSent }) {
             }
           }
         } catch (e) {
-          if (!OfflineQueue.isNetworkError(e)) throw e;
+          // A refusal the server gave (.plain) is shown, not queued, whatever
+          // the radio says — the order the other two field screens keep.
+          if (e.plain || !OfflineQueue.isNetworkError(e)) throw e;
           toQueue = true;
         }
         if (toQueue) {

@@ -5,7 +5,7 @@ import { acceptsNumberText } from "../numberInput.js";
 import { Blueprint, Btn, CheckBox, TagX, Field, Dialog, ErrorBox, Switch, splitContact, hazardTagVariant, NoJobSelected, ConnectionBar, QueuedPanel, useMissingFields, useScreenFoot } from "./common.jsx";
 import { OfflineQueue } from "../offlineQueue.js";
 import { OfflineCache } from "../offlineCache.js";
-import { hasNoSerials, trimmedSerials, isMissingSetOwnDosimetry, newSerials, mergedSerials, dosimetryAskedFor, markDosimetryAsked } from "../dosimetryPrompt.js";
+import { hasNoSerials, isMissingSetOwnDosimetry, newSerials, mergedSerials, dosimetryAskedFor, markDosimetryAsked } from "../dosimetryPrompt.js";
 import { savingLabel, deviceOffline } from "../savingWords.js";
 
 // The JHA (FLHA) — filed at the start of the day, closed out at the end.
@@ -499,7 +499,9 @@ export function JhaBuilderScreen({ job, jobRecord, currentUser, onSubmitted, onC
       dropWip();
       onSubmitted();
     } catch (e) {
-      if (OfflineQueue.isNetworkError(e)) {
+      // A refusal the server gave is a reason whatever the radio says —
+      // the order oqFlushOnce and the ticket editor keep.
+      if (!e.plain && OfflineQueue.isNetworkError(e)) {
         await queueThisJha();
         return;
       }

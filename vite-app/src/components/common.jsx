@@ -756,7 +756,7 @@ export function Toast({ message, tone = "ok", onDone, duration = 2600 }) {
       // (the ticket editor's and the JHA's .screen-foot sets --screen-foot-h
       // on the root while it is mounted; everywhere else it is 0).
       bottom: "calc(24px + var(--screen-foot-h, 0px) + env(safe-area-inset-bottom, 0px))",
-      zIndex: 60, pointerEvents: "none",
+      zIndex: 300, pointerEvents: "none",
       display: "flex", alignItems: "center", gap: 8,
       padding: "10px 16px", borderRadius: 999,
       fontSize: 14, fontWeight: 600,
