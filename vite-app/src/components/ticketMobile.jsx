@@ -271,7 +271,10 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
   // so it must not read like a settled fact — this is the number a technician
   // might write on the day's paperwork.
   const [provisionalNumber, setProvisionalNumber] = useState(false);
-  useEffect(() => OfflineCache.subscribe(s => setProvisionalNumber(!ticket && s.servingCached)), [ticket]);
+  // Raised, never lowered: a number worked out on this device is still that
+  // number when the radio comes back, and markLive from any other read must
+  // not take the word off it. A remount is what clears it.
+  useEffect(() => OfflineCache.subscribe(s => setProvisionalNumber(p => (!ticket && s.servingCached) || p)), [ticket]);
 
   // Rates and the crew directory belong to the client and the org, not the
   // day the work was done — so they load when the client changes and never

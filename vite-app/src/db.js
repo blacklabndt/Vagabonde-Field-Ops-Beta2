@@ -1077,6 +1077,15 @@ export const Db = {
       .update({ status: complete ? "Complete" : "Active" }).eq("id", jobDbId);
     if (error) throw error;
     await dropClientJobLists();
+    // The remembered board page still calls this job Active, and offline
+    // that pill is read as the job's status — a ticket started on it sat in
+    // the outbox until the replay was refused. Patched in place rather than
+    // dropped: dropping the page would leave a truck with no board at all.
+    const board = await OfflineCache.read("jobs.recent").catch(() => null);
+    if (board && board.value && Array.isArray(board.value.rows)) {
+      const status = complete ? "Complete" : "Active";
+      OfflineCache.put("jobs.recent", { ...board.value, rows: board.value.rows.map(r => r.dbId === jobDbId ? { ...r, status } : r) });
+    }
   },
 
   // Anything that adds to a job goes through here first. A job someone marked
@@ -1214,6 +1223,9 @@ export const Db = {
         const { data: created, error: crErr } = await sbClient.from("contractors").insert({ name: contractorName }).select("id").single();
         if (crErr) throw crErr;
         contractorId = created.id;
+        // The cached list is now short one contractor, and the read-back
+        // App.jsx does after this would be answered from it.
+        invalidate("contractors");
       }
     }
 
@@ -2248,6 +2260,7 @@ export const Db = {
       if (existing) contractorId = existing.id;
       else {
         const { data: created, error } = await sbClient.from("contractors").insert({ name }).select("id").single();
+        invalidate("contractors");
         if (error) throw error;
         contractorId = created.id;
       }

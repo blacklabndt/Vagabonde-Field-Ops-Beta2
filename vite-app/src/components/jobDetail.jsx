@@ -5,6 +5,7 @@ import { serialsOnProfile, newSerials, mergedSerials, isMissingSetOwnDosimetry, 
 import { Db } from "../db.js";
 import { OfflineCache } from "../offlineCache.js";
 import { OfflineQueue } from "../offlineQueue.js";
+import { deviceOffline } from "../savingWords.js";
 import { Toasts } from "../toastBus.js";
 
 // An idempotency key for a save (see Db.createTicket / uploadReport).
@@ -50,6 +51,10 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
   const [recordLoaded, setRecordLoaded] = useState(false);
   const [statusBusy, setStatusBusy] = useState(false);
   const [statusError, setStatusError] = useState("");
+  // The filed read's own failure, apart from a status change's: it is the
+  // Delete job gate, and a "Mark complete" that blanked the shared box
+  // re-armed the button over three cards still reading "None on file yet".
+  const [filedError, setFiledError] = useState("");
   const [closingJha, setClosingJha] = useState(null);
   // The assessment or report being emailed — each holds its row so the
   // dialog can name the file it's about to send.
@@ -101,9 +106,19 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
     setStatusBusy(false);
   };
 
-  const [jhas, setJhas] = useState([]);
-  const [reports, setReports] = useState([]);
-  const [tickets, setTickets] = useState([]);
+  const [jhas, setJhasNow] = useState([]);
+  const [reports, setReportsNow] = useState([]);
+  const [tickets, setTicketsNow] = useState([]);
+  // Every fill of the three cards belongs to the job it was read for, not
+  // refresh() alone: a delete's or a withdraw's own re-read landing after a
+  // job change put one job's records in another job's card. The closure
+  // carries the job this render was for; the ref carries the one on screen.
+  const openJob = useRef(job && job.dbId);
+  openJob.current = job && job.dbId;
+  const forOpenJob = (set, at) => rows => { if (openJob.current === at) set(rows); };
+  const setJhas = forOpenJob(setJhasNow, job && job.dbId);
+  const setReports = forOpenJob(setReportsNow, job && job.dbId);
+  const setTickets = forOpenJob(setTicketsNow, job && job.dbId);
   // Daily billing shows five tickets at a time. A long job runs to dozens of
   // days, and the card is one of four on a phone screen: a technician looking
   // for today's draft was scrolling past a month of signed bills to reach
@@ -188,7 +203,7 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
     const mine = ++filedSeq.current;
     const fresh = set => rows => { if (mine === filedSeq.current) set(rows); };
     setLoading(true);
-    setStatusError("");
+    setFiledError("");
     const out = await Promise.allSettled([
       Db.listJhasForJob(job.dbId).then(fresh(setJhas)),
       Db.listReportsForJob(job.dbId).then(fresh(setReports)),
@@ -196,7 +211,7 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
     ]);
     if (mine !== filedSeq.current) return;
     const bad = out.find(r => r.status === "rejected");
-    if (bad) setStatusError(`Couldn't read what's filed against ${job.id}: ${(bad.reason && bad.reason.message) || "the read failed."} The cards below are incomplete — reload before deleting anything.`);
+    if (bad) setFiledError(`Couldn't read what's filed against ${job.id}: ${(bad.reason && bad.reason.message) || "the read failed."} The cards below are incomplete — reload before deleting anything.`);
     setLoading(false);
   };
   useEffect(() => { if (job && job.dbId) { setTicketPage(0); refresh(); } }, [job ? job.dbId : null]);
@@ -324,6 +339,7 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
           </Btn>
         )}
       </div>
+      <ErrorBox>{filedError}</ErrorBox>
       <ErrorBox>{statusError}</ErrorBox>
       {complete && (
         <div style={{ fontSize: 13, color: "color-mix(in srgb, var(--color-text) 65%, transparent)", marginBottom: 18 }}>
@@ -745,8 +761,8 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
               that as "nothing has been filed" with its button live and no
               typed confirmation. The banner above says so, but the dialog
               covers it — this is what actually stops the press. */}
-          <Btn variant="secondary" disabled={statusBusy || !!statusError}
-            title={statusError ? "Reload the job first — what's filed against it couldn't be read." : undefined}
+          <Btn variant="secondary" disabled={statusBusy || !!filedError}
+            title={filedError ? "Reload the job first — what's filed against it couldn't be read." : undefined}
             onClick={() => setDeleting(true)}>Delete job</Btn>
           <span style={{ fontSize: 12, color: "color-mix(in srgb, var(--color-text) 55%, transparent)" }}>
             {isAdmin
@@ -1574,6 +1590,11 @@ function UploadReportDialog({ job, jobRecord, currentUser, onClose, onSubmit }) 
     setSaving(true);
     setError("");
     try {
+      // Nothing to learn from asking a radio that is already off: the wait
+      // was a token refresh and then the upload, each timing out, before
+      // landing in the same outbox the catch below uses — the eight frozen
+      // seconds savingWords exists to remove. Straight there instead.
+      if (!storedReport.current && deviceOffline()) throw Object.assign(new Error("No connection."), { networkFailure: true });
       if (!storedReport.current) {
         storedReport.current = await Db.uploadReport({
           jobDbId: job.dbId, jobNumber: job.id, file, welds: welds.trim(), result: "Accept",

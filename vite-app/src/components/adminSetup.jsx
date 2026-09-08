@@ -356,14 +356,18 @@ function RecentErrorsPanel() {
   const loadMore = async () => {
     const last = errors[errors.length - 1];
     if (!last) return;
+    // The next page takes the token too: switching function mid-read used to
+    // append one function's older errors to another function's list.
+    const mine = ++loadSeq.current;
     setLoadingMore(true);
     setErr("");
     try {
       const rows = await Db.listFunctionErrors(PAGE, { before: last, functionName: fn });
+      if (mine !== loadSeq.current) return;
       setErrors(p => p.concat(rows));
       setMore(rows.length === PAGE);
     } catch (e) {
-      setErr(e.message || "Couldn't load older errors.");
+      if (mine === loadSeq.current) setErr(e.message || "Couldn't load older errors.");
     } finally {
       setLoadingMore(false);
     }

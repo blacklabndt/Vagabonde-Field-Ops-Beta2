@@ -49,8 +49,11 @@ export function ContactsScreen({ currentUser }) {
       // search is not.
       // Cleared on a good answer as well as written on a bad one: without
       // this a single dropped search sat over every later result.
-      Db.searchPeople(q).then(rows => { if (live) { setPeople(rows); setError(""); } })
-        .catch(e => { if (live) { setPeople([]); setError(e.message || "Couldn't search for people — that isn't an answer about who's on file."); } });
+      // Clears the message THIS search put up and no one else's — the box is
+      // shared with the organisation picker, the boot read and every save.
+      const mark = "Couldn't search for people";
+      Db.searchPeople(q).then(rows => { if (live) { setPeople(rows); setError(p => (String(p || "").startsWith(mark) ? "" : p)); } })
+        .catch(e => { if (live) { setPeople([]); setError(`${mark} — ${e.message || "that isn't an answer about who's on file."}`); } });
     }, 200);
     return () => { live = false; clearTimeout(t); };
   }, [personQ]);
