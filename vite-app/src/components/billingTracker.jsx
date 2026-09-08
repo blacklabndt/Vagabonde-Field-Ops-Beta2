@@ -656,7 +656,10 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
         {(q || from || to) && (
           <Btn variant="ghost" style={{ minHeight: 36 }} onClick={() => { setQ(""); setFrom(""); setTo(""); }}>Clear</Btn>
         )}
-        {filter === "Approved" && (
+        {/* Invoicing is an Admin's alone: mark_tickets_invoiced raises 42501
+            for anyone else, and a Coordinator holds this tab. The button is
+            the courtesy, the RPC the gate. */}
+        {filter === "Approved" && currentUser.role === "Admin" && (
           <Btn variant="primary" style={{ minHeight: 36, marginLeft: "auto" }} disabled={marking || !pickedIds.length}
             onClick={() => setInvoiced(pickedIds, true)}
             title="Moves the ticked tickets from Approved to Invoiced.">
@@ -797,11 +800,12 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
                       </div>
                     )}
                     {t.status === "Draft" && <Btn variant="secondary" onClick={() => onOpenTicket(t)}>Finish</Btn>}
-                    {t.status === "Approved" && (
+                    {/* Admin-only, like the bulk button above. */}
+                    {t.status === "Approved" && currentUser.role === "Admin" && (
                       <Btn variant="secondary" disabled={marking} onClick={() => setInvoiced([t.id], true)}
                         title="Moves this ticket from Approved to Invoiced.">Mark invoiced</Btn>
                     )}
-                    {t.status === "Invoiced" && (
+                    {t.status === "Invoiced" && currentUser.role === "Admin" && (
                       <Btn variant="ghost" disabled={marking} onClick={() => setInvoiced([t.id], false)}
                         title="Back to Approved — for a ticket marked invoiced by mistake.">Back to approved</Btn>
                     )}

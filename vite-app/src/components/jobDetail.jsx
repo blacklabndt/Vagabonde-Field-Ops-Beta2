@@ -538,9 +538,12 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
                   const open = editable ? () => onOpenTicket(t.id)
                     : seesPrices ? () => setViewingTicket(t.id) : null;
                   // Sent but not signed: still ours to pull back. The same
-                  // people the tickets update policy names — that technician,
-                  // or an admin.
-                  const canWithdraw = t.status === "Awaiting approval" && (isAdmin || t.techId === currentUser.id);
+                  // people withdraw_ticket_approval names (20260908044141):
+                  // that technician, an admin, or the office. A Coordinator
+                  // gets the plain cancel only — "Cancel and edit" stays
+                  // behind the editor's own gate below.
+                  const canWithdraw = t.status === "Awaiting approval"
+                    && (isAdmin || currentUser.role === "Coordinator" || t.techId === currentUser.id);
                   return (
                     <tr key={t.id} onClick={open || undefined}
                       tabIndex={open ? 0 : undefined}
@@ -796,7 +799,8 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
           canEditAfter={canRaiseTickets && !complete}
           // The same gate as the row: a Complete job's withdrawn ticket would
           // be a draft nobody on that job can edit.
-          canWithdraw={t => !complete && t.status === "Awaiting approval" && (isAdmin || t.technician_id === currentUser.id)} />
+          canWithdraw={t => !complete && t.status === "Awaiting approval"
+            && (isAdmin || currentUser.role === "Coordinator" || t.technician_id === currentUser.id)} />
       )}
 
     </div>

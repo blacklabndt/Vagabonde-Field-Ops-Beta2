@@ -12,7 +12,7 @@ import { TICKET_WIP_PREFIX, JHA_WIP_PREFIX, jobDbIdsOf, buildWipRows, wipJobLabe
 // covers every technician's tickets); once it has left the truck it has no
 // business on this list, and the drawer badge counts the same set.
 
-export function OpenTicketsScreen({ tickets, loading, onOpenTicket, currentUser, openJhas = [], onOpenJob = null, onReload = null }) {
+export function OpenTicketsScreen({ tickets, loading, loadError = null, onOpenTicket, currentUser, openJhas = [], onOpenJob = null, onReload = null }) {
   // The list this screen draws: the parent's copy, until cancelling drafts
   // here re-reads it (the parent has no idea rows have gone). Cleared the
   // moment the parent hands over a fresh array, so its own reload always
@@ -370,7 +370,12 @@ export function OpenTicketsScreen({ tickets, loading, onOpenTicket, currentUser,
           <tbody>
             {!loading && !shown.length && (
               <tr><td colSpan={showAmounts ? 9 : 8} style={{ color: "color-mix(in srgb, var(--color-text) 55%, transparent)" }}>
-                {open.length
+                {/* A read that failed is not an empty list: out of range, the
+                    drafts are still on the server, and "Nothing to send"
+                    would be a lie told to somebody holding three of them. */}
+                {loadError
+                  ? `Couldn't load your tickets — ${loadError}. Check your signal and reload.`
+                  : open.length
                   ? `No draft matches "${filter.trim()}" — clear the filter to see all ${open.length}.`
                   : "Nothing to send — every ticket you've raised has gone out to the client."}
               </td></tr>

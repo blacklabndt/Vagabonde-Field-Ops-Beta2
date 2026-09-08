@@ -287,6 +287,10 @@ export function App() {
   const [activeJob, setActiveJob] = useState(null);
   const [myTickets, setMyTickets] = useState([]);
   const [myTicketsLoading, setMyTicketsLoading] = useState(true);
+  // Why the last read failed, or null: Open tickets states an empty list as
+  // fact ("Nothing to send"), and must not say it to somebody whose drafts
+  // it could not read.
+  const [myTicketsError, setMyTicketsError] = useState(null);
   const [loadError, setLoadError] = useState("");
 
   // Sourced from the open job (see Db.getJobRecord) — Job detail fills this in
@@ -1041,8 +1045,11 @@ export function App() {
     // The open assessments ride along, best effort — a failed read leaves
     // the last list rather than blanking the drafts, which are the screen.
     Db.listMyOpenJhas(forUser).then(r => { if (stillMine()) setMyOpenJhas(r); }).catch(e => console.warn("Couldn't load open JHAs:", e.message));
-    try { const rows = await Db.listMyTickets(forUser); if (stillMine()) setMyTickets(rows); }
-    catch (e) { console.error("Failed to load your tickets:", e.message); }
+    try { const rows = await Db.listMyTickets(forUser); if (stillMine()) { setMyTickets(rows); setMyTicketsError(null); } }
+    catch (e) {
+      console.error("Failed to load your tickets:", e.message);
+      if (stillMine()) setMyTicketsError(e.message || "no reply from the server");
+    }
     if (stillMine()) setMyTicketsLoading(false);
   };
   // Once on sign-in, because the drawer badge needs a count before the screen
@@ -1414,7 +1421,7 @@ export function App() {
       // the open-JHA list knows only the number. Reading the row back by
       // number when it is already in hand would be a network call the strip
       // has no signal to make.
-      body = <OpenTicketsScreen tickets={myTickets} loading={myTicketsLoading} onOpenTicket={openTicket} currentUser={currentUser}
+      body = <OpenTicketsScreen tickets={myTickets} loading={myTicketsLoading} loadError={myTicketsError} onOpenTicket={openTicket} currentUser={currentUser}
         openJhas={myOpenJhas} onOpenJob={j => (j.dbId ? openJob(j) : openJobByNumber(j.job))}
         // After a bulk cancel the drawer badge has to move with the list; this
         // is the same read that fills it on arrival.

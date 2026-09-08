@@ -121,6 +121,13 @@ async function oqFlushOnce(handlers) {
   let synced = 0, stillOffline = false;
   const items = await oqGetAll();
   for (const item of items) {
+    // The tablet can change hands mid-drain: a slow upload is still going
+    // while the last person signs out and the next signs in, and the list
+    // above was read under the old owner. Replaying their work under this
+    // session is refused by RLS and comes back to them stamped "won't
+    // sync", one tap from being discarded — so the owner is asked again
+    // before every item.
+    if (!oqMine(item)) continue;
     const handler = handlers[item.type];
     if (!handler) {
       // Nothing here knows how to replay it — a build mismatch. Say so in
