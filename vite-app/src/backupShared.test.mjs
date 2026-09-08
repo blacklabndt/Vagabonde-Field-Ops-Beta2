@@ -1112,10 +1112,14 @@ test("every write a slice makes to its own run is conditional on still holding i
     "the cursor write, the completion, the failure, the folder write and the clock move each check what they matched");
   // Two slices both believe "running" after a reclaim, so the folder write
   // needs the one condition that tells them apart: no folder yet.
-  assert.match(src, /\.update\(\{ folder_id: folderId, folder_name: name \}\)[\s\S]{0,120}\.is\("folder_id", null\)/,
+  assert.match(src, /\.update\(\{\s*folder_id: folderId,\s*folder_name: name\s*\}\)[\s\S]{0,160}\.is\("folder_id",\s*null\)/,
     "the folder write is conditional on folder_id still being null");
-  assert.match(src, /if \(!folderId\) return \{ ok: true, runId, superseded: true \};/,
+  assert.match(src, /if \(!folderId\)\s*return \{\s*ok: true,\s*runId,\s*superseded: true\s*\};/,
     "a slice that lost the folder stops");
+  // The loser must not delete the folder the winner recorded: ensureFolder
+  // is find-or-create by name, so two slices in one minute hold one id.
+  assert.match(src, /String\(owner\.folder_id \?\? ""\) === folderId\) return null;/,
+    "the stray-folder delete is skipped when the winner holds the same folder");
   // The clock moves only for the tick that read the due time it replaces.
   assert.match(src, /\.eq\("backup_next_run_at", s\.backup_next_run_at\)\.select\("id"\)/,
     "the clock move is conditional on the due time the tick read");
