@@ -180,14 +180,21 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
   // own failures: a failed first load left three cards reading "None on file
   // yet" and the delete dialog saying nothing had been filed against the
   // job, with its button enabled and no typed confirmation.
+  // Which job's read is the current one, the way the record read below is
+  // guarded: opening two jobs quickly left whichever finished last in the
+  // three cards, under the other job's name.
+  const filedSeq = useRef(0);
   const refresh = async () => {
+    const mine = ++filedSeq.current;
+    const fresh = set => rows => { if (mine === filedSeq.current) set(rows); };
     setLoading(true);
     setStatusError("");
     const out = await Promise.allSettled([
-      Db.listJhasForJob(job.dbId).then(setJhas),
-      Db.listReportsForJob(job.dbId).then(setReports),
-      Db.listTicketsForJob(job.dbId).then(setTickets)
+      Db.listJhasForJob(job.dbId).then(fresh(setJhas)),
+      Db.listReportsForJob(job.dbId).then(fresh(setReports)),
+      Db.listTicketsForJob(job.dbId).then(fresh(setTickets))
     ]);
+    if (mine !== filedSeq.current) return;
     const bad = out.find(r => r.status === "rejected");
     if (bad) setStatusError(`Couldn't read what's filed against ${job.id}: ${(bad.reason && bad.reason.message) || "the read failed."} The cards below are incomplete — reload before deleting anything.`);
     setLoading(false);

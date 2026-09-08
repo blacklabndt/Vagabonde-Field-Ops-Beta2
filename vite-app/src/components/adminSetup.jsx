@@ -336,15 +336,20 @@ function RecentErrorsPanel() {
   // The dropdown's names are read with the first page and on Refresh —
   // filtering by one of them cannot change the list, and that read walks
   // the whole log.
+  // A request token, like every other filtered list in the app: switching
+  // function while a read is in flight used to paint one function's errors
+  // under another function's name.
+  const loadSeq = React.useRef(0);
   const load = (functionName = fn, withNames = false) => {
+    const mine = ++loadSeq.current;
     setLoading(true);
     // The reason the last read failed is not the reason for this one, and
     // leaving it up made every later Refresh look like it had failed too.
     setErr("");
     Promise.all([Db.listFunctionErrors(PAGE, { functionName }), withNames ? Db.listFunctionErrorNames().catch(() => null) : null])
-      .then(([rows, seen]) => { setErrors(rows); setMore(rows.length === PAGE); if (seen) setNames(seen); })
-      .catch(e => setErr(e.message || "Couldn't load recent errors."))
-      .finally(() => setLoading(false));
+      .then(([rows, seen]) => { if (mine !== loadSeq.current) return; setErrors(rows); setMore(rows.length === PAGE); if (seen) setNames(seen); })
+      .catch(e => { if (mine === loadSeq.current) setErr(e.message || "Couldn't load recent errors."); })
+      .finally(() => { if (mine === loadSeq.current) setLoading(false); });
   };
   useEffect(() => { load(fn, true); }, []);
 

@@ -43,7 +43,12 @@ export function FilesScreen({ currentUser }) {
   // breadcrumb — where the row-x delete would then act on a file in a folder
   // the user believes they left.
   const loadSeq = useRef(0);
-  const load = async (at = prefix) => {
+  // The folder the person is in NOW, not the one a slow upload started in:
+  // load() with no argument used to repaint the old folder's contents under
+  // the breadcrumb they had already walked away to.
+  const prefixRef = useRef(prefix);
+  prefixRef.current = prefix;
+  const load = async (at = prefixRef.current) => {
     const mine = ++loadSeq.current;
     setLoading(true);
     setError("");
