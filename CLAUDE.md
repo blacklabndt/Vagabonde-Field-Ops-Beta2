@@ -40,6 +40,10 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
   Nothing is waiting there now. The latest is
+  `20260908101639_the_equipment_pages_in_a_total_order.sql` —
+  `search_equipment` orders by type, serial_number, id: two items of one
+  type with no serial were a tie, and an OFFSET page boundary inside a tie
+  doubled one and dropped the other. Probe beside it. Before it,
   `20260908063429_a_locked_account_reads_only_its_own_row.sql` —
   `profiles_select` is `is_staff()` or the caller's own row, where it was
   "anybody signed in": a locked account's token stays good for an hour, and

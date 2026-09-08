@@ -620,7 +620,10 @@ export function TimesheetsScreen({ currentUser }) {
 
       {loading ? (
         <Loading />
-      ) : !selectable.length ? (
+      // Only an admin can be told there is nobody on the books — a
+      // non-admin has one timesheet, and an empty one is the answer
+      // (ownEmpty, below), which this test stood in front of.
+      ) : isAdmin && !selectable.length ? (
         <Blueprint style={{ padding: "22px 20px" }}>
           <div style={{ fontSize: 14, color: "color-mix(in srgb, var(--color-text) 60%, transparent)" }}>
             No hours recorded in {payPeriodLabel(period)}, and nobody on the books to show. Hours arrive here when a billing ticket is raised with a crew on it.
