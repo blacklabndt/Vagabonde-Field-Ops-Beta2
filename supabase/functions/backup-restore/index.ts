@@ -111,6 +111,11 @@ Deno.serve(async (req) => {
 async function preflight(db: SupabaseClient, folderId: string): Promise<Record<string, unknown>> {
   if (!folderId) throw new Error("folderId is required");
   const conn = await connectDrive(db);
+  // The folder's real name, from the drive. The request carries a copy of
+  // it, but a restore's typed-name gate and retention's spare-by-name both
+  // need the name the drive holds, not the one the browser was told.
+  const folder = (await conn.drive.listFolders(conn.rootFolderId)).find(f => f.id === folderId);
+  if (!folder) throw new Error("That backup is not in the drive any more.");
   const m = await readManifest(conn.drive, folderId);
   const { data: live } = await db.rpc("backup_schema_version");
   const liveVersion = live ? String(live) : null;
@@ -118,8 +123,7 @@ async function preflight(db: SupabaseClient, folderId: string): Promise<Record<s
   const tables = (m.tables ?? {}) as Record<string, { rows?: number }>;
   const files = (m.files ?? {}) as { count?: number; bytes?: number };
   return {
-    // The folder's own name is what the caller already has; what it does not
-    // have is whether this backup may be loaded at all.
+    name: folder.name,
     app_version: m.app_version ?? null,
     finished_at: m.finished_at ?? null,
     schema_version: backupVersion,
@@ -141,16 +145,19 @@ async function startRestoreAll(
   db: SupabaseClient, body: Record<string, unknown>, adminId: string, secret: string
 ): Promise<Record<string, unknown>> {
   const folderId = String(body.folderId ?? "");
-  const folderName = String(body.folderName ?? "");
-  if (!folderId || !folderName) throw new Error("folderId and folderName are required");
+  if (!folderId) throw new Error("folderId is required");
 
+  // The name is the drive's, read by preflight, never the request's: held
+  // against a name the same caller supplied, the typed word checked nothing
+  // — and the run row's folder_name is what retention spares a running
+  // restore's source folder by.
+  const check = await preflight(db, folderId);
+  const folderName = String(check.name);
   // The typed name, character for character. The browser checks it too, but
   // the browser's copy of a gate is a courtesy and this one is the gate.
   if (!typedNameMatches(body.confirm, folderName)) {
     throw new Error(`To restore, type the backup's name exactly: ${folderName}`);
   }
-
-  const check = await preflight(db, folderId);
   if (check.tooNew) {
     throw new Error(tooNewRefusal(
       check.schema_version as string | null, check.live_schema_version as string | null
@@ -192,7 +199,6 @@ async function startRestoreJobs(
   db: SupabaseClient, body: Record<string, unknown>, adminId: string, secret: string
 ): Promise<Record<string, unknown>> {
   const folderId = String(body.folderId ?? "");
-  const folderName = String(body.folderName ?? "");
   const jobIds = Array.isArray(body.jobIds)
     ? [...new Set((body.jobIds as unknown[]).map(String).filter(Boolean))]
     : [];
@@ -212,6 +218,8 @@ async function startRestoreJobs(
   if (open) throw new Error("Something is already running — wait for it to finish before restoring anything.");
 
   const now = new Date().toISOString();
+  // The drive's name for the folder, from preflight — see startRestoreAll.
+  const folderName = String(check.name);
   const cursor = newJobRestoreCursor({ folderId, folderName, jobIds });
   const { data: run, error } = await db.from("backup_runs").insert({
     kind: JOB_RESTORE_KIND, status: "running", phase: "tables",

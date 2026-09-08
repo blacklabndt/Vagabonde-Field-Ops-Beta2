@@ -451,7 +451,7 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   does not make tomorrow late and a failure does not stop tomorrow.
 - Restoring everything is gated four times — the caller's own Admin profile,
   a backup from a newer schema refused outright (`backup_schema_version()`),
-  the Admin typing the backup's folder name, and a complete safety backup of
+  the Admin typing the backup's folder name (held against the name the drive gives preflight, never the request's own copy), and a complete safety backup of
   what is about to be replaced as the restore's own first phase — and the
   order of its phases is not the obvious one: safety → wipe → **accounts** →
   tables → files → activity. Accounts come before the records because
