@@ -259,9 +259,11 @@ export async function buildArchive({ jobs, mode, from, to, by = "", onProgress =
   // second time: for a year of PDFs that is the whole archive read twice.
   const add = (name, data) => {
     // The zip trailer counts entries in 16 bits, and Index.csv and README.txt
-    // still have to go in. Refuse here, not after another hour of downloads,
-    // which is where makeZip's own refusal lands.
-    if (files.length >= 65533) throw new Error("This archive holds more than the 65,535 files a zip without zip64 can list. Archive a shorter period.");
+    // still have to go in. A job file — every one of them sits inside a job
+    // folder — reserves room for those two; the two do not reserve room for
+    // themselves, or the real ceiling would be 65,533. Refuse here, not after
+    // another hour of downloads, which is where makeZip's own refusal lands.
+    if (files.length + (name.includes("/") ? 2 : 0) > 65534) throw new Error("This archive holds more than the 65,535 files a zip without zip64 can list. Archive a shorter period.");
     const crc = crc32(data);
     files.push({ name, data, crc });
     manifest.push({ name, size: data.length, crc });
