@@ -340,8 +340,12 @@ export const decimalString = value => {
 // the triggers, after the audit found half an hour at a $9.25 rate could
 // not be saved: the stored total rounded to 4.63 while the balance check
 // summed the exact 4.625, and the database refused its own arithmetic.
+// Whole cents times thousandths of a unit, in integers: the float product of
+// 1.5 and 60.05 is 90.07499999999999, which rounds a cent below the
+// round(quantity * unit_rate, 2) the trigger stores in tickets.total. A
+// quantity is at most thousandths (CATALOG_STEP: halves and tenths).
 export const lineTotal = (quantity, unitRate) =>
-  Math.round(Number(quantity || 0) * Number(unitRate || 0) * 100) / 100;
+  Math.round(Math.round(Number(quantity || 0) * 1000) * Math.round(Number(unitRate || 0) * 100) / 1000) / 100;
 
 // What a day's work can plausibly hold, per unit of the rate card. None of
 // these is a limit — a ticket may legitimately carry any of them — they are

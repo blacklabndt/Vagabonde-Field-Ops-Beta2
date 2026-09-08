@@ -15,6 +15,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { lineTotal } from "./data.js";
 import { readdirSync, readFileSync } from "node:fs";
 import {
   money, todayLocal, tabList, UNIVERSAL_TABS,
@@ -424,4 +425,15 @@ test("no unapplied handover SQL quietly redefines tabs_for_role", () => {
     .filter(f => DEFINES_TABS_FOR_ROLE.test(readFileSync(new URL(f, HANDOVER), "utf8")));
   assert.deepEqual(stray, [],
     "handover SQL defines public.tabs_for_role — apply it and write the migration, or the drift check above is reading the wrong definition");
+});
+
+// A charge line is priced in integer cents, the way the trigger rounds it.
+test("a line total rounds the way tickets.total does", () => {
+  // 1.5 h at $60.05: the float product is 90.07499999999999, and the
+  // database stores round(90.075, 2) = 90.08. The app must not print a cent
+  // under the figure the tracker and the aging tiles carry.
+  assert.equal(lineTotal(1.5, 60.05), 90.08);
+  assert.equal(lineTotal(0.1, 3.3), 0.33);
+  assert.equal(lineTotal(2, 1234.56), 2469.12);
+  assert.equal(lineTotal("", 100), 0);
 });

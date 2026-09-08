@@ -1209,7 +1209,21 @@ export function App() {
     setMenuOpen(false);
   };
 
-  const openJob = job => { setActiveJob(job); gotoContext("job"); };
+  // The board's rows come from search_jobs, which carries no client GST
+  // rate, so the ticket editor read an exempt client's job opened from Home
+  // as the ordinary 5% while the emailed invoice said exempt. The full row
+  // is read behind the open (through the cache) and swapped in when it
+  // lands; a read that fails leaves the row as it was, which the editor
+  // reads as 5%, never as exempt.
+  const openJob = job => {
+    setActiveJob(job);
+    gotoContext("job");
+    if (job && job.dbId && job.clientGstRate == null) {
+      Db.getJob(job.dbId)
+        .then(full => setActiveJob(prev => (prev && prev.dbId === job.dbId ? full : prev)))
+        .catch(e => console.error("Couldn't read this job's client rate:", e.message));
+    }
+  };
   // A job named by its number alone (the open-JHA list carries no job row).
   const openJobByNumber = async number => {
     try { openJob(await Db.getJobByNumber(number)); }
