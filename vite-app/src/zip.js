@@ -138,6 +138,13 @@ export function makeZip(files, when = new Date()) {
   // "Bad magic number for central directory".
   const centralSize = w.length - centralStart;
 
+  // The trailer's count and offsets are 16- and 32-bit and there is no
+  // zip64 here: past either limit the record wraps and everything after
+  // the wrap is lost with no error at all — a 66,000-file archive read
+  // back as 464. Refuse rather than hand over a broken archive.
+  if (central.length > 0xFFFF) throw new Error(`This archive holds ${central.length} files; a zip without zip64 holds 65,535. Archive a shorter period.`);
+  if (w.length + END_RECORD > 0xFFFFFFFF) throw new Error("This archive is over 4 GB, which this zip writer cannot address. Archive a shorter period.");
+
   // End of central directory
   w.bytes(new Record(END_RECORD)
     .u32(0x06054B50)

@@ -121,12 +121,20 @@ const row = (label, value) => (value ? `${label}: ${value}` : null);
 // a moment before the delete. Anything but "the same" stops the clear: work
 // filed in between is not in the zip, and checking the download cannot see
 // that — it only proves the file on disk is the build.
+// Which records a job holds, as one string the two sides of the drift
+// check can compare: a build's and a re-read's, sorted so order is nothing.
+export const archiveIds = (...lists) => lists.flat().map(r => String(r.id)).sort().join("\n");
+
 export function archiveDrift(job, was, now) {
   if (!was) return `Job ${job.id} wasn't in the archive that was built — build it again.`;
   for (const [key, one, many] of [["tickets", "a ticket", "tickets"], ["jhas", "an assessment", "assessments"], ["reports", "a report", "reports"]]) {
     if (now[key] > was[key]) return `Job ${job.id} has gained ${one} since the archive was built — build it again.`;
     if (now[key] < was[key]) return `Job ${job.id} has lost ${one}: its ${many} are not what the archive holds — build it again.`;
   }
+  // Which records, not only how many. One deleted and another filed on the
+  // same job leaves every count identical and the new one out of the zip.
+  // A build held from before ids were recorded has none, and refuses.
+  if (was.ids !== now.ids) return `Job ${job.id} holds different work than the archive does — build it again.`;
   return "";
 }
 
@@ -401,7 +409,7 @@ export async function buildArchive({ jobs, mode, from, to, by = "", onProgress =
     // moment before it deletes and refuse a job that has gained work since.
     // The counts are the lists as they came back, not what made it into the
     // zip: they are being compared with the same three reads later.
-    summary.jobCounts[String(job.dbId)] = { tickets: ticketRows.length, jhas: jhas.length, reports: reports.length };
+    summary.jobCounts[String(job.dbId)] = { tickets: ticketRows.length, jhas: jhas.length, reports: reports.length, ids: archiveIds(ticketRows, jhas, reports) };
 
     add(`${folder}/Job details.txt`, text(jobDetailsText({ job, record, tickets, jhas, reports, missing, notOnFile, meta })));
     summary.missing.push(...missing.map(m => `${job.id}: ${m}`));
@@ -436,6 +444,12 @@ export async function buildArchive({ jobs, mode, from, to, by = "", onProgress =
 // the owner's disk is the archive that was built, before anything is
 // cleared. Stored entries only (which is all makeZip writes); no zip64.
 export function verifyZip(bytes, manifest) {
+  const payloadIntact = (f, crc) => {
+    if (f.at + 30 > u8.length || u32(f.at) !== 0x04034B50) return false;
+    const start = f.at + 30 + u16(f.at + 26) + u16(f.at + 28);
+    if (start + f.size > u8.length) return false;
+    return crc32(u8.subarray(start, start + f.size)) === crc;
+  };
   const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
   const u16 = o => dv.getUint16(o, true);
@@ -461,7 +475,9 @@ export function verifyZip(bytes, manifest) {
     const size = u32(p + 24);
     const nameLen = u16(p + 28), extraLen = u16(p + 30), commentLen = u16(p + 32);
     const name = dec.decode(u8.subarray(p + 46, p + 46 + nameLen));
-    found.set(name, { crc, size });
+    // Where the entry's own bytes start, so the payload is read back
+    // rather than the directory's word for it taken.
+    found.set(name, { crc, size, at: u32(p + 42) });
     p += 46 + nameLen + extraLen + commentLen;
   }
   const problems = [];
@@ -471,6 +487,11 @@ export function verifyZip(bytes, manifest) {
     const f = found.get(m.name);
     if (!f) problems.push(`missing: ${m.name}`);
     else if (f.size !== m.size || f.crc !== m.crc) problems.push(`damaged: ${m.name}`);
+    // The stored bytes themselves: a payload altered after zipping keeps
+    // the directory's CRC, and the clear behind this check is a real
+    // delete. Nothing is deflated, so the payload follows its local
+    // header — 30 bytes, then the name and the extra field.
+    else if (!payloadIntact(f, m.crc)) problems.push(`damaged: ${m.name}`);
   }
   for (const name of found.keys()) if (!expected.has(name)) problems.push(`not from this build: ${name}`);
   return { ok: problems.length === 0, reason: "", checked: manifest.length, problems };

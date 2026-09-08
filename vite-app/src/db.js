@@ -2806,8 +2806,9 @@ export const Db = {
     // exactly what happens on a busy morning) would shift the offsets and drop
     // a still-unsigned ticket out of the chase without a word.
     const data = await fetchAllKeyset(async after => {
+      const later = (a, b) => (!a ? (b || null) : !b ? a : (Date.parse(a) >= Date.parse(b) ? a : b));
       let query = sbClient
-        .from("tickets").select("id, client_contact, chased_at, queried_at")
+        .from("tickets").select("id, client_contact, chased_at, queried_at, approval_sent_at")
         .eq("status", "Awaiting approval");
       if (after != null) query = query.gt("id", after);
       const { data: rows, error } = await query.order("id").limit(RESPONSE_ROW_CAP);
@@ -2820,7 +2821,11 @@ export const Db = {
     // question off the tracker before anyone had answered it.
     return data.map(t => ({
       id: t.id, contactLabel: t.client_contact ? t.client_contact.name : "",
-      chasedAt: t.chased_at || null, queriedAt: t.queried_at || null
+      // The first send is a nudge like any other: only the tracker's own
+      // chase paths write chased_at, so a link sent this morning from the
+      // editor read as never chased and was sent again — a fresh token over
+      // the one the rep was about to sign with. The later of the two.
+      chasedAt: later(t.chased_at, t.approval_sent_at), queriedAt: t.queried_at || null
     }));
   },
 

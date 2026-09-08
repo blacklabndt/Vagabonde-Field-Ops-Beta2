@@ -470,7 +470,10 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
         });
       } finally { Toasts.unmute(); }
       const parts = [`Sent to ${out.sent.length} of ${due.length}`];
-      if (out.stopped) parts.push(`stopped — ${out.remaining} not attempted`);
+      // Only when something really was left behind: the pool sets stopped
+      // when a worker meets Stop after the last item has already gone out,
+      // and "stopped — 0 not attempted" reads as a run cut short.
+      if (out.stopped && out.remaining) parts.push(`stopped — ${out.remaining} not attempted`);
       if (queried.length) parts.push(`${queried.length} left alone — the client has a question open`);
       if (recent.length) parts.push(`${recent.length} left alone — chased in the last 3 days`);
       if (noEmail.length) parts.push(`${noEmail.length} skipped — no client email on file`);
@@ -789,11 +792,21 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
                           onClick={() => setWithdrawAsk({ row: t, edit: false })}>
                           {withdrawingId === t.id ? "Cancelling…" : "Cancel approval"}
                         </Btn>
-                        <Btn variant="secondary" disabled={withdrawingId === t.id}
-                          title="Cancels the approval request and opens the ticket's job so it can be edited."
-                          onClick={() => setWithdrawAsk({ row: t, edit: true })}>
-                          Cancel and edit
-                        </Btn>
+                        {/* An Admin's alone. App.openTicket sends a Draft
+                            straight to the editor, and loadDraft refuses a
+                            ticket that is not the signed-in account's unless
+                            it is an Admin's — this row carries no
+                            technician_id to test against, and a Coordinator
+                            pressing it killed the signing link and then met
+                            "another technician's ticket". Everyone else
+                            keeps the plain Cancel approval beside it. */}
+                        {currentUser.role === "Admin" && (
+                          <Btn variant="secondary" disabled={withdrawingId === t.id}
+                            title="Cancels the approval request and opens the ticket to be edited."
+                            onClick={() => setWithdrawAsk({ row: t, edit: true })}>
+                            Cancel and edit
+                          </Btn>
+                        )}
                       </div>
                     )}
                     {rowNotes[t.id] && (

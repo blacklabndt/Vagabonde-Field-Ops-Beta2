@@ -8,7 +8,7 @@
 import "fake-indexeddb/auto";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { jobFolderPaths, monthFolderOf, uniqueName, csvCell, jobDetailsText, archiveZipName, verifyZip, buildArchive, mapLimit, archiveDrift } from "./archive.js";
+import { jobFolderPaths, monthFolderOf, uniqueName, csvCell, jobDetailsText, archiveZipName, verifyZip, buildArchive, mapLimit, archiveDrift, archiveIds } from "./archive.js";
 import { makeZip, crc32 } from "./zip.js";
 import { OfflineCache } from "./offlineCache.js";
 
@@ -116,13 +116,35 @@ test("a byte changed inside a file is caught", async () => {
   // directory's CRC no longer matches what the build recorded.
   const marker = zip.findIndex((b, i) => b === 0x25 && zip[i + 1] === 0x50 && zip[i + 2] === 0x44 && zip[i + 3] === 0x46);
   assert.ok(marker > 0);
-  // The check reads the directory, so damage the directory's CRC rather
-  // than the payload (a stored payload changed after zipping keeps its
-  // recorded CRC; the directory is what the check trusts).
-  const bad = manifest.map(m => m.name.endsWith(".pdf") ? { ...m, crc: (m.crc ^ 1) >>> 0 } : m);
-  const v = verifyZip(zip, bad);
+  // The payload itself, not the directory: a stored payload changed after
+  // zipping keeps its recorded CRC, and the check once trusted the
+  // directory's word — so a zip with a bad sector checked out and the
+  // clear behind it deleted the only copy.
+  const hurt = zip.slice();
+  hurt[marker + 5] ^= 1;
+  const v = verifyZip(hurt, manifest);
   assert.equal(v.ok, false);
   assert.deepEqual(v.problems, ["damaged: Athabasca Oil/2026-08/S-1004 - Tie-in/Reports/RT report.pdf"]);
+  // And the directory's CRC still counts.
+  const bad = manifest.map(m => m.name.endsWith(".pdf") ? { ...m, crc: (m.crc ^ 1) >>> 0 } : m);
+  assert.equal(verifyZip(zip, bad).ok, false);
+});
+
+test("a zip past what its trailer can count is refused, never written short", () => {
+  const many = Array.from({ length: 65536 }, (_, i) => ({ name: `f${i}`, data: new Uint8Array(0) }));
+  assert.throws(() => makeZip(many), /65,535/);
+  assert.doesNotThrow(() => makeZip(many.slice(0, 65535)));
+});
+
+test("the drift check sees a swap that leaves every count the same", () => {
+  const job = { id: "S-1004" };
+  const was = { tickets: 1, jhas: 0, reports: 2, ids: archiveIds([{ id: "T1" }], [], [{ id: "r-a" }, { id: "r-b" }]) };
+  const same = { tickets: 1, jhas: 0, reports: 2, ids: archiveIds([{ id: "T1" }], [], [{ id: "r-b" }, { id: "r-a" }]) };
+  assert.equal(archiveDrift(job, was, same), "", "order is nothing");
+  const swapped = { tickets: 1, jhas: 0, reports: 2, ids: archiveIds([{ id: "T1" }], [], [{ id: "r-a" }, { id: "r-c" }]) };
+  assert.match(archiveDrift(job, was, swapped), /different work/);
+  // A build held from before ids were recorded refuses.
+  assert.match(archiveDrift(job, { tickets: 1, jhas: 0, reports: 2 }, same), /different work/);
 });
 
 test("a file left out of the download is caught, and so is one that isn't from this build", async () => {
@@ -251,7 +273,9 @@ test("the build records what each job held, for the clear to check against", asy
     listReportsForJob: async () => []
   });
   const { summary } = await build(db);
-  assert.deepEqual(summary.jobCounts["1"], { tickets: 1, jhas: 1, reports: 0 });
+  const held = summary.jobCounts["1"];
+  assert.deepEqual({ tickets: held.tickets, jhas: held.jhas, reports: held.reports }, { tickets: 1, jhas: 1, reports: 0 });
+  assert.equal(typeof held.ids, "string", "which records, for the swap check, ride with the counts");
 });
 
 test("a job that has gained work since the build stops the clear", () => {

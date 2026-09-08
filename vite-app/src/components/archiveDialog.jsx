@@ -4,7 +4,7 @@ import { money } from "../data.js";
 import { Btn, Dialog, ErrorBox, Field } from "./common.jsx";
 import { saveBlob } from "../zip.js";
 import { OfflineCache } from "../offlineCache.js";
-import { buildArchive, archiveZipName, verifyZip, archiveDrift, mapLimit } from "../archive.js";
+import { buildArchive, archiveZipName, verifyZip, archiveDrift, archiveIds, mapLimit } from "../archive.js";
 
 // Archive — the Admin screen's dropdown. A year, or a date range; every job
 // raised in it is read in full and handed back as one zip, filed client →
@@ -241,7 +241,7 @@ export function ArchiveDialog({ mode, currentUser, onClose, onCleared }) {
         const [tickets, jhas, reports] = await Promise.all([
           Db.listTicketsForJob(j.dbId), Db.listJhasForJob(j.dbId), Db.listReportsForJob(j.dbId)
         ]);
-        const drift = archiveDrift(j, counts[String(j.dbId)], { tickets: tickets.length, jhas: jhas.length, reports: reports.length });
+        const drift = archiveDrift(j, counts[String(j.dbId)], { tickets: tickets.length, jhas: jhas.length, reports: reports.length, ids: archiveIds(tickets, jhas, reports) });
         return drift ? `${drift} Nothing has been removed.` : "";
       } catch (e) {
         return `Job ${j.id} couldn't be checked against the app before clearing: ${e.message || "the read failed"}. Nothing has been removed — try again when the connection is better.`;

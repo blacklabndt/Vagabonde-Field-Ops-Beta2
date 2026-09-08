@@ -1320,8 +1320,10 @@ export function App() {
     setActiveJob(job);
     if (t.status === "Draft") {
       // Same rule as startTicketForJob: a draft opened over another job's
-      // record would read that job's rep. The job page loads its own
-      // record, so land there instead and let the ticket be opened from it.
+      // record would read that job's rep. So the job's own record is read
+      // first and the draft opens over it — the editor, which loadDraft
+      // refuses for another technician's ticket unless this is an Admin;
+      // the tracker offers "Cancel and edit" to an Admin alone for that.
       try { setJobRecord(await Db.getJobRecord(job)); }
       catch (e) {
         console.error("Couldn't load the job record for that ticket:", e.message);
