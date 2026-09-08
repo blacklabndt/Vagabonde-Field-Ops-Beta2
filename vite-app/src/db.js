@@ -1692,7 +1692,9 @@ export const Db = {
 
   // Uploads the actual PDF to the private `reports` bucket, then records
   // the row. Falls back to storing metadata only if the browser gave us no
-  // File (the mobile screen's demo rows, or a same-name collision).
+  // File at all (the mobile screen's demo rows). An upload the bucket
+  // refuses is the save's failure — a row with no PDF behind it is a
+  // report the contractor can never be sent.
   async uploadReport({ jobDbId, jobNumber, file, welds, result, interpretedBy, send, sendTo, clientKey = null }) {
     // Started before the open check, awaited after it (see createTicket).
     const keyLookup = startKeyLookup("reports", "*", clientKey);
@@ -1717,7 +1719,10 @@ export const Db = {
       const { error: upErr } = await sbClient.storage.from("reports").upload(path, file);
       if (upErr) {
         if (/row-level security/i.test(upErr.message || "")) {
-          throw new Error("Your account doesn't have the Report upload or Job detail tab, so the file can't be stored — an admin can grant access in Users & access.");
+          // The `reports write` policy is the upload tab alone since
+          // 20260904135107. Naming the job tab as an alternative sent
+          // people to ask for one they already hold.
+          throw new Error("Your account doesn't have the Report upload tab, so the file can't be stored — an admin can grant it in Users & access.");
         }
         throw upErr;
       }
