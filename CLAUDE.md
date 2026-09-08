@@ -149,7 +149,11 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   role simulation before they ship. Permissive policies OR together — a
   new `FOR ALL` policy can silently void an older condition.
 - Money: integer-cents rounding (`gstOn(subtotal, ratePercent)` in `data.js`,
-  the rate from the client's row via `gstRateOf`); never float-sum.
+  the rate from the client's row via `gstRateOf`); never float-sum. A line's
+  own charge is `lineTotal` in data.js and `lineCents` in invoice.ts (both
+  exported, both whole cents times thousandths of a unit) and no third
+  formula: a float product put the foot bar, the emailed invoice, the CSV
+  and the archive a cent under the trigger's `round(quantity * unit_rate, 2)`.
 - Rates come from the Rate admin screen, never hardcoded. Billing is per
   truck, not per technician. PO = AFE. Hotel = subsistence. solo/soloOt
   are timesheet-only and never billed.
@@ -218,7 +222,11 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   person's recovery copies survive going out of range or signing back in —
   `cache.owner` and `claimFor` are the gate that keeps a stranger from them,
   not a boot-time wipe. Sign-out clears everything, and
-  still asks first when drafts or queued work would go with it.
+  still asks first when drafts or queued work would go with it. The outbox
+  has the same owner: `oqFlushOnce` asks who is signed in again before every
+  item, never once for the list, because a slow upload can span a change of
+  hands and the last person's work replayed under the next session is
+  refused by RLS and stamped "won't sync", one tap from being discarded.
 - auth-js does not remove the stored session when `signOut` fails — offline
   it refreshes an expired token first and returns the failure, leaving the
   session on disk for the next reload to sign straight back in. Every
@@ -251,6 +259,13 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
 - Team chat forgets: unpinned messages expire after 30 days, deleted by
   the chat-retention Edge Function (it also removes their chat-media
   pictures), fired nightly by the pg_cron job `chat-retention-nightly`.
+  Media goes before rows, so a storage failure strands no object nobody
+  sweeps, and the delete itself carries `.is("pinned_at", null)` again — a
+  message pinned during the seconds the media took went too. A row pinned in
+  that window has already lost its picture, so the run heals it: the dead
+  image_key/audio_key come off and a row left with nothing gets words naming
+  which one went, because `chat_messages_says_or_shows` refuses an empty row
+  and would fail the whole nightly pass.
   Message bodies are immutable by column grant — only pin columns are
   updatable, Admin-only. GIF search is KLIPY (Tenor's API is dead);
   the key lives in app_settings (see below), handed out by gif-search.
@@ -364,7 +379,11 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   transient (429 → "Resend is rate-limiting…", 5xx → "is unavailable…",
   carrying Resend's Retry-After, since only the message crosses the function
   boundary). It has a Stop button, and failures are named by ticket number
-  rather than counted.
+  rather than counted. What counts as an earlier nudge is
+  `later(chased_at, approval_sent_at)`: only the tracker's own chase paths
+  write `chased_at`, so reading it alone chased an approval the editor had
+  sent that morning and put a fresh token over the one the rep was signing
+  with.
 - Approval tokens are stored hashed (`sha256:` + hex, see
   `_shared/approvalToken.ts` and migration 20260902211209); the raw token
   exists only in the emailed link. The token is NOT single-use — signing
@@ -468,7 +487,11 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   believes it holds, so a superseded slice writes nothing, not even its own
   failure — and the folder write on `folder_id` still being null, because a
   reclaim leaves both slices believing "running": the one reclaimed while
-  making the folder gets zero rows back, removes its stray folder and stops,
+  making the folder gets zero rows back and stops. It removes that folder
+  only after reading the folder the run recorded and finding it is another
+  one; `ensureFolder` hands two slices inside a minute the same id, and an
+  error or no row leaves the folder alone, because the delete once took the
+  winner's backup — or the safety copy — with it,
   instead of splitting one backup across two folders. `backup_next_run_at` moves when a run STARTS, so a long night
   does not make tomorrow late and a failure does not stop tomorrow; the move
   is conditional on the due time the tick read, so two ticks that saw the
@@ -710,9 +733,16 @@ session has set `app.confirm_total_wipe = 'yes'`.
   radio says: oqFlushOnce checks `.plain` BEFORE isNetworkError, which calls
   any error "offline" while navigator.onLine is false — a refusal rethrown
   into a dead spot would otherwise stop the flush with no reason written.
+  The three field screens keep that same order (ticketMobile, jhaMobile,
+  uploadMobile): tested the other way round, a refusal met in a dead spot
+  was queued as work to retry and the recovery copy dropped.
 - Invoicing is `mark_tickets_invoiced(ids, invoiced)` (Admin, definer) —
   Approved ↔ Invoiced with `invoiced_at`; the approved-ticket immutability
-  policies are untouched and this RPC is the only door.
+  policies are untouched and this RPC is the only door. The tracker's
+  "Mark invoiced" and "Back to approved" are an Admin's to match: the row
+  buttons, the bulk button, the tick column's header, its cells and the
+  empty row's colSpan all read one `picking` flag, so the five cannot drift
+  and a Coordinator holding the tab is not offered a 42501.
 - Idempotent saves: tickets.client_key / reports.client_key /
   jhas.client_key (unique). The ticket editor and the JHA builder mint a
   key per unsaved record (kept in the recovery copy and the outbox
@@ -765,7 +795,9 @@ session has set `app.confirm_total_wipe = 'yes'`.
   count, which may be sitting on another year. Building again, or a
   completed clear, forgets it. The build keeps a manifest (name,
   size, CRC per entry); the dialog then makes the Admin pick the downloaded
-  zip and verifyZip reads its central directory back against the manifest.
+  zip and verifyZip reads its central directory back against the manifest
+  AND checksums each entry's stored bytes (`payloadIntact`), because a zip
+  with a bad sector kept a good directory and checked out "each intact".
   Only a zip that checks out, from a build with nothing unretrieved,
   unlocks the clear — behind a typed CLEAR — which is
   `archive_clear_jobs(ids)` (Admin, definer): it deletes those jobs and
@@ -779,14 +811,20 @@ session has set `app.confirm_total_wipe = 'yes'`.
   may be the one the drawer was pointing at.
 - The clear re-checks before it deletes: immediately before
   `archive_clear_jobs`, inside `liveOnly`, every job's ticket/JHA/report
-  counts are read again and compared with the build's (`archiveDrift`). Any
-  drift — or a read that failed — refuses, because the build and the button
-  can be hours apart and checking the zip cannot see work filed since.
+  counts AND the ids of what each one held (`archiveIds`, one sorted string
+  per job) are read again and compared with the build's (`archiveDrift`). Any
+  drift — or a read that failed, or a build from before the ids were
+  recorded — refuses, because the build and the button can be hours apart,
+  counts alone let a report deleted and another filed pass, and checking the
+  zip cannot see work filed since.
 - The build batches its per-ticket reads (`listTicketsForArchive`,
   `listCrewForTickets`, one call each per job) and renders the field
   invoices at concurrency 4 through `mapLimit` — each is an Edge Function
   call. A busy year is still thousands of files and can run to an hour;
-  keep that expectation in the dialog's wording.
+  keep that expectation in the dialog's wording. The zip has no zip64:
+  makeZip refuses past 65,535 entries or 4 GB (66,000 files were masked into
+  a 16-bit field and read back as 464), and buildArchive refuses as the entry
+  that would break the trailer is added, not after the downloads.
 - The archive build reads inside `OfflineCache.liveOnly(fn)`: a remembered
   copy must never stand in for the server's answer when the clear behind it
   is a real delete. Inside it readThrough rethrows instead of falling back,
