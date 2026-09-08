@@ -71,12 +71,16 @@ Deno.serve(async (req) => {
       // dashboard action (Authentication → Users → unban).
       if (profErr.code !== "23503") throw profErr;
       const { data: who } = await admin.from("profiles").select("name").eq("id", userId).maybeSingle();
-      const { error: banErr } = await admin.auth.admin.updateUserById(userId, { ban_duration: "876000h" });
-      if (banErr) throw banErr;
+      // The profile first, then the ban: half of this can land, and no tabs
+      // plus a stamp is the half that reads as locked everywhere — a ban
+      // alone leaves a live token writing with every tab for the rest of
+      // its hour, and the users screen calling the account ordinary.
       const { error: lockErr } = await admin.from("profiles")
         .update({ tab_access: [], deactivated_at: new Date().toISOString() })
         .eq("id", userId);
       if (lockErr) throw lockErr;
+      const { error: banErr } = await admin.auth.admin.updateUserById(userId, { ban_duration: "876000h" });
+      if (banErr) throw banErr;
       return new Response(JSON.stringify({
         ok: true, deactivated: true,
         message: `${who?.name ?? "This person"} has tickets, JHAs or jobs on file, so the account was locked instead of deleted: they can no longer sign in, and every tab is off. Their name stays on the records.`

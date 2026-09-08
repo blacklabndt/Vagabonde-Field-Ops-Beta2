@@ -40,6 +40,11 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
   Nothing is waiting there now. The latest is
+  `20260908063429_a_locked_account_reads_only_its_own_row.sql` —
+  `profiles_select` is `is_staff()` or the caller's own row, where it was
+  "anybody signed in": a locked account's token stays good for an hour, and
+  it read the crew's serials and id codes until then. Probes beside it
+  (locked 1 row, own; staff all). Before it,
   `20260908053815_the_token_hook_reads_profiles.sql` — `grant select` on
   profiles (and USAGE on public) to `supabase_auth_admin`, the role Auth
   calls the SECURITY INVOKER `custom_access_token_hook` as; live had it all

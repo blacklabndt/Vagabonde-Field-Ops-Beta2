@@ -76,8 +76,11 @@ Deno.serve(async (req) => {
     // every row — so the filter is the policy.
     const { data: subs, error: sErr } = await admin
       .from("push_subscriptions")
-      .select("id, endpoint, p256dh, auth, profiles!inner(tab_access)")
+      .select("id, endpoint, p256dh, auth, profiles!inner(tab_access, deactivated_at)")
       .neq("profile_id", msg.profile_id)
+      // A locked account is not a recipient, whatever tabs its row still
+      // holds — the lock never removed its phone's subscription.
+      .is("profiles.deactivated_at", null)
       .contains("profiles.tab_access", ["chat"]);
     if (sErr) throw sErr;
     if (!subs || subs.length === 0) return json({ ok: true, sent: 0 });
