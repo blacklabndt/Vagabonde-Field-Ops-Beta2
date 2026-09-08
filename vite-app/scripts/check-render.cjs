@@ -166,9 +166,14 @@ for (const file of walk(root).filter(f => /\.jsx$/.test(f))) {
     // Both shapes of early return: the whole thing on one line, and a brace
     // opened here whose `return` is on the next line. App's own
     // `if (checkingSession) {` is the second, and it was invisible.
-    if (firstReturn === null
-      && (/^  if \(.*\) (?:return\b|\{[^}]*\breturn\b)/.test(l)
-        || (/^  if \(.*\) \{\s*$/.test(l) && /^\s*return\b/.test(lines[i + 1] || "")))) firstReturn = i + 1;
+    if (firstReturn === null && /^  if \(.*\) (?:return\b|\{[^}]*\breturn\b)/.test(l)) firstReturn = i + 1;
+    // The brace form: a `return` anywhere inside the block, not only on the
+    // very next line — ContactCard puts four comment lines between the two.
+    if (firstReturn === null && /^  if \(.*\) \{\s*$/.test(l)) {
+      for (let j = i + 1; j < lines.length && !/^  \}/.test(lines[j]); j++) {
+        if (/^    return\b/.test(lines[j])) { firstReturn = i + 1; break; }
+      }
+    }
     if (firstReturn !== null && HOOK_CALL.test(l)) {
       report(file, `line ${i + 1}: a hook in ${fn} sits below the early return at line ${firstReturn}`);
     }

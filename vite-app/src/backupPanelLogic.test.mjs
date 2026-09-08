@@ -217,8 +217,11 @@ test("a refresh of the backup state does not rewrite the schedule boxes", () => 
   // of them: an unconditional one above it would rewrite the boxes again.
   const seedBlock = /if \(seed\) \{([\s\S]*?)\n {8}\}/.exec(load[2]);
   assert.ok(seedBlock, "load() must still guard its form fill with the seed flag");
-  assert.equal((load[2].match(/setForm\(/g) || []).length,
-    (seedBlock[1].match(/setForm\(/g) || []).length,
+  const inSeed = (seedBlock[1].match(/setForm\(/g) || []).length;
+  // At least one, or the boxes are never filled at all — the count match
+  // alone is satisfied by there being no setForm anywhere in load().
+  assert.ok(inSeed > 0, "the seed block must still fill the form");
+  assert.equal((load[2].match(/setForm\(/g) || []).length, inSeed,
     "every setForm in load() must sit inside the seed block");
   // Exactly two callers seed: the mount effect and the save.
   assert.equal((src.match(/load\(true\)/g) || []).length, 2);

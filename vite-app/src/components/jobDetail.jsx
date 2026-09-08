@@ -734,7 +734,13 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
           borderTop: "1px solid color-mix(in srgb, var(--color-text) 12%, transparent)",
           display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap"
         }}>
-          <Btn variant="secondary" disabled={statusBusy} onClick={() => setDeleting(true)}>Delete job</Btn>
+          {/* A failed read leaves the three lists empty, and the dialog reads
+              that as "nothing has been filed" with its button live and no
+              typed confirmation. The banner above says so, but the dialog
+              covers it — this is what actually stops the press. */}
+          <Btn variant="secondary" disabled={statusBusy || !!statusError}
+            title={statusError ? "Reload the job first — what's filed against it couldn't be read." : undefined}
+            onClick={() => setDeleting(true)}>Delete job</Btn>
           <span style={{ fontSize: 12, color: "color-mix(in srgb, var(--color-text) 55%, transparent)" }}>
             {isAdmin
               ? "Anything filed against this job can be moved to another one first."
