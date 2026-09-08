@@ -30,3 +30,10 @@ select r.folder_name, r.counts -> 'files' as files, r.counts -> 'spot' as spot,
   from public.backup_runs r left join public.backup_run_files f on f.run_id = r.id
  where r.kind = 'backup' and r.status = 'complete'
  group by r.id order by r.started_at desc limit 1;
+
+-- Run live 8 Sept 2026, after the first two runs on this code:
+--   1: t.  2: permission denied for table backup_run_files.  3: t.
+--   4, first run (no base index): 25 files, reused 0, spot "nothing carried
+--      over to check", 25 rows, 25 hashed.
+--   4, second run: 25 files, reused 7 (every one with a hash), spot
+--      "ok: reports%2FBT5-9005%2F1787256136677-report.pdf", 25 rows, 25 hashed.
