@@ -143,6 +143,11 @@ export function UsersAccessScreen({ currentUser }) {
     if (!account) return;
     if (account.id === currentUser.id) { setError("You can't remove your own account."); return; }
     setNote("");
+    // The red box outlives a change of account on purpose, so the retry has
+    // to clear it here: a half-landed lock that finished on the second press
+    // left its own "press Remove account again" standing over the note
+    // saying it had.
+    setError("");
     if (!confirm(`Remove ${account.displayName}'s account? They will no longer be able to sign in — this can't be undone. (An account with tickets or JHAs on file is locked rather than deleted, so the records keep their name.)`)) return;
     try {
       const res = await Db.deleteUserAccount(account.id);
