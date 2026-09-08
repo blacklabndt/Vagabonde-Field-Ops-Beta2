@@ -2260,9 +2260,10 @@ export const Db = {
       if (existing) contractorId = existing.id;
       else {
         const { data: created, error } = await sbClient.from("contractors").insert({ name }).select("id").single();
-        invalidate("contractors");
         if (error) throw error;
         contractorId = created.id;
+        // The cached list is short one contractor now — same as createJob.
+        invalidate("contractors");
       }
     } else if (!name) {
       contractorId = null;
