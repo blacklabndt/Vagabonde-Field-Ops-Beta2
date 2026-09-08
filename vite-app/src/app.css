@@ -84,17 +84,6 @@ input[type=range] { accent-color: var(--color-accent); }
   -webkit-mask: var(--wordmark) left center / contain no-repeat;
   mask: var(--wordmark) left center / contain no-repeat;
 }
-/* The "?" beside the section name. A .btn-secondary squared off into a
-   circle: the DS button's padding is built for a word, so a single glyph
-   comes out as a lopsided oval. 40px is the tap target the rest of the bar
-   uses, and flex: none keeps it from being squeezed to nothing when a long
-   section name and the outbox badge share a phone's width. */
-.topbar-help {
-  flex: none;
-  width: 40px; height: 40px; padding: 0;
-  border-radius: 50%;
-  font-size: 16px; line-height: 1;
-}
 .seg-theme {
   display: inline-flex; border: 1px solid var(--color-divider); overflow: hidden;
 }
@@ -435,9 +424,11 @@ tbody tr.clickable { cursor: pointer; }
 }
 .drawer > button:not(.active):hover { background: color-mix(in srgb, var(--color-text) 6%, transparent); }
 .drawer > button:active { background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
+/* Wraps rather than squeezes: the row carries a button and two labelled
+   switches now, which is wider than a phone's drawer. */
 .drawer-foot {
   flex: none; padding: 14px 18px 0;
-  display: flex; align-items: center; gap: 12px; font-size: 13px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px; row-gap: 10px; font-size: 13px;
 }
 /* Only the first footer block pushes to the bottom; the theme row sits under
    it rather than fighting it for the same auto margin. */
@@ -497,10 +488,6 @@ tbody tr.clickable { cursor: pointer; }
 
   /* Anything typed or tapped gets a thumb-sized target. */
   .input, .btn, select.input { min-height: 46px; font-size: 16px; }
-  /* …except the "?" circle, which that floor stretched into a 40×46 oval.
-     It matches the initials chip beside it (30px, per Kyle), so the two
-     read as one row of small marks rather than a button and a badge. */
-  .topbar-help { min-height: 0; width: 30px; height: 30px; font-size: 14px; }
   .page { padding: 16px 12px 56px; }
   .page h2 { font-size: 27px; }
   .job-record-grid { gap: 8px !important; }

@@ -27,9 +27,11 @@ Screens: the nine from the original design handoff — dialogs, ticket
 numbering, rate calculation, light/dark theme — plus eight that grew out of
 running it: Files, Contacts, Equipment, Timesheets, Open tickets, the admin
 billing tracker, Team chat, and the Admin screen the app is configured from.
-And two easter eggs nobody should document further. Every screen has a
-**?** in the top bar that explains it in under two hundred words
-(`src/help.js`, one entry per screen, tested to stay short), and the drawer's
+And two easter eggs nobody should document further. The first time an account opens a
+screen it gets a popup explaining it in under two hundred words, with **Ok**
+and **No more tips** (`src/help.js`, one entry per screen, tested to stay
+short; `src/helpTips.js` remembers which screens a person has met), and the
+drawer's
 **Feature request** button mails the owner whatever the crew wishes the app
 did, under their own name.
 
@@ -560,7 +562,9 @@ vite-app/
     route.js                the hash routes: what the address bar says, what the app
                             does with it, and when a screen change replaces the
                             entry rather than pushing one
-    help.js                 the "?" text for every screen, under 200 words each
+    help.js                 the screen-tip text for every screen, under 200 words each
+    helpTips.js             which screens an account has been introduced to, and the
+                            "No more tips" switch
     numberInput.js          which keystrokes a number box accepts (step, no minus)
     ticketFingerprint.js    what a queued ticket edit started from, so the replay
                             can tell it wrote over somebody else's save
@@ -609,7 +613,7 @@ vite-app/
                             two restores (everything, or chosen jobs)
       archiveDialog.jsx     Build the archive zip, check it, then unlock the clear
       queuePanel.jsx        The offline-queue badge and its what's-waiting panel
-      helpDialog.jsx        The "?" panel, one screen's entry from help.js
+      helpTip.jsx           The first-visit popup, one screen's entry from help.js
       featureRequest.jsx    The drawer's Feature request form
       flappy880.jsx         One of the two easter eggs
   e2e/                      Playwright against the live project — auth.setup.js signs

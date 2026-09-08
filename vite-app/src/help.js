@@ -2,8 +2,9 @@
 //
 // The three markdown files that explain this app live in the repository,
 // where nobody in the field or the office will ever read them. This is the
-// same knowledge where the question actually gets asked: behind the "?" in
-// the top bar, on the screen it is about.
+// same knowledge where the question actually gets asked: the popup that
+// meets an account the first time it opens a screen (helpTips.js), on the
+// screen it is about.
 //
 // Pure data on purpose — no imports, no JSX, nothing to render. That keeps
 // it testable next door (help.test.mjs checks every screen in TABS has an

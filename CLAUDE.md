@@ -371,14 +371,21 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   is under half the one before. Five points on a daily schedule was too
   short to read as a trend.
 - In-app help is `vite-app/src/help.js`, pure data keyed by screen key with
-  a test that every TABS key has an entry under 200 words; the top bar's "?"
-  opens it for the active screen. Keep it true when a screen changes. The
-  button is for the first two days: `helpWindow.js` (pure, tested) keeps the
-  account's first sight of it on this device as a `Store` preference
-  (`help.firstSeen.<id>`, localStorage — sign-out clears the device cache,
-  not Store, so signing back in does not restart the clock) and
-  `helpOffered` nulls `helpEntry` in App.jsx after `HELP_WINDOW_MS`, on
-  every screen at once. A record that is not a time keeps the button. The
+  a test that every TABS key has an entry under 200 words. Keep it true when
+  a screen changes. There is no help button: the words arrive as a popup
+  (`components/helpTip.jsx`) the first time an account opens a screen on
+  this device, "Ok" to close it and "No more tips" to stop them everywhere.
+  The records are `Store` preferences (localStorage), per account, in
+  `helpTips.js` (pure, tested): `help.seen.<id>.<screen>` for a screen
+  already introduced and `help.tipsOff.<id>` for the switch — sign-out
+  clears the device cache, not Store, so signing back in does not start the
+  tour again, and the next person on the tablet gets their own. Only a
+  stored `true` counts, so a bad record leaves the help where it is.
+  App.jsx marks a screen seen as the popup goes UP, not on Ok, so Escape or
+  the backdrop does not bring it back; the tip is gated on the screen it was
+  raised for still being the screen underneath. The drawer's "Screen tips"
+  switch is the way back and forgets the screens already seen, because
+  anyone reaching for it has opened most of them once. The
   error log pages by keyset (`listFunctionErrors(limit, { before,
   functionName })`, the timestamp double-quoted inside the or()) and filters
   by function name.

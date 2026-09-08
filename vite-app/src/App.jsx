@@ -8,9 +8,9 @@ import { forgetHeldDrafts } from "./chatDrafts.js";
 import { forgetDosimetryAsked } from "./dosimetryPrompt.js";
 import { QueueBadge, QueueDialog } from "./components/queuePanel.jsx";
 import { FeatureRequestDialog } from "./components/featureRequest.jsx";
-import { HelpDialog } from "./components/helpDialog.jsx";
+import { HelpTip } from "./components/helpTip.jsx";
 import { helpFor } from "./help.js";
-import { helpOffered, noteHelpFirstSeen } from "./helpWindow.js";
+import { tipDue, noteTipSeen, stopTips, startTips, tipsAreOff } from "./helpTips.js";
 import { OfflineQueue } from "./offlineQueue.js";
 import { ticketFingerprint, replacedNewerWork } from "./ticketFingerprint.js";
 import { overwroteKey } from "./overwriteNote.js";
@@ -320,18 +320,33 @@ export function App() {
   useEffect(() => SwUpdates.subscribe(setUpdateReady), []);
   const [showQueue, setShowQueue] = useState(false);
   const [showFeature, setShowFeature] = useState(false);
-  // The "?" beside the section name. Held here, above the early returns,
+  // The screen tip: the first time this account opens a screen on this
+  // device, the popup that says what the screen is for. It holds the screen
+  // key it is about rather than a flag, so a screen that changes out from
+  // under it takes the tip with it. Held here, above the early returns,
   // with every other hook — one put below a return crashed the ticket
-  // screen. It is not part of the address: help is a thing you open on the
-  // screen you are on, not somewhere a reload should land you.
-  const [showHelp, setShowHelp] = useState(false);
-  // When this account first saw the "?" on this device. Two days after
-  // that the button leaves every screen (helpWindow.js); the record is a
-  // Store preference, so sign-out does not restart the clock.
-  const [helpFirstSeen, setHelpFirstSeen] = useState(null);
+  // screen. It is not part of the address: a tip is a thing that happens on
+  // the screen you are on, not somewhere a reload should land you.
+  const [tipScreen, setTipScreen] = useState(null);
+  // Bumped when the drawer switches tips back on, so the screen underneath
+  // introduces itself again there and then rather than at the next change.
+  const [tipsRestarted, setTipsRestarted] = useState(0);
+  // Raised as the popup goes up, not when Ok is pressed: a tip closed with
+  // Escape or the backdrop has still been seen, and coming back on the next
+  // visit is how a tip turns into a nuisance. The records are per account
+  // per screen in Store (helpTips.js), so sign-out does not start the tour
+  // again and the next person on the tablet gets their own.
+  const userId = currentUser ? currentUser.id : null;
   useEffect(() => {
-    setHelpFirstSeen(noteHelpFirstSeen(Store, currentUser ? currentUser.id : null, Date.now()));
-  }, [currentUser ? currentUser.id : null]);
+    if (!userId || !helpFor(screen) || !tipDue(Store, userId, screen)) { setTipScreen(null); return; }
+    noteTipSeen(Store, userId, screen);
+    setTipScreen(screen);
+  }, [userId, screen, tipsRestarted]);
+  // What the drawer's switch shows. Read from the store rather than assumed,
+  // so the switch tells the truth about an account that turned tips off on
+  // this tablet weeks ago.
+  const [tipsSilenced, setTipsSilenced] = useState(false);
+  useEffect(() => { setTipsSilenced(tipsAreOff(Store, userId)); }, [userId, tipsRestarted]);
   const [egg, setEgg] = useState(false);
   // Every save in the app arrives here, from db.js by way of the toast bus.
   const [toast, setToast] = useState(null);
@@ -1109,11 +1124,6 @@ export function App() {
   // The drawer never lists the contextual screens, whatever the account may
   // access — see CONTEXT_TABS. They are reached from a job, deliberately.
   const allowedTabs = TABS.filter(t => myTabs.includes(t.key) && !CONTEXT_TABS.includes(t.key));
-  // Read from `screen` rather than remembered when the button was pressed,
-  // so the panel and the section name in the bar are always the same screen.
-  // Null once this account's two days are up — the button and its dialog
-  // leave every screen together.
-  const helpEntry = helpOffered(helpFirstSeen, Date.now()) ? helpFor(screen) : null;
   const goto = key => { if (myTabs.includes(key)) { if (key === "ticket") setActiveTicket(null); setContextScreen(""); setScreen(key); setMenuOpen(false); } };
   // Reached from a button inside another screen (a job card, "Start JHA",
   // "New ticket") rather than the tab menu — always allowed, even when the
@@ -1501,20 +1511,6 @@ export function App() {
           style={{ fontFamily: "var(--font-heading)", fontWeight: 600, fontSize: 14, letterSpacing: ".04em", textTransform: "uppercase", color: "var(--color-accent)" }}>
           {(TABS.find(t => t.key === screen) || {}).label || ""}
         </span>
-        {/* What this screen is for, beside its name — the one place the
-            question gets asked. Only where there is something to say: a
-            screen with no entry in help.js has no button rather than a
-            button that opens nothing. The panel travels with the app, so
-            it answers in a truck with no signal too. */}
-        {helpEntry && (
-          <button
-            type="button"
-            className="btn btn-secondary topbar-help"
-            aria-label="How this screen works"
-            title="How this screen works"
-            onClick={() => setShowHelp(true)}
-          >?</button>
-        )}
         {cacheState.servingCached && (
           <TagX variant="outline" title={`No connection. Showing what this device saved at ${new Date(cacheState.at).toLocaleTimeString("en-CA", { hour: "2-digit", minute: "2-digit", hour12: false })}.`}>
             Offline
@@ -1606,7 +1602,18 @@ export function App() {
                   phone. The tabs are what the account may open; this is
                   for everyone. */}
               <Btn variant="secondary" onClick={() => { setMenuOpen(false); setShowFeature(true); }}>Feature request</Btn>
-              <span style={{ marginLeft: "auto", color: "color-mix(in srgb, var(--color-text) 65%, transparent)" }}>Animations</span>
+              {/* The way back from "No more tips" — and the only one, so it
+                  forgets the screens already introduced as it goes: an
+                  account reaching for this has opened most of them once, and
+                  a switch that turned tips on and then showed none would
+                  read as broken. */}
+              <span style={{ marginLeft: "auto", color: "color-mix(in srgb, var(--color-text) 65%, transparent)" }}>Screen tips</span>
+              <Switch on={!tipsSilenced} label="Screen tips"
+                onClick={() => {
+                  if (tipsSilenced) { startTips(Store, userId, TABS.map(t => t.key)); setTipsSilenced(false); setTipsRestarted(n => n + 1); setMenuOpen(false); }
+                  else { stopTips(Store, userId); setTipsSilenced(true); setTipScreen(null); }
+                }} />
+              <span style={{ color: "color-mix(in srgb, var(--color-text) 65%, transparent)" }}>Animations</span>
               <Switch on={motion === "on"} onClick={() => setMotion(motion === "on" ? "off" : "on")} label="Animations" />
             </div>
             {/* Which build this device is on — name, commit, day — so "is
@@ -1669,12 +1676,17 @@ export function App() {
       {showFeature && (
         <FeatureRequestDialog onClose={() => setShowFeature(false)} />
       )}
-      {/* Gated on the entry as well as the flag: a screen that changes out
-          from under an open panel — an account that loses a tab mid-session
-          is moved to another screen — would otherwise leave a dialog with
-          nothing in it and no obvious way out. */}
-      {showHelp && helpEntry && (
-        <HelpDialog screenKey={screen} onClose={() => setShowHelp(false)} />
+      {/* The screen's own introduction, the first time this account opens
+          it. Gated on the screen the tip was raised for still being the
+          screen underneath: one that changes out from under it — an account
+          that loses a tab mid-session is moved elsewhere — would otherwise
+          leave the last screen's words standing over the new one. */}
+      {tipScreen && tipScreen === screen && (
+        <HelpTip
+          screenKey={tipScreen}
+          onOk={() => setTipScreen(null)}
+          onNoMore={() => { stopTips(Store, userId); setTipsSilenced(true); setTipScreen(null); }}
+        />
       )}
       {updateReady && !updateDeferred && <UpdateBanner onLater={() => setUpdateDeferred(true)} />}
       <Toast message={toast && toast.text} tone={toast && toast.tone} onDone={() => setToast(null)} />

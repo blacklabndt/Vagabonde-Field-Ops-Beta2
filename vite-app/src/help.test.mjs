@@ -1,7 +1,7 @@
 // The in-app help is only help if it is there for the screen somebody is
 // standing on. A new screen added to TABS with no entry beside it would
-// simply drop the "?" — no error, no blank dialog, nothing to notice — so
-// the check is here rather than left to somebody spotting it.
+// simply open with no tip at all — no error, no blank popup, nothing to
+// notice — so the check is here rather than left to somebody spotting it.
 //
 // Run with: node --test src/help.test.mjs
 
@@ -49,7 +49,7 @@ test("no entry runs past six paragraphs or two hundred words", () => {
   }
 });
 
-test("helpFor answers null for a screen with no entry, so the button can hide", () => {
+test("helpFor answers null for a screen with no entry, so a screen can open with no tip", () => {
   assert.equal(helpFor("board"), HELP.board);
   assert.equal(helpFor("nothing-like-this"), null);
   assert.equal(helpFor(undefined), null);
