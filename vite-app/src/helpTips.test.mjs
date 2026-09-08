@@ -1,12 +1,12 @@
-// A screen introduces itself once, and "No more tips" means every screen.
-// The records are per account on this device, so a shared tablet does not
-// hand the next person somebody else's tour. Run with:
-// node --test src/helpTips.test.mjs
+// A screen says its piece once per run of the app and comes back on the
+// next launch; "No more tips" ends them everywhere for good. The kill
+// switch is per account on this device, so a shared tablet does not silence
+// the next person's help. Run with: node --test src/helpTips.test.mjs
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  tipSeenKey, tipsOffKey, tipsAreOff, tipDue, noteTipSeen, stopTips
+  tipsOffKey, tipsAreOff, tipDue, noteTipSeen, stopTips, tipRun
 } from "./helpTips.js";
 
 function fakeStore() {
@@ -18,30 +18,41 @@ function fakeStore() {
   };
 }
 
-test("a screen owes its tip until it has been seen", () => {
+test("a screen speaks once a run, and the other screens still speak", () => {
   const store = fakeStore();
-  assert.equal(tipDue(store, "abc", "board"), true);
-  noteTipSeen(store, "abc", "board");
-  assert.equal(tipDue(store, "abc", "board"), false);
-  // Another screen is a separate introduction.
-  assert.equal(tipDue(store, "abc", "ticket"), true);
+  const run = tipRun();
+  assert.equal(tipDue(store, "abc", "board", run), true);
+  noteTipSeen(run, "board");
+  assert.equal(tipDue(store, "abc", "board", run), false);
+  // Leaving a screen and coming back to it is not a second introduction.
+  assert.equal(tipDue(store, "abc", "board", run), false);
+  // Every other screen is still owed its own.
+  assert.equal(tipDue(store, "abc", "ticket", run), true);
 });
 
-test("each account on the tablet has its own screens seen", () => {
+test("the next run of the app starts the tips over", () => {
   const store = fakeStore();
-  noteTipSeen(store, "abc", "board");
-  assert.equal(tipDue(store, "def", "board"), true);
-  assert.notEqual(tipSeenKey("abc", "board"), tipSeenKey("def", "board"));
+  const first = tipRun();
+  noteTipSeen(first, "board");
+  noteTipSeen(first, "chat");
+  // A reload, a fresh tab, the icon on a tablet: a new run, nothing said.
+  const second = tipRun();
+  assert.equal(tipDue(store, "abc", "board", second), true);
+  assert.equal(tipDue(store, "abc", "chat", second), true);
+  // Nothing about a run is written down.
+  assert.deepEqual(Object.keys(store.rows), []);
 });
 
-test("no more tips silences every screen, for that account alone", () => {
+test("no more tips is the kill switch, this account alone", () => {
   const store = fakeStore();
   stopTips(store, "abc");
   assert.equal(tipsAreOff(store, "abc"), true);
-  assert.equal(tipDue(store, "abc", "board"), false);
-  assert.equal(tipDue(store, "abc", "chat"), false);
+  assert.equal(tipDue(store, "abc", "board", tipRun()), false);
+  assert.equal(tipDue(store, "abc", "chat", tipRun()), false);
+  // And it outlives the run that pressed it — the point of writing it down.
+  assert.equal(tipDue(store, "abc", "board", tipRun()), false);
   assert.equal(tipsAreOff(store, "def"), false);
-  assert.equal(tipDue(store, "def", "board"), true);
+  assert.equal(tipDue(store, "def", "board", tipRun()), true);
   assert.notEqual(tipsOffKey("abc"), tipsOffKey("def"));
 });
 
@@ -49,28 +60,17 @@ test("a record that is not the word yes leaves the help where it is", () => {
   const store = fakeStore();
   store.save(tipsOffKey("abc"), "quiet");
   assert.equal(tipsAreOff(store, "abc"), false);
-  store.save(tipSeenKey("abc", "board"), "sort of");
-  assert.equal(tipDue(store, "abc", "board"), true);
+  assert.equal(tipDue(store, "abc", "board", tipRun()), true);
 });
 
-// The switch is one-way on purpose: there is no drawer control to start the
-// tips again, so nothing in this module may quietly offer one.
-test("stopping the tips is the last word on them", () => {
+test("no account, no screen and no run each mean nothing is owed", () => {
   const store = fakeStore();
-  stopTips(store, "abc");
-  stopTips(store, "abc");
-  assert.equal(tipsAreOff(store, "abc"), true);
-  assert.equal(tipDue(store, "abc", "board"), false);
-  // A screen visited after the switch went off is not marked seen by the
-  // popup that never appeared, but it stays quiet all the same.
-  assert.equal(tipDue(store, "abc", "equipment"), false);
-});
-
-test("no account means no record and nothing due", () => {
-  const store = fakeStore();
-  assert.equal(tipDue(store, null, "board"), false);
-  assert.equal(tipDue(store, "abc", ""), false);
-  noteTipSeen(store, null, "board");
+  assert.equal(tipDue(store, null, "board", tipRun()), false);
+  assert.equal(tipDue(store, "abc", "", tipRun()), false);
+  // A missing run is not an excuse to stay silent — the screen has said
+  // nothing, so it is owed.
+  assert.equal(tipDue(store, "abc", "board", null), true);
+  noteTipSeen(null, "board");
   stopTips(store, "");
   assert.deepEqual(Object.keys(store.rows), []);
 });

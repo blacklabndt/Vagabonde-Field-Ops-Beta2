@@ -1,26 +1,31 @@
-// The screen tips. The first time an account opens a screen on this device
-// it gets one popup saying what that screen is for — the words in help.js —
-// with "Ok" to close it and "No more tips" to stop them on every screen at
-// once, for good. There is no clock: a screen already introduced stays
-// quiet, and a screen nobody has opened yet still has its introduction
-// waiting.
+// The screen tips. Each screen says what it is for — the words in help.js —
+// in a popup, once per run of the app: "Ok" closes it and that screen stays
+// quiet until the app is opened again, while the other screens still
+// introduce themselves in the meantime. "No more tips" is the kill switch:
+// no screen, ever again, for that account on this device.
 //
-// Two kinds of record, both device preferences in Store (localStorage) and
-// both kept per account: `help.seen.<id>.<screen>` for a screen that has
-// been introduced, `help.tipsOff.<id>` for an account that has heard
-// enough. Store is not the device cache — sign-out empties the cache and
-// leaves these — so signing out and back in does not start the tour again,
-// while another account on the same tablet gets its own.
+// So there are two kinds of record, and only one of them is kept. Which
+// screens have spoken during this run lives in memory alone (`tipRun()`
+// below), which is what makes the tips come back on the next launch — a
+// reload, a fresh tab, the icon on a tablet. The kill switch is a device
+// preference in Store (localStorage), `help.tipsOff.<id>`, kept per
+// account: Store is not the device cache — sign-out empties the cache and
+// leaves this — so signing out and back in does not start the tips again
+// for somebody who has turned them off, while another account on the same
+// tablet is asked for itself.
 //
-// Pure on purpose: App.jsx hands in the Store, and the test next door
-// reaches everything.
-
-export function tipSeenKey(userId, screenKey) {
-  return "help.seen." + userId + "." + screenKey;
-}
+// Pure on purpose: App.jsx hands in the Store and the run, and the test
+// next door reaches everything.
 
 export function tipsOffKey(userId) {
   return "help.tipsOff." + userId;
+}
+
+// The screens that have already spoken this run. A plain Set behind a
+// factory so App.jsx does not have to know that, and so a new account
+// signing in on the same device can simply be given a new one.
+export function tipRun() {
+  return new Set();
 }
 
 // Are tips switched off for this account on this device? Only a stored
@@ -31,27 +36,29 @@ export function tipsAreOff(store, userId) {
   return store.load(tipsOffKey(userId), false) === true;
 }
 
-// Does this screen still owe this account its introduction? Whether the
-// screen has anything to say is the caller's question — helpFor answers
-// that — so this one is only about the records.
-export function tipDue(store, userId, screenKey) {
+// Should this screen introduce itself now? Whether it has anything to say
+// is the caller's question — helpFor answers that — so this one is only
+// about the switch and what has already been said this run.
+export function tipDue(store, userId, screenKey, run) {
   if (!userId || !screenKey) return false;
   if (tipsAreOff(store, userId)) return false;
-  return store.load(tipSeenKey(userId, screenKey), false) !== true;
+  return !(run && run.has(screenKey));
 }
 
-// This screen has now been introduced. App.jsx writes it as the popup goes
-// up rather than when Ok is pressed, so a tip closed with Escape or the
-// backdrop does not come back the next time the screen is opened.
-export function noteTipSeen(store, userId, screenKey) {
-  if (!userId || !screenKey) return;
-  store.save(tipSeenKey(userId, screenKey), true);
+// This screen has spoken. App.jsx notes it as the popup goes up rather than
+// when Ok is pressed, so a tip closed with Escape or the backdrop is not
+// still owed — leaving and coming back to a screen in the same run should
+// not raise it a second time.
+export function noteTipSeen(run, screenKey) {
+  if (!run || !screenKey) return;
+  run.add(screenKey);
 }
 
-// "No more tips": one press, every screen, this account on this device.
-// There is deliberately no way back — an account that has said it knows the
-// app is not asked again, and a switch offering to start the tips over is
-// one more control in the drawer for something nobody comes back to.
+// "No more tips": one press, every screen, every run from here on, this
+// account on this device. There is deliberately no way back — an account
+// that has said it knows the app is not asked again, and a switch offering
+// to start the tips over is one more control in the drawer for something
+// nobody comes back to.
 export function stopTips(store, userId) {
   if (!userId) return;
   store.save(tipsOffKey(userId), true);

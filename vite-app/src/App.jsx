@@ -10,7 +10,7 @@ import { QueueBadge, QueueDialog } from "./components/queuePanel.jsx";
 import { FeatureRequestDialog } from "./components/featureRequest.jsx";
 import { HelpTip } from "./components/helpTip.jsx";
 import { helpFor } from "./help.js";
-import { tipDue, noteTipSeen, stopTips } from "./helpTips.js";
+import { tipDue, noteTipSeen, stopTips, tipRun } from "./helpTips.js";
 import { OfflineQueue } from "./offlineQueue.js";
 import { ticketFingerprint, replacedNewerWork } from "./ticketFingerprint.js";
 import { overwroteKey } from "./overwriteNote.js";
@@ -320,25 +320,30 @@ export function App() {
   useEffect(() => SwUpdates.subscribe(setUpdateReady), []);
   const [showQueue, setShowQueue] = useState(false);
   const [showFeature, setShowFeature] = useState(false);
-  // The screen tip: the first time this account opens a screen on this
-  // device, the popup that says what the screen is for. It holds the screen
-  // key it is about rather than a flag, so a screen that changes out from
-  // under it takes the tip with it. Held here, above the early returns,
-  // with every other hook — one put below a return crashed the ticket
-  // screen. It is not part of the address: a tip is a thing that happens on
-  // the screen you are on, not somewhere a reload should land you.
+  // The screen tip: the popup that says what a screen is for, once per run
+  // of the app. It holds the screen key it is about rather than a flag, so
+  // a screen that changes out from under it takes the tip with it. Held
+  // here, above the early returns, with every other hook — one put below a
+  // return crashed the ticket screen. It is not part of the address: a tip
+  // is a thing that happens on the screen you are on, not somewhere a
+  // reload should land you.
   const [tipScreen, setTipScreen] = useState(null);
-  // Raised as the popup goes up, not when Ok is pressed: a tip closed with
-  // Escape or the backdrop has still been seen, and coming back on the next
-  // visit is how a tip turns into a nuisance. The records are per account
-  // per screen in Store (helpTips.js), so sign-out does not start the tour
-  // again and the next person on the tablet gets their own. There is no way
-  // back: "No more tips" is the account saying it knows the app, and it is
-  // meant to be the last word on the subject.
+  // Which screens have spoken this run. In memory and nowhere else, which
+  // is what brings the tips back the next time the app is opened; only the
+  // "No more tips" kill switch is written down (helpTips.js). A new account
+  // signing in on this device gets a new run, so the tablet's next crew
+  // member is introduced to the screens rather than inheriting the silence.
   const userId = currentUser ? currentUser.id : null;
+  const tipsThisRun = useRef(tipRun());
+  const tipsRunFor = useRef(userId);
+  if (tipsRunFor.current !== userId) { tipsRunFor.current = userId; tipsThisRun.current = tipRun(); }
+  // Noted as the popup goes up, not when Ok is pressed: a tip closed with
+  // Escape or the backdrop has still had its say, and raising it again the
+  // moment somebody comes back to the screen is how a tip turns into a
+  // nuisance. Ok is for this run; the next launch says it all again.
   useEffect(() => {
-    if (!userId || !helpFor(screen) || !tipDue(Store, userId, screen)) { setTipScreen(null); return; }
-    noteTipSeen(Store, userId, screen);
+    if (!userId || !helpFor(screen) || !tipDue(Store, userId, screen, tipsThisRun.current)) { setTipScreen(null); return; }
+    noteTipSeen(tipsThisRun.current, screen);
     setTipScreen(screen);
   }, [userId, screen]);
   const [egg, setEgg] = useState(false);

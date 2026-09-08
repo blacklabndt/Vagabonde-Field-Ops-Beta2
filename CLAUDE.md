@@ -373,19 +373,21 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
 - In-app help is `vite-app/src/help.js`, pure data keyed by screen key with
   a test that every TABS key has an entry under 200 words. Keep it true when
   a screen changes. There is no help button: the words arrive as a popup
-  (`components/helpTip.jsx`) the first time an account opens a screen on
-  this device, "Ok" to close it and "No more tips" to stop them everywhere.
-  The records are `Store` preferences (localStorage), per account, in
-  `helpTips.js` (pure, tested): `help.seen.<id>.<screen>` for a screen
-  already introduced and `help.tipsOff.<id>` for the switch — sign-out
-  clears the device cache, not Store, so signing back in does not start the
-  tour again, and the next person on the tablet gets their own. Only a
-  stored `true` counts, so a bad record leaves the help where it is.
-  App.jsx marks a screen seen as the popup goes UP, not on Ok, so Escape or
-  the backdrop does not bring it back; the tip is gated on the screen it was
-  raised for still being the screen underneath. "No more tips" is one-way by
-  Kyle's decision — no drawer switch, no way to start them again: an account
-  that says it knows the app is not asked twice. The
+  (`components/helpTip.jsx`) once per RUN of the app on each screen, "Ok" to
+  close it and "No more tips" to stop them everywhere. The two are
+  deliberately unlike each other (`helpTips.js`, pure, tested): which
+  screens have spoken is a Set held in memory alone (`tipRun()`, an App.jsx
+  ref reset when the account changes), so the next launch — a reload, a
+  fresh tab, the icon on a tablet — says it all again; only the kill switch
+  is written down, as the `Store` preference `help.tipsOff.<id>`
+  (localStorage, per account, sign-out clears the device cache and not
+  Store). Only a stored `true` counts, so a bad record leaves the help where
+  it is. App.jsx notes a screen as the popup goes UP, not on Ok, so Escape
+  or the backdrop does not raise it again on the way back; the tip is gated
+  on the screen it was raised for still being the screen underneath. "No
+  more tips" is one-way by Kyle's decision — no drawer switch, no way to
+  start them again: an account that says it knows the app is not asked
+  twice. The
   error log pages by keyset (`listFunctionErrors(limit, { before,
   functionName })`, the timestamp double-quoted inside the or()) and filters
   by function name.

@@ -2,10 +2,11 @@ import React from "react";
 import { Dialog, Btn } from "./common.jsx";
 import { helpFor } from "../help.js";
 
-// The tip that meets you the first time you open a screen: what the screen
-// is for, what its buttons do, and the rules that catch people out, written
-// out in help.js. "Ok" closes it and that screen never asks again;
-// "No more tips" stops them on every screen at once.
+// The tip that meets you on a screen: what the screen is for, what its
+// buttons do, and the rules that catch people out, written out in help.js.
+// "Ok" closes it for this run of the app — the screen says it again the
+// next time the app is opened, and the other screens still say theirs in
+// the meantime. "No more tips" is the kill switch: no screen, ever again.
 //
 // It reads the screen key rather than being told what to say, so the tip
 // and the section name in the bar can never disagree: they are the same
