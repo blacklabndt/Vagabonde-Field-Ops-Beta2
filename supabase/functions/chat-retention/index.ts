@@ -81,6 +81,16 @@ Deno.serve(async (req) => {
         .from("chat_messages").delete().is("pinned_at", null).in("id", ids).select("id");
       if (delErr) throw delErr;
       deleted += (went || []).length;
+      // A kept row's picture is already gone, and no later run will select
+      // a pinned row to heal it: take the dead keys off it here, so the pin
+      // shows as words rather than a broken picture for ever.
+      const wentIds = new Set((went || []).map((r) => r.id));
+      const kept = ids.filter((id) => !wentIds.has(id));
+      if (kept.length) {
+        const { error: healErr } = await admin.from("chat_messages")
+          .update({ image_key: null, audio_key: null }).in("id", kept);
+        if (healErr) throw healErr;
+      }
 
       if (expired.length < PAGE) break;
     }

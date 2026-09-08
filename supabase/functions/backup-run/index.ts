@@ -416,9 +416,12 @@ async function ensureRunFolder(db: SupabaseClient, conn: Connection, run: Run): 
   // folder of the name rather than making a second, so two slices inside
   // one minute hold one id, and deleting it would take the winner's backup
   // with it.
-  const { data: owner } = await db.from("backup_runs")
+  // A read that failed says nothing about whose folder this is, and no row
+  // back means the same: leave it. A stray folder costs retention a slot;
+  // deleting the winner's costs the night's backup.
+  const { data: owner, error: ownErr } = await db.from("backup_runs")
     .select("folder_id").eq("id", run.id).maybeSingle();
-  if (owner && String(owner.folder_id ?? "") === folderId) return null;
+  if (ownErr || !owner || String(owner.folder_id ?? "") === folderId) return null;
   try { await conn.drive.delete(folderId); } catch (e) { console.error("Couldn't remove a stray backup folder:", (e as Error).message); }
   return null;
 }

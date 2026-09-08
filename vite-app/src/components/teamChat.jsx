@@ -1077,10 +1077,21 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
   const onScroll = () => {
     const el = listRef.current;
     if (!el) return;
+    const wasUp = !stickToBottom.current;
     stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
     // Reaching the bottom retires the chip; setting an already-false
     // state is free, so no guard needed.
     if (stickToBottom.current) setJumpChip(false);
+    // Coming back down to the tail is reading the room: an arrival while
+    // they were reading back did not move the bookmark, and nothing else
+    // would until they left the screen, so the badge sat lit over messages
+    // on screen. Once per return to the bottom, the same write noteRead
+    // makes.
+    if (wasUp && stickToBottom.current && document.visibilityState === "visible") {
+      Db.markChatRead(currentUser.id)
+        .then(() => { if (onReadRef.current) onReadRef.current(); })
+        .catch(() => {});
+    }
   };
 
   const loadOlder = async () => {
