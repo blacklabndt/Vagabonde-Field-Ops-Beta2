@@ -73,9 +73,20 @@ export function uniqueName(used, name, fallback = "file") {
   const dot = clean.lastIndexOf(".");
   const stem = dot > 0 ? clean.slice(0, dot) : clean;
   const ext = dot > 0 ? clean.slice(dot) : "";
-  const n = (used.get(clean.toLowerCase()) || 0) + 1;
+  let n = (used.get(clean.toLowerCase()) || 0) + 1;
+  let out = n > 1 ? `${stem} (${n})${ext}` : clean;
+  // A file genuinely called "RT report (2).pdf" must not be handed the name
+  // the second "RT report.pdf" already took: two entries under one name make
+  // a zip whose download can never be checked against the manifest, and the
+  // clear that check gates refuses for ever. A minted name is marked used
+  // too, so a later file of that exact name is numbered past it.
+  while (out.toLowerCase() !== clean.toLowerCase() && used.has(out.toLowerCase())) {
+    n++;
+    out = `${stem} (${n})${ext}`;
+  }
   used.set(clean.toLowerCase(), n);
-  return n > 1 ? `${stem} (${n})${ext}` : clean;
+  if (out.toLowerCase() !== clean.toLowerCase()) used.set(out.toLowerCase(), 1);
+  return out;
 }
 
 const cents = n => Math.round((Number(n) || 0) * 100);

@@ -269,6 +269,19 @@ test("a job that has gained work since the build stops the clear", () => {
   assert.match(archiveDrift(job, undefined, was), /wasn't in the archive that was built/);
 });
 
+test("a minted duplicate name never collides with a file really called that", () => {
+  // Two "RT report.pdf" and a real "RT report (2).pdf", in both orders: three
+  // entries, three names. Two entries under one name made a zip the check
+  // could never pass, and the clear behind it refused for ever.
+  const forward = new Map();
+  const a = ["RT report.pdf", "RT report.pdf", "RT report (2).pdf"].map(n => uniqueName(forward, n));
+  assert.equal(new Set(a.map(s => s.toLowerCase())).size, 3, a.join(" | "));
+  const backward = new Map();
+  const b = ["RT report (2).pdf", "RT report.pdf", "RT report.pdf"].map(n => uniqueName(backward, n));
+  assert.equal(new Set(b.map(s => s.toLowerCase())).size, 3, b.join(" | "));
+  assert.equal(b[0], "RT report (2).pdf", "the real file keeps its own name");
+});
+
 test("mapLimit runs a few at a time and answers in order", async () => {
   let running = 0, peak = 0;
   const items = Array.from({ length: 20 }, (_, i) => i);

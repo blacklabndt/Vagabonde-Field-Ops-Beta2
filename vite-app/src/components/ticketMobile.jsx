@@ -929,7 +929,12 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
       await OfflineCache.remove(wipKey);
       onSaved();
     } catch (e) {
-      if (OfflineQueue.isNetworkError(e)) {
+      // A refusal the server actually gave is a reason whatever the radio is
+      // doing now: isNetworkError calls any error "offline" while
+      // navigator.onLine is false, so a plain refusal met in a dead spot would
+      // be queued as work to retry instead of shown. Same order oqFlushOnce
+      // keeps (offlineQueue.js).
+      if (!e.plain && OfflineQueue.isNetworkError(e)) {
         await queueThisTicket();
         return;
       }

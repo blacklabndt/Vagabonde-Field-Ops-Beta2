@@ -357,6 +357,8 @@ function shapeJha(j) {
   return {
     id: j.id,
     pdfKey: j.pdf_key,
+    // Who signed it, for Job detail's delete gate (Admin, or the signer).
+    signedById: j.signed_by || null,
     template: j.template || "",
     dosimetry: Array.isArray(j.dosimetry) ? j.dosimetry : [],
     details: j.details || {},
@@ -384,7 +386,7 @@ function shapeJha(j) {
 // was the only reader — a jsonb array of a dozen objects per JHA, carried
 // over field data and written into the offline cache for nothing. The PDF
 // renderer reads the column itself, server-side, from the row.
-const JHA_COLUMNS = "id, job_id, template, pdf_key, signed_at, work_date, status, closed_at, dosimetry, details, unit_number, site_rep, sent_at, sent_to, profiles(name)";
+const JHA_COLUMNS = "id, job_id, template, pdf_key, signed_at, signed_by, work_date, status, closed_at, dosimetry, details, unit_number, site_rep, sent_at, sent_to, profiles(name)";
 
 function shapeReport(r) {
   return {

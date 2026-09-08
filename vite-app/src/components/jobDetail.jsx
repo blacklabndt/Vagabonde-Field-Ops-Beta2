@@ -83,6 +83,10 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
   // clean up their own. Matches the jhas/reports delete policies; a helper
   // doesn't get the buttons because the database would refuse them anyway.
   const canDeleteFiled = isAdmin || currentUser.role === "Technician";
+  // A JHA's delete is narrower than a report's (20260826032406): an Admin,
+  // or the Technician who signed it. The button was offered to every
+  // Technician and the database refused the others' presses.
+  const canDeleteJha = j => isAdmin || (currentUser.role === "Technician" && j.signedById === currentUser.id);
 
   const toggleComplete = async () => {
     if (!complete && !confirm(`Mark ${job.id} complete? No more JHAs, reports or tickets can be added to it until it's reopened.`)) return;
@@ -161,7 +165,11 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
     let refreshed = false;
     try {
       await Db.withdrawTicketApproval(t.id);
-      try { await refreshTickets(); refreshed = true; }
+      // The read is done here rather than through refreshTickets, which
+      // catches its own failure — through it `refreshed` was always true, the
+      // message below was unreachable, and "Cancel and edit" opened the editor
+      // on a list that had never been re-read.
+      try { setTickets(await Db.listTicketsForJob(job.dbId)); refreshed = true; }
       catch (e) { setRowError(p => ({ ...p, [t.id]: `The approval was cancelled, but the list couldn't be re-read: ${e.message || "reload the job."}` })); }
     } catch (e) { setRowError(p => ({ ...p, [t.id]: e.message || "Couldn't cancel the approval." })); }
     setWithdrawingId(null);
@@ -389,7 +397,7 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
                             catch (e) { setRowError(p => ({ ...p, [j.id]: e.message || "The PDF didn't render." })); }
                             setRendering(null);
                           }}>{rendering === j.id ? "Rendering…" : "Re-render PDF"}</Btn>
-                          {canDeleteFiled && (
+                          {canDeleteJha(j) && (
                             <Btn variant="ghost" disabled={complete || deletingJhaId === j.id}
                               title={complete ? "Reopen the job first" : undefined}
                               onClick={() => deleteJha(j)}>{deletingJhaId === j.id ? "Deleting…" : "Delete"}</Btn>

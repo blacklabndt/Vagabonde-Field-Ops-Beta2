@@ -293,7 +293,11 @@ export function UsersAccessScreen({ currentUser }) {
                       <Btn variant="secondary" disabled={resetting} onClick={sendReset}>{resetting ? "Sending…" : "Email a set-password link"}</Btn>
                     )}
                     <Btn variant="secondary" onClick={resetPreset}>Reset to role preset</Btn>
-                    <Btn variant="danger" onClick={removeAccount}>Remove account</Btn>
+                    {/* The database rule is an Admin's (profiles_delete, delete-user's
+                        own check): the users tab grants tabs, never rank. */}
+                    {currentUser.role === "Admin" && (
+                      <Btn variant="danger" onClick={removeAccount}>Remove account</Btn>
+                    )}
                   </div>
                 </div>
               </div>

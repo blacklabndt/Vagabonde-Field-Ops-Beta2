@@ -5,7 +5,7 @@ import { acceptsNumberText } from "../numberInput.js";
 import { Blueprint, Btn, CheckBox, TagX, Field, Dialog, ErrorBox, Switch, splitContact, hazardTagVariant, NoJobSelected, ConnectionBar, QueuedPanel, useMissingFields, useScreenFoot } from "./common.jsx";
 import { OfflineQueue } from "../offlineQueue.js";
 import { OfflineCache } from "../offlineCache.js";
-import { hasNoSerials, trimmedSerials, isMissingSetOwnDosimetry, newSerials, dosimetryAskedFor, markDosimetryAsked } from "../dosimetryPrompt.js";
+import { hasNoSerials, trimmedSerials, isMissingSetOwnDosimetry, newSerials, mergedSerials, dosimetryAskedFor, markDosimetryAsked } from "../dosimetryPrompt.js";
 import { savingLabel, deviceOffline } from "../savingWords.js";
 
 // The JHA (FLHA) — filed at the start of the day, closed out at the end.
@@ -344,7 +344,12 @@ export function JhaBuilderScreen({ job, jobRecord, currentUser, onSubmitted, onC
   // the form — worker (1)'s boxes are the same three fields, so there is
   // nothing separate to type and nothing to fall out of step.
   const keepDosimetry = async () => {
-    const serials = trimmedSerials(w1);
+    // Merged with what is already on file, never the typed kit alone:
+    // set_own_dosimetry writes all three columns, so a box left empty here
+    // would blank a serial the profile has. Job detail's close-out keeps the
+    // same rule through the same helper.
+    const me = people.find(p => p.id === currentUser.id);
+    const serials = mergedSerials(w1, me ? kitOf(me, equipment) : {});
     if (!serials.tld && !serials.drd && !serials.alarm) return;
     setKeeping(true);
     setKeepMsg("");
