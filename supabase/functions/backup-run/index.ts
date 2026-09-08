@@ -190,14 +190,20 @@ async function tick(db: SupabaseClient, secret: string): Promise<Record<string, 
   // The clock moves the moment the run is created, not when it finishes —
   // a run that takes two hours must not make the next one two hours late,
   // and a failed run must not stop the next one happening at all.
-  const { error: nErr } = await db.from("app_settings").update({
+  //
+  // Conditional on the due time this tick read: moving the clock IS the
+  // claim on tonight's run. Two ticks that read the same due time — the
+  // cron and a kick landing together — would otherwise both move it and
+  // both queue a run, and two runs made in the same minute share a folder.
+  const { data: won, error: nErr } = await db.from("app_settings").update({
     backup_next_run_at: nextRunAt({
       frequency: String(s.backup_frequency ?? "daily"),
       weekday: Number(s.backup_weekday ?? 0),
       hour: Number(s.backup_hour ?? 2)
     }, Date.now())
-  }).eq("id", true);
+  }).eq("id", true).eq("backup_next_run_at", s.backup_next_run_at).select("id");
   if (nErr) throw nErr;
+  if (!stillHoldsRun(won)) return { ok: true, idle: true };
 
   const created = await queueRun(db, "backup", null);
   return await advance(db, created, secret);
@@ -386,17 +392,28 @@ async function claim(db: SupabaseClient, run: Run): Promise<Run | null> {
 // backup_runs carries a name the panel can show from the very first poll —
 // and separately from the claim, so a slice that dies between the two
 // leaves a running row the next tick can pick up and finish the job for.
-async function ensureRunFolder(db: SupabaseClient, conn: Connection, run: Run): Promise<string> {
+//
+// Null back means this slice lost the folder: it was reclaimed while it hung
+// inside the folder call, the next slice has made one and written it, and
+// this one must stop rather than write a second folder over it — one backup
+// split across two folders, neither complete. The claim and the cursor
+// writes cannot see that reclaim (both slices believe "running"); the
+// folder_id-is-null condition is what can.
+async function ensureRunFolder(db: SupabaseClient, conn: Connection, run: Run): Promise<string | null> {
   if (run.folder_id) return String(run.folder_id);
   const stamp = folderStamp(Date.now());
   const name = run.kind === "before_restore" ? beforeRestoreName(stamp) : stamp;
   const folderId = await withRetry("Making the backup folder",
     () => ensureFolder(conn.drive, conn.rootFolderId, name));
-  const { error } = await db.from("backup_runs")
+  const { data: mine, error } = await db.from("backup_runs")
     .update({ folder_id: folderId, folder_name: name })
-    .eq("id", run.id).eq("status", "running");
+    .eq("id", run.id).eq("status", "running").is("folder_id", null).select("id");
   if (error) throw error;
-  return folderId;
+  if (stillHoldsRun(mine)) return folderId;
+  // The folder this slice made is nobody's: take it back out of the drive
+  // so it is neither counted by retention nor picked as tomorrow's base.
+  try { await conn.drive.delete(folderId); } catch (e) { console.error("Couldn't remove a stray backup folder:", (e as Error).message); }
+  return null;
 }
 
 // ── One slice ────────────────────────────────────────────────────────────
@@ -429,6 +446,7 @@ async function advance(db: SupabaseClient, run: Run, secret: string): Promise<Re
     cursor = reviveCursor(current.cursor, String(current.started_at ?? new Date().toISOString()));
 
     const folderId = await ensureRunFolder(db, conn, current);
+    if (!folderId) return { ok: true, runId, superseded: true };
     // One listing of the run's folder for both children.
     const [tablesFolder, filesFolder] = await withRetry("Opening the backup's folders",
       () => ensureFolders(conn.drive, folderId, [TABLES_FOLDER, FILES_FOLDER]));

@@ -453,8 +453,13 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   been quiet for `SLICE_ALIVE_MS` — three minutes — died mid-slice and is
   reclaimed; every write a slice makes is conditional on the status it
   believes it holds, so a superseded slice writes nothing, not even its own
-  failure. `backup_next_run_at` moves when a run STARTS, so a long night
-  does not make tomorrow late and a failure does not stop tomorrow.
+  failure — and the folder write on `folder_id` still being null, because a
+  reclaim leaves both slices believing "running": the one reclaimed while
+  making the folder gets zero rows back, removes its stray folder and stops,
+  instead of splitting one backup across two folders. `backup_next_run_at` moves when a run STARTS, so a long night
+  does not make tomorrow late and a failure does not stop tomorrow; the move
+  is conditional on the due time the tick read, so two ticks that saw the
+  same due time queue one run, not two into one folder.
 - Restoring everything is gated four times — the caller's own Admin profile,
   a backup from a newer schema refused outright (`backup_schema_version()`),
   the Admin typing the backup's folder name (held against the name the drive gives preflight, never the request's own copy), and a complete safety backup of
