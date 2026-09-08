@@ -40,6 +40,12 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
   Nothing is waiting there now. The latest is
+  `20260908044141_withdrawing_an_approval_is_the_offices_too.sql` —
+  `withdraw_ticket_approval` states its own gate (the ticket's technician,
+  an Admin, or a Coordinator) instead of borrowing `private.can_write_ticket`,
+  which 20260907044223 narrowed to own-or-Admin for the lines and crew
+  writes and, unnamed, took the Coordinator's Cancel approval with it.
+  Probes beside it (Coordinator 1, other technician 0, own 1). Before it,
   `20260907175805_the_error_log_clear_says_where.sql` — the Clear button's
   `clear_function_errors()` deletes `where true`, because the authenticator
   role preloads pg-safeupdate, which refuses an unfiltered DELETE or UPDATE

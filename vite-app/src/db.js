@@ -372,7 +372,7 @@ function shapeJha(j) {
     // finished, not waiting for readings.
     status: j.status || "Closed",
     closedAt: stamp(j.closed_at),
-    file: j.pdf_key ? j.pdf_key.split("/").pop() : (j.template ? j.template.replace(/s+/g, "-") + ".pdf" : "jha.pdf"),
+    file: j.pdf_key ? j.pdf_key.split("/").pop() : (j.template ? j.template.replace(/\s+/g, "-") + ".pdf" : "jha.pdf"),
     at: stamp(j.signed_at),
     by: j.profiles ? j.profiles.name : "",
     sentAt: stamp(j.sent_at),
@@ -689,16 +689,6 @@ export const Db = {
     return data;
   },
 
-  // Deleting a job, and saying what happens to what is filed against it.
-  //
-  // One RPC rather than a delete plus three updates from here: moving a JHA,
-  // a report and a ticket and then removing the job has to be all-or-nothing,
-  // and a browser that loses signal half way through would otherwise leave
-  // the contents split across two jobs.
-  //
-  // `transferToId` moves everything to that job. `discard` destroys it with
-  // the job. Neither one set, and the database refuses if anything is
-  // attached — see 20260815000000.
   // ── Archive ──────────────────────────────────────────────────────────
   // Every job raised between two local days (inclusive), oldest first — the
   // archive's job list. The boundaries are this device's local midnights,
@@ -806,6 +796,16 @@ export const Db = {
     };
   },
 
+  // Deleting a job, and saying what happens to what is filed against it.
+  //
+  // One RPC rather than a delete plus three updates from here: moving a JHA,
+  // a report and a ticket and then removing the job has to be all-or-nothing,
+  // and a browser that loses signal half way through would otherwise leave
+  // the contents split across two jobs.
+  //
+  // `transferToId` moves everything to that job. `discard` destroys it with
+  // the job. Neither one set, and the database refuses if anything is
+  // attached — see 20260815000000.
   async deleteJob({ jobId, transferToId = null, discard = false }) {
     const { data, error } = await sbClient.rpc("delete_job", {
       p_job_id: jobId,
@@ -1370,8 +1370,9 @@ export const Db = {
   // ── JHAs ─────────────────────────────────────────────────────────────
   async listJhasForJob(jobDbId) {
     return OfflineCache.readThrough("jhas." + jobDbId, async () => {
-    // `hazards` comes back too: Job detail shows what the last filed JHA
-    // actually covered, rather than a fixed sample list.
+    // `hazards` is deliberately not selected — see JHA_COLUMNS. Job detail
+    // no longer summarises the last assessment's hazards, and the PDF
+    // renderer reads that column server-side, off the row.
     const { data, error } = await sbClient
       .from("jhas").select(JHA_COLUMNS)
       .eq("job_id", jobDbId).order("signed_at", { ascending: false });
@@ -1731,7 +1732,8 @@ export const Db = {
       // was lost. Hand that row back, and drop the copy of the PDF this
       // attempt just stored so the bucket doesn't keep an orphan.
       if (error.code === "23505" && clientKey && /client_key/.test(error.message || "")) {
-        const { data: already } = await sbClient.from("reports").select("*").eq("client_key", clientKey).maybeSingle();
+        const { data: already, error: keyErr } = await sbClient.from("reports").select("*").eq("client_key", clientKey).maybeSingle();
+        if (keyErr) throw keyErr;
         if (already) {
           if (pdfKey && pdfKey !== already.pdf_key) await sbClient.storage.from("reports").remove([pdfKey]).then(() => {}, () => {});
           return already;
@@ -1773,10 +1775,11 @@ export const Db = {
     return pending;
   },
 
-  // ── Email (Postmark, via Supabase Edge Functions) ────────────────────
-  // The Postmark token lives as a Supabase secret and is only ever read
+  // ── Email (Resend, via Supabase Edge Functions) ──────────────────────
+  // The Resend key lives on the one app_settings row (Admin-only RLS), with
+  // the old RESEND_API_KEY secret as a fallback, and is only ever read
   // server-side — hence going through a function rather than calling the
-  // Postmark API from the browser.
+  // Resend API from the browser.
 
   // Removes a report and its stored PDF. The same shape as deleteJha, for the
   // same reasons: RLS is the enforcement (Admin or Technician), a delete that
@@ -3543,10 +3546,15 @@ export const Db = {
         : "This is the default schedule — there is nothing to copy into it.");
     }
 
-    const [{ data: source }, { data: existing }] = await Promise.all([
+    const [{ data: source, error: srcErr }, { data: existing, error: mineErr }] = await Promise.all([
       sbClient.from("rate_lines").select("*").eq("schedule_id", sourceId),
       sbClient.from("rate_lines").select("id, kind, label, rate, position").eq("schedule_id", scheduleId)
     ]);
+    // A read that failed is not a card with nothing on it. Dropped, an empty
+    // `existing` makes every source line look missing and the copy inserts a
+    // second copy of the whole card — rate_lines has no unique key to stop it.
+    if (srcErr) throw srcErr;
+    if (mineErr) throw mineErr;
     if (!source || !source.length) {
       throw new Error(fromScheduleId
         ? "That client's rate card has nothing on it yet, so there is nothing to copy."

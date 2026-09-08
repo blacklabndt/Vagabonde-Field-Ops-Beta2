@@ -582,8 +582,12 @@ async function stepWipe(db: SupabaseClient, c: RestoreCursor, deadline: number):
   // that the next one simply does not find again; only the counting has to
   // be written down, and the caller persists the cursor when this returns.
   while (!outOfBudget(deadline, Date.now())) {
-    const asked = c.wipeBatch;
-    if (afterWipeBatch(c, table, await wipeBatch(db, c, table, keep)) < asked) {
+    // Read against c.wipeBatch AFTER the call, never a size captured before
+    // it: wipeBatch halves c.wipeBatch on a 57014 and retries, so a full
+    // 1,000-row batch measured against an asked-for 2,000 looked short, the
+    // phase moved to the next table, and most of ticket_lines stood.
+    const deleted = afterWipeBatch(c, table, await wipeBatch(db, c, table, keep));
+    if (deleted < c.wipeBatch) {
       // Short of what was asked for means there was no more to take.
       afterWipeStep(c, WIPE_ORDER.length);
       return;
@@ -744,8 +748,10 @@ async function stepLoad(
   // the load rather than the wipe.
   if (table === "rate_line_history" && !c.historyCleared) {
     while (!outOfBudget(deadline, Date.now())) {
-      const asked = c.wipeBatch;
-      if (await wipeBatch(db, c, "rate_line_history", null) < asked) {
+      // c.wipeBatch after the call, for the reason stepWipe gives: a halved
+      // batch that came back full is not an empty table.
+      const deleted = await wipeBatch(db, c, "rate_line_history", null);
+      if (deleted < c.wipeBatch) {
         c.historyCleared = true;
         break;
       }
