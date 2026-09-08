@@ -74,9 +74,13 @@ Deno.serve(async (req) => {
       }
 
       const ids = expired.map((r) => r.id);
-      const { error: delErr } = await admin.from("chat_messages").delete().in("id", ids);
+      // Pinned again since the select, while the media pass was running:
+      // the picture has gone, but the row is somebody's deliberate pin and
+      // stays — retention never touches a pin.
+      const { data: went, error: delErr } = await admin
+        .from("chat_messages").delete().is("pinned_at", null).in("id", ids).select("id");
       if (delErr) throw delErr;
-      deleted += ids.length;
+      deleted += (went || []).length;
 
       if (expired.length < PAGE) break;
     }

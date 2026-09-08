@@ -943,7 +943,11 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
           // Reading the room as it happens keeps the badge honest on the
           // person's other devices. Debounced: a burst of five messages
           // is one bookmark move, not five upserts.
-          if (document.visibilityState === "visible") noteRead();
+          // Only while the reader is at the bottom to watch it land — the
+          // rule the poll path keeps: a message arriving while somebody
+          // reads back through the morning used to zero the badges over
+          // messages they had never scrolled to.
+          if (stickToBottom.current && document.visibilityState === "visible") noteRead();
         },
         onUpdate: m => {
           if (!live) return;

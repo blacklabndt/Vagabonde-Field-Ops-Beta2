@@ -11,7 +11,11 @@ self.addEventListener("push", event => {
     // nothing then clears) is noise: the page is told instead and moves
     // its own badge. Out of sight, it buzzes as before.
     const wins = await clients.matchAll({ type: "window", includeUncontrolled: true });
-    const visible = wins.filter(c => c.visibilityState === "visible");
+    // Only the app itself counts as "on screen". The Worker serves the
+    // client approval page, the policy pages and the drive callback on this
+    // same origin, and a visible one of those used to swallow the buzz.
+    const isApp = c => { try { const p = new URL(c.url).pathname; return p === "/" || p === "/index.html"; } catch (_) { return false; } };
+    const visible = wins.filter(c => c.visibilityState === "visible" && isApp(c));
     if (visible.length) {
       visible.forEach(c => { try { c.postMessage({ type: "chat-push" }); } catch (_) { /* older page */ } });
       return;
