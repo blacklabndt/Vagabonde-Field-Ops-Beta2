@@ -1106,8 +1106,11 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
                     <div className="tabular" style={{ fontSize: 10, color: "color-mix(in srgb, var(--color-text) 55%, transparent)" }}>{money(rate)} / weld</div>
                   </div>
                   {/* Typed, like Other charges below. These were − / + only,
-                      so a day of 40 welds was 40 taps. */}
-                  <NumField style={{ width: 66, textAlign: "right" }} value={r.qty}
+                      so a day of 40 welds was 40 taps. A weld is a whole
+                      one: step 1 is what takes the decimal point off the
+                      keypad, the way the hours and mileage boxes state
+                      theirs — without it 3.5 welds saved and was billed. */}
+                  <NumField style={{ width: 66, textAlign: "right" }} step="1" value={r.qty}
                     aria-label={r.item.label} onChange={v => setWeldQty(r.key, v)} />
                   <span style={{ fontSize: 11, width: 22 }}>welds</span>
                   <span className="tabular" style={{ width: 62, textAlign: "right", fontSize: 14 }}>{money(lineTotal(r.qty, rate))}</span>

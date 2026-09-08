@@ -372,6 +372,14 @@ export function RateAdminScreen() {
       custom_method: ["method", "custom_method"],
       custom_expense: ["expense", "custom_expense"]
     }[kind] || [kind];
+    // A label already in this group, whatever kind carries it. The ticket
+    // screen matches a saved line back to the card by its label alone, so
+    // two rows reading the same reprice a saved ticket at the other one's
+    // rate on the next save. The size row has always refused a duplicate.
+    if (lines.some(l => groupKinds.includes(l.kind) && l.label === label)) {
+      setError(`"${label}" is already on this schedule.`);
+      return;
+    }
     const ps = lines.filter(l => groupKinds.includes(l.kind) && l.position != null).map(l => l.position);
     try {
       const created = await Db.addRateLine({
