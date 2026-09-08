@@ -43,6 +43,16 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
   Nothing is waiting there now. The latest is
+  `20260908152626_a_run_may_be_a_file_check.sql` — `backup_runs.kind`'s
+  check list gains `verify`; the first file check moved the clock and then
+  met the constraint, because 20260908151245 taught the tick a fifth kind
+  and not the table. Before it,
+  `20260908151245_the_backup_checks_every_file_a_fortnight.sql` —
+  `app_settings.backup_verify_every_days` (14) and `backup_verify_next_at`,
+  and `backup_state()` answering both; probes beside it. Before it,
+  `20260908141656_a_backup_knows_the_hash_of_every_file.sql` —
+  `backup_run_files` (service role only, one row per file per run, cascades
+  with the run); probes beside it, run live twice. Before it,
   `20260908101639_the_equipment_pages_in_a_total_order.sql` —
   `search_equipment` orders by type, serial_number, id: two items of one
   type with no serial were a tie, and an OFFSET page boundary inside a tie

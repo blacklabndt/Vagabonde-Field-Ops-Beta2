@@ -23,3 +23,10 @@ select folder_name, status, started_at, finished_at,
        counts -> 'verified' as verified, counts -> 'repaired' as repaired,
        counts -> 'unrepairable' as unrepairable, counts -> 'notes' as notes
   from public.backup_runs where kind = 'verify' order by created_at desc limit 1;
+
+-- Run live 8 Sept 2026:
+--   1: 14, 2026-09-09 07:00 UTC, t.  2: t, t, f.
+--   3, first check (after 20260908152626 let the kind through — the first
+--      attempt moved the clock and met the kind check, no row): folder
+--      "2026-09-08 08-35", complete in 37 s, verified 25, repaired 0,
+--      unrepairable 0, notes [], next check 2026-09-22.
