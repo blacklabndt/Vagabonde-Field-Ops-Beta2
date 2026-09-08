@@ -150,7 +150,11 @@ export function UsersAccessScreen({ currentUser }) {
         // Locked, not deleted: the row stays, with no tabs and a stamp, so
         // the list shows what happened rather than pretending it vanished.
         setUsers(p => p.map(u => u.id === account.id ? { ...u, tab_access: [], deactivated_at: new Date().toISOString() } : u));
-        setNote(res.message || `${account.displayName}'s account was locked instead of deleted: they can no longer sign in.`);
+        // A half-landed lock is unfinished work, not news: a note clears on
+        // the next account picked, and the panel below then says the account
+        // can't sign in — which is exactly the half that did not happen.
+        if (res.banFailed) setError(res.message);
+        else setNote(res.message || `${account.displayName}'s account was locked instead of deleted: they can no longer sign in.`);
         return;
       }
       setUsers(p => p.filter(u => u.id !== account.id));

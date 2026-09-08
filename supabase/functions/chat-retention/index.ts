@@ -92,12 +92,16 @@ Deno.serve(async (req) => {
         // picture-only pin gets words where the picture was, rather than a
         // violation that fails the whole run every night after.
         const { data: left, error: readErr } = await admin.from("chat_messages")
-          .select("id, body, gif_url, file_key").in("id", kept);
+          .select("id, body, gif_url, file_key, image_key").in("id", kept);
         if (readErr) throw readErr;
         for (const row of left || []) {
           const shows = (row.body || "").trim() || row.gif_url || row.file_key;
           const patch: Record<string, unknown> = { image_key: null, audio_key: null };
-          if (!shows) patch.body = "(the picture came down after 30 days)";
+          // Name what actually came down: a wordless pinned voice note must
+          // not be told a picture went, when there never was one.
+          if (!shows) patch.body = row.image_key
+            ? "(the picture came down after 30 days)"
+            : "(the voice note came down after 30 days)";
           const { error: healErr } = await admin.from("chat_messages").update(patch).eq("id", row.id);
           if (healErr) throw healErr;
         }
