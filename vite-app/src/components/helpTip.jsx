@@ -24,7 +24,7 @@ export function HelpTip({ screenKey, onOk, onNoMore }) {
   if (!entry) return null;
 
   return (
-    <Dialog title={entry.heading} maxWidth={620} onClose={onOk}
+    <Dialog title={entry.heading} maxWidth={620} onClose={onOk} focusFirst={false}
       actions={<>
         {/* The quiet one first, the way out on the right where the thumb
             is. Both close the popup; only one of them closes the rest. */}

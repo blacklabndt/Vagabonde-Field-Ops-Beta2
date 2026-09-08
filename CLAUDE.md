@@ -384,7 +384,13 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   Store). Only a stored `true` counts, so a bad record leaves the help where
   it is. App.jsx notes a screen as the popup goes UP, not on Ok, so Escape
   or the backdrop does not raise it again on the way back; the tip is gated
-  on the screen it was raised for still being the screen underneath. "No
+  on the screen it was raised for still being the screen underneath. It
+  passes Dialog `focusFirst={false}`: a dialog whose first focusable thing
+  is a button gets the accent focus ring drawn round it on open, and on a
+  panel with two buttons and no field that reads as one button being bigger
+  and differently bordered than the other (Kyle saw exactly that). The frame
+  takes the focus instead — `tabIndex={-1}`, never ringed, and the Tab trap
+  wraps out of it in both directions. "No
   more tips" is one-way by Kyle's decision — no drawer switch, no way to
   start them again: an account that says it knows the app is not asked
   twice. The

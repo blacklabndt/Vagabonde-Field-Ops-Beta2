@@ -614,7 +614,14 @@ export function PdfLink({ file, pdfKey, bucket = "reports", style }) {
 // Modal: backdrop + Blueprint frame. The field grid (not the shell) scrolls
 // so corner marks stay put — pass `maxWidth` and put your form in children.
 let dialogSeq = 0;
-export function Dialog({ title, maxWidth = 520, onClose, children, actions }) {
+// `focusFirst` is for a dialog whose first focusable thing is a button
+// rather than a field. Focusing it draws the accent focus ring, and on a
+// panel with two buttons and nothing to fill in that reads as one button
+// being bigger and differently bordered than the other — which is what the
+// screen tips looked like. Such a dialog focuses its own frame instead: the
+// Tab trap, Escape and the announcement are unchanged, and the first Tab
+// still lands on the first button.
+export function Dialog({ title, maxWidth = 520, onClose, children, actions, focusFirst = true }) {
   const shell = useRef(null);
   // Callers pass onClose as a fresh inline arrow every render. Held in a ref
   // so the setup effect below can run once (mount only) instead of tearing
@@ -622,6 +629,8 @@ export function Dialog({ title, maxWidth = 520, onClose, children, actions }) {
   // re-render (a toast, a queue update) while the user was typing.
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const focusFirstRef = useRef(focusFirst);
+  focusFirstRef.current = focusFirst;
   const titleId = useRef("dlg-" + (++dialogSeq)).current;
 
   useEffect(() => {
@@ -636,7 +645,9 @@ export function Dialog({ title, maxWidth = 520, onClose, children, actions }) {
     const focusable = () => Array.from(shell.current
       ? shell.current.querySelectorAll('input, select, textarea, button, a[href], [tabindex]:not([tabindex="-1"])')
       : []).filter(el => !el.disabled && el.offsetParent !== null);
-    const first = focusable()[0];
+    // Read from a ref rather than the prop, so this mount-only effect does
+    // not need the prop in its (empty) dependency list.
+    const first = focusFirstRef.current ? focusable()[0] : shell.current;
     if (first) first.focus();
 
     const onKey = e => {
@@ -644,6 +655,15 @@ export function Dialog({ title, maxWidth = 520, onClose, children, actions }) {
       if (e.key !== "Tab") return;
       const items = focusable();
       if (!items.length) return;
+      // Focus sitting on the frame itself (focusFirst={false}) is inside no
+      // item, so neither edge matches and Shift+Tab would walk out of the
+      // dialog it is meant to be trapped in. Send it to the last item, the
+      // way the first item's own Shift+Tab goes.
+      if (document.activeElement === shell.current) {
+        e.preventDefault();
+        (e.shiftKey ? items[items.length - 1] : items[0]).focus();
+        return;
+      }
       const edge = e.shiftKey ? items[0] : items[items.length - 1];
       if (document.activeElement === edge) {
         e.preventDefault();
@@ -663,6 +683,9 @@ export function Dialog({ title, maxWidth = 520, onClose, children, actions }) {
   return (
     <div className="dialog-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
       <Blueprint className="dialog" ref={shell} role="dialog" aria-modal="true" aria-labelledby={titleId}
+        // Focusable only by script, for the focusFirst={false} case above:
+        // -1 keeps it out of the Tab order, so nothing about tabbing moves.
+        tabIndex={-1}
         style={{ width: `min(${maxWidth}px, 100%)`, maxHeight: "88vh", display: "flex", flexDirection: "column" }}>
         <div className="dialog-title" id={titleId}>{title}</div>
         <div className="dialog-field-grid" style={{ maxHeight: "64vh", display: "flex", flexDirection: "column", gap: 12 }}>

@@ -294,6 +294,10 @@ tbody tr.clickable { cursor: pointer; }
 /* The Blueprint frame deliberately has no fill, but a dialog needs one —
    otherwise its dark body text sits directly on the dark scrim. */
 .dialog-backdrop .dialog { background: var(--color-bg); }
+/* The frame takes focus itself when a dialog has no field to put it in
+   (Dialog's focusFirst={false}); it is a container, not a control, so it
+   is never ringed for it. Tab still rings whatever it lands on. */
+.dialog-backdrop .dialog:focus, .dialog-backdrop .dialog:focus-visible { outline: none; }
 :root[data-theme="dark"] .dialog-backdrop {
   background: color-mix(in srgb, #000 78%, transparent);
 }
