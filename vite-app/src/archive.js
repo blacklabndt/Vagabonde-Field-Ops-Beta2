@@ -11,7 +11,7 @@
 // it (`db`) by the dialog, and the tests never load config.js's browser-only
 // env.
 
-import { money, gstOn, gstRateOf } from "./data.js";
+import { money, gstOn, gstRateOf, lineTotal } from "./data.js";
 import { makeZip, safeFilename, crc32 } from "./zip.js";
 // Only for the switch that turns the offline fallback off while the archive
 // reads — no env, nothing browser-only, so the tests still load this module.
@@ -91,7 +91,10 @@ export function uniqueName(used, name, fallback = "file") {
 
 const cents = n => Math.round((Number(n) || 0) * 100);
 const dollars = c => c / 100;
-const lineAmount = (qty, rate) => Math.round(cents(qty) * (Number(rate) || 0)) / 100;
+// data.js's own lineTotal, not a copy: a float product here once printed a
+// charge a cent under the ticket total on the line above it, in the
+// permanent record.
+const lineAmount = (qty, rate) => lineTotal(qty, rate);
 const hrs = n => String(Math.round((Number(n) || 0) * 100) / 100);
 const fmtWhen = iso => {
   if (!iso) return "";

@@ -149,7 +149,7 @@ const sigImage = (v: string | null | undefined) =>
 // 1.5 and 60.05 is 90.07499999999999, which rounds a cent below the
 // round(quantity * unit_rate, 2) the trigger stores in tickets.total — the
 // same arithmetic as lineTotal in the app's data.js.
-const lineCents = (l: InvoiceLine) =>
+export const lineCents = (l: InvoiceLine) =>
   Math.round(Math.round(Number(l.quantity || 0) * 1000) * Math.round(Number(l.unit_rate || 0) * 100) / 1000);
 
 // Subtotal, GST and grand total, all in integer cents — floats drift, cents

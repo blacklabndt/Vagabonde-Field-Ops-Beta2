@@ -14,7 +14,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendMail, appSettings, corsHeaders, wrapEmail, esc, recipients, optionalRecipients } from "../_shared/mail.ts";
-import { invoicePage, gstLabelOf, invoiceTotals } from "../_shared/invoice.ts";
+import { invoicePage, gstLabelOf, invoiceTotals, lineCents } from "../_shared/invoice.ts";
 import { loadInvoice } from "../_shared/ticketInvoice.ts";
 import { hashToken } from "../_shared/approvalToken.ts";
 
@@ -131,10 +131,10 @@ Deno.serve(async (req) => {
 
     // Summed from the lines, like the invoice does, rather than read off
     // tickets.total — the email and the document it links to must not be
-    // able to quote a client two different numbers. Each line rounded to
-    // the cent, summed in integer cents: the same formula the database
-    // stores (migration 20260818140051) and invoice.ts prints.
-    const lineTotal = (l: any) => Math.round(Number(l.quantity || 0) * Number(l.unit_rate || 0) * 100) / 100;
+    // able to quote a client two different numbers. invoice.ts's own
+    // lineCents, not a copy of it: a float product here once printed the
+    // lines a cent under the subtotal three rows below them.
+    const lineTotal = (l: any) => lineCents(l) / 100;
     // One formula, shared with the invoice and the approval page — a third
     // hand-rolled copy here was a third number free to disagree.
     const totals = invoiceTotals(invoiceData);
