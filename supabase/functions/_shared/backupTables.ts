@@ -148,7 +148,11 @@ export const APP_SETTINGS_NEVER_RESTORED: string[] = [
   "backup_weekday",
   "backup_hour",
   "backup_keep",
-  "backup_next_run_at"
+  "backup_next_run_at",
+  // The fortnightly file check's clock and interval: the engine's, like the
+  // schedule above.
+  "backup_verify_every_days",
+  "backup_verify_next_at"
 ];
 
 export const TABLE_KEYS: Record<string, string[]> = {

@@ -108,6 +108,27 @@ export const carriedOverNote = counts => {
   return n ? `, ${n} carried over from the night before` : "";
 };
 
+// The fortnightly file check's counts (backupRun.ts's verifyCounts): how
+// many files hashed to their record, how many were re-stored from the app,
+// and how many could not be. One sentence, and "nothing to repair" when
+// the last two are zero, because that is the answer the office is reading
+// for.
+export const verifySentence = counts => {
+  const c = counts || {};
+  const verified = Number(c.verified) || 0;
+  const repaired = Number(c.repaired) || 0;
+  const bad = Number(c.unrepairable) || 0;
+  const parts = [`${verified} of ${verified + repaired + bad} files matched their record`];
+  if (repaired) parts.push(`${repaired} repaired from the app`);
+  if (bad) parts.push(`${bad} could not be repaired`);
+  if (!repaired && !bad) parts.push("nothing to repair");
+  return parts.join(", ");
+};
+export const verifyNotes = counts => {
+  const n = counts && counts.notes;
+  return Array.isArray(n) ? n.map(String) : [];
+};
+
 // Only these two kinds put a copy of the app in the drive. A restore's own
 // bytes are what it read back out, and drawing them on the same line as the
 // backups would make an ordinary restore look like the night everything

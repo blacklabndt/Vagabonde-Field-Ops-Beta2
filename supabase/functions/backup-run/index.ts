@@ -51,7 +51,7 @@ import {
   retryDelayMs, reviveCursor, shouldRetry, sliceDeadline, sliceLooksAlive,
   startPrefixWalk, stillHoldsRun, gatewayRefusal
 } from "../_shared/backupRun.ts";
-import { FILES_INDEX_NAME, carryOverId, chooseBaseFolder, hashBytes } from "../_shared/backupRun.ts";
+import { FILES_INDEX_NAME, VERIFY_KIND, addVerifyNote, carryOverId, chooseBaseFolder, hashBytes, nextVerifyAt, reviveVerifyCursor, verifyCounts } from "../_shared/backupRun.ts";
 import type { RunCursor } from "../_shared/backupRun.ts";
 import { gzip } from "../_shared/gzip.ts";
 import { nextRunAt } from "../_shared/backupSchedule.ts";
@@ -139,7 +139,9 @@ Deno.serve(async (req) => {
 
 // The two kinds this function copies. A restore is backup-restore's work;
 // the tick still has to poke it, but it never claims it.
-const MY_KINDS = ["backup", "before_restore"];
+// The fortnightly file check is this function's too: found, claimed and
+// advanced by the tick like a backup, though it makes no folder of its own.
+const MY_KINDS = ["backup", "before_restore", VERIFY_KIND];
 const RESTORE_KINDS = ["restore_all", "restore_jobs"];
 
 async function openRun(db: SupabaseClient, status: string, kinds = MY_KINDS): Promise<Run | null> {
@@ -191,11 +193,24 @@ async function tick(db: SupabaseClient, secret: string): Promise<Record<string, 
 
   // Nothing in flight: is one due?
   const { data: s, error } = await db.from("app_settings")
-    .select("backup_refresh_token, backup_next_run_at, backup_frequency, backup_weekday, backup_hour")
+    .select("backup_refresh_token, backup_next_run_at, backup_frequency, backup_weekday, backup_hour, backup_verify_next_at, backup_verify_every_days")
     .maybeSingle();
   if (error) throw error;
   if (!s || !s.backup_refresh_token || !s.backup_next_run_at) return { ok: true, idle: true };
   if (Date.parse(String(s.backup_next_run_at)) > Date.now()) {
+    // No backup due: is the fortnightly file check? After the backups
+    // always — a backup that is due goes first, and this branch is only
+    // reached when none is. The same conditional move of the clock is the
+    // claim on it.
+    if (s.backup_verify_next_at && Date.parse(String(s.backup_verify_next_at)) <= Date.now()) {
+      const { data: wonV, error: vErr } = await db.from("app_settings")
+        .update({ backup_verify_next_at: nextVerifyAt(Date.now(), Number(s.backup_verify_every_days ?? 14)) })
+        .eq("id", true).eq("backup_verify_next_at", s.backup_verify_next_at).select("id");
+      if (vErr) throw vErr;
+      if (!stillHoldsRun(wonV)) return { ok: true, idle: true };
+      const verify = await queueRun(db, VERIFY_KIND, null);
+      return await advance(db, verify, secret);
+    }
     return { ok: true, idle: true, next: s.backup_next_run_at };
   }
 
@@ -465,6 +480,9 @@ async function advance(db: SupabaseClient, run: Run, secret: string): Promise<Re
     const current = await claim(db, run);
     if (!current) return { ok: true, runId, busy: true };
     guard = "running";
+    // A file check has no folder of its own and no phases: its own slice,
+    // inside the same claim, the same heartbeat and the same catch below.
+    if (String(current.kind) === VERIFY_KIND) return await verifySlice(db, conn, current, runId, secret, deadline);
     cursor = reviveCursor(current.cursor, String(current.started_at ?? new Date().toISOString()));
 
     const folderId = await ensureRunFolder(db, conn, current);
@@ -522,6 +540,125 @@ async function advance(db: SupabaseClient, run: Run, secret: string): Promise<Re
 // out from under itself, throwing its way out an hour later, must not turn
 // somebody else's complete run into a failed one. The reason is still logged
 // either way — the error happened, whoever owns the run now.
+// The fortnightly file check, one slice of it. Every entry in the newest
+// complete backup folder's index, in name order from the cursor's offset:
+// downloaded off the drive, hashed, compared with its record. A file that
+// does not match, or is not in the folder at all, is read again from the
+// bucket it came from and re-stored under the same name, its row updated;
+// for reports and chat pictures that is the same bytes, for a re-rendered
+// assessment or timesheet it is today's, and the note says which. A file
+// whose source has gone is counted unrepairable and named. Once the walk is
+// done, a repair that changed any record has the folder's files.json.gz
+// rewritten from the rows, so a restore reads what is there now.
+async function verifySlice(
+  db: SupabaseClient, conn: Connection, run: Run, runId: string, secret: string, deadline: number
+): Promise<Record<string, unknown>> {
+  let c = reviveVerifyCursor(run.cursor, String(run.started_at ?? new Date().toISOString()));
+  const persist = async (): Promise<boolean> => {
+    const { data: held, error } = await db.from("backup_runs").update({
+      phase: c.done ? "done" : "files", cursor: c, heartbeat_at: new Date().toISOString(), counts: verifyCounts(c)
+    }).eq("id", runId).eq("status", "running").select("id");
+    if (error) throw error;
+    return stillHoldsRun(held);
+  };
+  const finish = async (): Promise<Record<string, unknown>> => {
+    c.done = true;
+    const finished = new Date().toISOString();
+    const { data: held, error } = await db.from("backup_runs").update({
+      status: "complete", phase: "done", finished_at: finished, heartbeat_at: finished,
+      cursor: c, counts: verifyCounts(c), folder_id: c.folderId, folder_name: c.folderName
+    }).eq("id", runId).eq("status", "running").select("id");
+    if (error) throw error;
+    if (!stillHoldsRun(held)) return { ok: true, runId, superseded: true };
+    return { ok: true, runId, complete: true, counts: verifyCounts(c) };
+  };
+
+  if (!c.folderId) {
+    const { data: newest, error } = await db.from("backup_runs")
+      .select("id, folder_id, folder_name").eq("kind", "backup").eq("status", "complete")
+      .not("folder_id", "is", null).order("finished_at", { ascending: false }).limit(1).maybeSingle();
+    if (error) throw error;
+    if (!newest) {
+      addVerifyNote(c, "There is no complete backup to check yet.");
+      return await finish();
+    }
+    c.folderId = String(newest.folder_id);
+    c.folderName = String(newest.folder_name ?? "");
+    c.backupRunId = String(newest.id);
+  }
+
+  const index = await withRetry("Reading the backup's file index", () => readFileIndex(conn.drive, c.folderId!));
+  if (!index.size) {
+    addVerifyNote(c, `${c.folderName} has no file index — it is from before files were hashed — so there is nothing to check it against. The next backup's folder will have one.`);
+    return await finish();
+  }
+  const filesFolder = (await withRetry("Opening the backup's files folder", () => conn.drive.listFolders(c.folderId!))).find(f => f.name === FILES_FOLDER);
+  if (!filesFolder) {
+    addVerifyNote(c, `${c.folderName} has no files folder.`);
+    return await finish();
+  }
+  const byName = new Map<string, string>();
+  for (const e of await withRetry("Listing the backup's files", () => conn.drive.listFiles(filesFolder.id))) byName.set(e.name, e.id);
+  const names = [...index.keys()].sort();
+
+  let units = 0;
+  for (let i = c.offset; i < names.length; i++) {
+    if (outOfBudget(deadline, Date.now())) break;
+    const name = names[i];
+    const rec = index.get(name)!;
+    const id = byName.get(name) ?? null;
+    let bytes: Uint8Array | null = null;
+    if (id) {
+      try { bytes = await withRetry(`Reading ${name} off the drive`, () => conn.drive.download(id)); }
+      catch (e) { console.warn(`Could not read ${name} off the drive: ${(e as Error).message}`); bytes = null; }
+    }
+    if (bytes && await hashBytes(bytes) === rec.sha256) {
+      c.verified += 1;
+      c.bytes += bytes.byteLength;
+    } else {
+      const why = !id ? "was missing from the folder" : !bytes ? "could not be read off the drive" : "did not hash to its record";
+      try {
+        const blob = await withRetry(`Re-reading ${rec.bucket}/${rec.key}`, async () => {
+          const { data, error } = await db.storage.from(rec.bucket).download(rec.key);
+          if (error) throw error;
+          return data as Blob;
+        });
+        const payload = new Uint8Array(await blob.arrayBuffer());
+        const newId = await withRetry(`Re-storing ${name}`, () =>
+          conn.drive.upload(filesFolder.id, name, payload, blob.type || "application/octet-stream"));
+        const sha = await hashBytes(payload);
+        const { error } = await db.from("backup_run_files")
+          .update({ sha256: sha, size: payload.byteLength, drive_id: newId, reused: false })
+          .eq("run_id", c.backupRunId!).eq("name", name);
+        if (error) throw error;
+        c.repaired += 1;
+        c.bytes += payload.byteLength;
+        if (sha !== rec.sha256) c.indexDirty = true;
+        addVerifyNote(c, `${rec.bucket}/${rec.key} ${why} and was re-stored from the app${sha !== rec.sha256 ? " — the app's copy has changed since that backup, and the record now carries the new hash" : ""}.`);
+      } catch (e) {
+        c.unrepairable += 1;
+        addVerifyNote(c, `${rec.bucket}/${rec.key} ${why} and could not be re-stored: ${(e as Error).message}`);
+      }
+    }
+    c.offset = i + 1;
+    units += 1;
+    if (units % 25 === 0 && !(await persist())) return { ok: true, runId, superseded: true };
+  }
+
+  if (c.offset >= names.length) {
+    if (c.indexDirty) {
+      const rows = await listFileRows(db, c.backupRunId!);
+      const fresh = rows.map(r => ({ name: r.name, bucket: r.bucket, key: r.key, size: r.size, sha256: r.sha256, reused: r.reused }));
+      await withRetry("Rewriting the file index", async () =>
+        conn.drive.upload(c.folderId!, FILES_INDEX_NAME, await gzip(new TextEncoder().encode(JSON.stringify(fresh))), "application/gzip"));
+    }
+    return await finish();
+  }
+  if (!(await persist())) return { ok: true, runId, superseded: true };
+  if (units > 0) kick("backup-run", { action: "advance", runId, chain: true }, secret);
+  return { ok: true, runId, phase: "files", continuing: true, checked: c.offset, of: names.length };
+}
+
 async function fail(
   db: SupabaseClient, runId: string, message: string, guard: string
 ): Promise<Record<string, unknown>> {

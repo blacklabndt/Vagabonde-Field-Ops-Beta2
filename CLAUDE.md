@@ -470,6 +470,18 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   never a failure), and a restore refuses to put back a file whose bytes
   do not hash to the index (`damaged`, named in the notes). Spec:
   `docs/superpowers/specs/2026-09-08-backup-hashes-every-file-design.md`.
+  Every `backup_verify_every_days` (14) the tick queues a `verify` run —
+  after the backups, only when none is due, the clock moved at START by
+  `nextVerifyAt` — that downloads EVERY file in the newest complete backup
+  folder, hashes it against the index, re-stores from the bucket whatever
+  is missing or does not match (a re-rendered assessment comes back as
+  today's copy and the record takes the new hash; a source that has gone
+  is `unrepairable`) and rewrites files.json.gz if a record changed. Its
+  cursor is `VerifyCursor` in backupRun.ts, its counts `verifyCounts`
+  (files, verified, repaired, unrepairable, notes), the panel's words
+  `verifySentence`; `verifySlice` in backup-run runs inside the same claim
+  and catch as a backup slice and makes no folder. It is in MY_KINDS, so
+  the tick tends it like a backup.
 - The tick is the only scheduler. pg_cron fires `backup-run` every five
   minutes with `x-internal-secret` (chat-retention's shape, read from
   `private.internal_config` when the job fires); `backup-run` drives kinds

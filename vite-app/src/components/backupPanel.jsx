@@ -4,7 +4,7 @@ import { Btn, Dialog, Field, ErrorBox, Loading, TagX } from "./common.jsx";
 import {
   BACKUP_PROVIDERS, PROVIDER_LABEL, redirectUriFor, readBackupOutcome,
   isBeforeRestore, restoreNameMatches, failedRunAdvice, keepPhrase,
-  runRows, runFiles, runBytes, sizeTrend, carriedOverNote
+  runRows, runFiles, runBytes, sizeTrend, carriedOverNote, verifySentence, verifyNotes
 } from "../backupPanelLogic.js";
 import { fileSize } from "../data.js";
 import { describeSchedule, WEEKDAY_NAMES, nextRunAt, BACKUP_ZONE } from "../backupSchedule.js";
@@ -77,7 +77,8 @@ const KIND_WORDS = {
   backup: "Backup",
   before_restore: "Safety backup",
   restore_all: "Restore",
-  restore_jobs: "Restoring jobs"
+  restore_jobs: "Restoring jobs",
+  verify: "File check"
 };
 
 // The three figures every run keeps, now shared with the list of earlier runs
@@ -463,6 +464,10 @@ export function AutomaticBackupPanel() {
         removed after each successful run &mdash; except the copies taken automatically just before a restore,
         which are never tidied away.
         {connected && <> Next due <strong>{when(s.next_run_at || nextRunAt(form, Date.now()))}</strong>.</>}
+        {/* The fortnightly file check: every file in the newest backup
+            downloaded and hashed against its record, and re-stored from the
+            app where it does not match. Its own run, after the backups. */}
+        {connected && s.verify_next_at && <> Every file is checked every {s.verify_every_days || 14} days; next <strong>{when(s.verify_next_at)}</strong>.</>}
       </div>
 
       {/* Back up now, and what happened last time */}
@@ -490,7 +495,15 @@ export function AutomaticBackupPanel() {
       {!run && s.last_run && (
         <div style={{ fontSize: 13, marginBottom: 12 }}>
           <strong>Last {(KIND_WORDS[s.last_run.kind] || "run").toLowerCase()}:</strong>{" "}
-          {s.last_run.status === "complete" ? (
+          {s.last_run.status === "complete" && s.last_run.kind === "verify" ? (
+            <>finished {when(s.last_run.finished_at)} &middot; {s.last_run.folder_name} &middot; {verifySentence(s.last_run.counts)}.
+              {verifyNotes(s.last_run.counts).length > 0 && (
+                <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                  {verifyNotes(s.last_run.counts).map((n, i) => <li key={i}>{n}</li>)}
+                </ul>
+              )}
+            </>
+          ) : s.last_run.status === "complete" ? (
             <>finished {when(s.last_run.finished_at)} &middot; {s.last_run.folder_name} &middot;{" "}
               {plural(rowsIn(s.last_run.counts), "record")}, {plural(filesIn(s.last_run.counts), "file")}{" "}
               ({mb(bytesIn(s.last_run.counts))}{carriedOverNote(s.last_run.counts)}).
@@ -558,7 +571,9 @@ export function AutomaticBackupPanel() {
                     it holds the app. These three figures do, and they are the
                     same ones the last-run sentence above quotes. */}
                 <span style={QUIET}>
-                  {plural(rowsIn(r.counts), "record")} &middot; {plural(filesIn(r.counts), "file")} &middot; {fileSize(bytesIn(r.counts))}
+                  {r.kind === "verify"
+                    ? verifySentence(r.counts)
+                    : <>{plural(rowsIn(r.counts), "record")} &middot; {plural(filesIn(r.counts), "file")} &middot; {fileSize(bytesIn(r.counts))}</>}
                 </span>
                 <span style={{ marginLeft: "auto" }}>{r.status} &middot; {when(r.finished_at || r.created_at)}</span>
               </div>

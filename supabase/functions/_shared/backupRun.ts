@@ -363,6 +363,82 @@ export const FILES_INDEX_NAME = "files.json.gz";
 
 export interface FileRecord { name: string; bucket: string; key: string; size: number; sha256: string | null; reused: boolean }
 
+// The fortnightly full check: every file in the newest complete backup
+// folder downloaded off the drive, hashed against files.json.gz, and
+// re-stored from Supabase when the two disagree. Its own run kind, worked in
+// the same slices as a backup with the position in this cursor.
+export const VERIFY_KIND = "verify";
+export const MAX_VERIFY_NOTES = 40;
+
+export interface VerifyCursor {
+  // The folder being checked: the newest complete backup's, found by the
+  // first slice and kept, and the backup run whose file records it holds.
+  folderId: string | null;
+  folderName: string | null;
+  backupRunId: string | null;
+  // The next entry of the folder's index (in name order) to check.
+  offset: number;
+  verified: number;
+  repaired: number;
+  unrepairable: number;
+  bytes: number;
+  // Whether a repair changed a record, so the folder's index is rewritten
+  // from the rows once the walk is done.
+  indexDirty: boolean;
+  done: boolean;
+  notes: string[];
+  startedAt: string;
+}
+
+export function newVerifyCursor(startedAt: string): VerifyCursor {
+  return {
+    folderId: null, folderName: null, backupRunId: null,
+    offset: 0, verified: 0, repaired: 0, unrepairable: 0, bytes: 0,
+    indexDirty: false, done: false, notes: [], startedAt
+  };
+}
+
+export function reviveVerifyCursor(raw: unknown, startedAt: string): VerifyCursor {
+  const c = (raw ?? {}) as Record<string, unknown>;
+  const base = newVerifyCursor(String(c.startedAt ?? startedAt));
+  const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  return {
+    ...base,
+    folderId: str(c.folderId), folderName: str(c.folderName), backupRunId: str(c.backupRunId),
+    offset: num(c.offset), verified: num(c.verified), repaired: num(c.repaired),
+    unrepairable: num(c.unrepairable), bytes: num(c.bytes),
+    indexDirty: c.indexDirty === true, done: c.done === true,
+    notes: Array.isArray(c.notes) ? (c.notes as unknown[]).map(String) : []
+  };
+}
+
+export function addVerifyNote(c: VerifyCursor, text: string): VerifyCursor {
+  if (c.notes.length < MAX_VERIFY_NOTES) c.notes.push(text);
+  else if (c.notes.length === MAX_VERIFY_NOTES) c.notes.push("… and more; the run's counts carry the rest.");
+  return c;
+}
+
+// What the panel reads. `files` and `bytes` are what every other kind
+// writes, so the earlier-runs row can print them the same way; the three
+// tallies and the notes are this kind's own.
+export function verifyCounts(c: VerifyCursor): Record<string, unknown> {
+  return {
+    rows: {},
+    files: num(c.verified) + num(c.repaired) + num(c.unrepairable),
+    bytes: num(c.bytes),
+    verified: num(c.verified), repaired: num(c.repaired), unrepairable: num(c.unrepairable),
+    folder: c.folderName ?? null,
+    notes: c.notes ?? []
+  };
+}
+
+// The next full check: a whole number of days on from now. Moved when a
+// verify STARTS, the backups' own rule.
+export function nextVerifyAt(nowMs: number, everyDays: number): string {
+  const days = Number.isFinite(everyDays) && everyDays >= 1 ? Math.floor(everyDays) : 14;
+  return new Date(nowMs + days * 86400000).toISOString();
+}
+
 // Lower-case hex SHA-256. Web Crypto, which node and the Edge runtime
 // both carry, so this module stays import-free.
 export async function hashBytes(bytes: Uint8Array): Promise<string> {

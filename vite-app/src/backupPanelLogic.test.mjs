@@ -13,8 +13,7 @@ import {
   BACKUP_PROVIDERS, PROVIDER_LABEL,
   redirectUriFor, backupSettingsPatch, readBackupOutcome, cleanClientId,
   BEFORE_RESTORE_PREFIX, isBeforeRestore, restoreNameMatches, failedRunAdvice,
-  keepToSave, keepPhrase, runRows, runFiles, runBytes, sizeTrend
-} from "./backupPanelLogic.js";
+  keepToSave, keepPhrase, runRows, runFiles, runBytes, sizeTrend, verifySentence, verifyNotes } from "./backupPanelLogic.js";
 
 // ── The redirect URI ─────────────────────────────────────────────────────
 
@@ -375,4 +374,17 @@ test("only runs that wrote a copy are plotted", () => {
   assert.deepEqual(t.points.map(p => p.bytes), [100, 200]);
   assert.equal(t.latest, 200);
   assert.equal(t.previous, 100);
+});
+
+test("a file check reads as one sentence, and says when there was nothing to repair", () => {
+  assert.equal(verifySentence({ verified: 25, repaired: 0, unrepairable: 0 }),
+    "25 of 25 files matched their record, nothing to repair");
+  assert.equal(verifySentence({ verified: 23, repaired: 2, unrepairable: 0 }),
+    "23 of 25 files matched their record, 2 repaired from the app");
+  assert.equal(verifySentence({ verified: 20, repaired: 3, unrepairable: 2 }),
+    "20 of 25 files matched their record, 3 repaired from the app, 2 could not be repaired");
+  // A run that died in its first slice has counts of {} — a sentence, not NaN.
+  assert.equal(verifySentence({}), "0 of 0 files matched their record, nothing to repair");
+  assert.deepEqual(verifyNotes({ notes: ["a", 2] }), ["a", "2"]);
+  assert.deepEqual(verifyNotes(null), []);
 });

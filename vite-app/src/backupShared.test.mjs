@@ -40,6 +40,7 @@ import {
   newRunCursor, reviveCursor, sliceDeadline, budgetLeft, outOfBudget,
   sliceLooksAlive, isRetryable, shouldRetry, worthAnotherGo, retryDelayMs, stillHoldsRun, gatewayRefusal,
   hashBytes, parseFileIndex, FILES_INDEX_NAME,
+  VERIFY_KIND, MAX_VERIFY_NOTES, newVerifyCursor, reviveVerifyCursor, addVerifyNote, verifyCounts, nextVerifyAt,
   afterTablePart, foldIntoIndex, forgetIndex, nextPhaseAfterManifest,
   startPrefixWalk, pausePage, afterFilesPage, countsOf, totalRows
 } from "../../supabase/functions/_shared/backupRun.ts";
@@ -1115,9 +1116,9 @@ test("every write a slice makes to its own run is conditional on still holding i
   const updates = src.split('.from("backup_runs")').slice(1)
     .filter(rest => rest.trimStart().startsWith(".update("))
     .map(rest => rest.slice(0, rest.indexOf(";")));
-  assert.equal(updates.length, 6,
-    "claim, the folder, the cursor after every unit, the completion, the failure, " +
-    "and the heartbeat the tick keeps for a restore waiting on its safety copy");
+  assert.equal(updates.length, 8, "claim, the folder, the cursor after every unit, the completion, " +
+    "the failure, the heartbeat the tick keeps for a restore waiting on its safety copy, " +
+    "and the file check's own cursor write and completion");
   for (const statement of updates) {
     assert.match(statement, /\.eq\("status",/,
       `a write to backup_runs with no status guard: ${statement.replace(/\s+/g, " ").slice(0, 140)}`);
@@ -1127,8 +1128,9 @@ test("every write a slice makes to its own run is conditional on still holding i
   // — the cursor write, the completion and the failure; the folder write,
   // which status alone cannot tell a reclaim from; and the clock move on
   // app_settings, which is the claim on a scheduled run.
-  assert.equal((src.match(/stillHoldsRun\(/g) ?? []).length, 5,
-    "the cursor write, the completion, the failure, the folder write and the clock move each check what they matched");
+  assert.equal((src.match(/stillHoldsRun\(/g) ?? []).length, 8,
+    "the cursor write, the completion, the failure, the folder write, the two clock moves, " +
+    "and the file check's cursor write and completion each check what they matched");
   // Two slices both believe "running" after a reclaim, so the folder write
   // needs the one condition that tells them apart: no folder yet.
   assert.match(src, /\.update\(\{\s*folder_id: folderId,\s*folder_name: name\s*\}\)[\s\S]{0,160}\.is\("folder_id",\s*null\)/,
@@ -1433,4 +1435,40 @@ test("the manifest records how many files are hashed, where, and the spot check"
   m = recordFiles(m, 1, 100, 0);
   assert.equal(m.files.hashed, 25);
   assert.equal(m.files.count, 26);
+});
+
+test("a file check's cursor starts empty, revives from jsonb, and its counts read as the panel needs", () => {
+  assert.equal(VERIFY_KIND, "verify");
+  const fresh = newVerifyCursor("2026-09-09T07:00:00Z");
+  assert.equal(fresh.folderId, null);
+  assert.equal(fresh.offset, 0);
+  assert.equal(fresh.done, false);
+  // Read back with gaps and the wrong types: filled in, never trusted.
+  const c = reviveVerifyCursor({ folderId: "f1", folderName: "2026-09-08 00-00", backupRunId: "r1", offset: "12", verified: 10, repaired: 2, notes: ["a"], indexDirty: true }, "2026-09-09T07:00:00Z");
+  assert.equal(c.offset, 12);
+  assert.equal(c.unrepairable, 0);
+  assert.equal(c.indexDirty, true);
+  assert.deepEqual(c.notes, ["a"]);
+  const counts = verifyCounts(c);
+  assert.equal(counts.files, 12, "files is every file the check looked at, the way every other kind counts");
+  assert.equal(counts.verified, 10);
+  assert.equal(counts.repaired, 2);
+  assert.equal(counts.unrepairable, 0);
+  assert.equal(counts.folder, "2026-09-08 00-00");
+  assert.deepEqual(counts.rows, {}, "no records: the row's record count reads zero, not NaN");
+});
+
+test("a file check's notes are capped, and the cap says so once", () => {
+  const c = newVerifyCursor("2026-09-09T07:00:00Z");
+  for (let i = 0; i < MAX_VERIFY_NOTES + 5; i++) addVerifyNote(c, "reports/x" + i + ".pdf was re-stored");
+  assert.equal(c.notes.length, MAX_VERIFY_NOTES + 1);
+  assert.match(c.notes[MAX_VERIFY_NOTES], /and more/);
+});
+
+test("the next file check is a whole number of days on, fourteen when the setting is nonsense", () => {
+  const now = Date.parse("2026-09-09T07:00:00Z");
+  assert.equal(nextVerifyAt(now, 14), "2026-09-23T07:00:00.000Z");
+  assert.equal(nextVerifyAt(now, 7), "2026-09-16T07:00:00.000Z");
+  assert.equal(nextVerifyAt(now, 0), "2026-09-23T07:00:00.000Z");
+  assert.equal(nextVerifyAt(now, NaN), "2026-09-23T07:00:00.000Z");
 });
