@@ -320,6 +320,17 @@ export function afterFilesPage(c: RunCursor, done: {
 // is exactly why the superseded slice has to be the one that notices: it
 // stops where it is rather than overwriting a finished run's cursor, or
 // flipping a complete run to failed on its way out.
+// A gateway page in place of an answer. Supabase's API sits behind
+// Cloudflare, and a passing blip at that edge answers a plain HTML page —
+// "<title>502 Bad Gateway</title>" — which supabase-js hands back as the
+// error's whole message. Named plainly, or the digest mailed the HTML.
+// Null for anything else, so a real refusal keeps its own words.
+export function gatewayRefusal(message: string): string | null {
+  const m = /<title>\s*(5\d\d)\s*([^<]*)<\/title>/i.exec(String(message || ""));
+  if (!m || !/<html/i.test(String(message))) return null;
+  return `Supabase's API answered ${m[1]} ${m[2].trim()} — a passing outage at the edge, not the backup`;
+}
+
 export function stillHoldsRun(matched: unknown): boolean {
   if (matched === null || matched === undefined) return false;
   if (Array.isArray(matched)) return matched.length > 0;

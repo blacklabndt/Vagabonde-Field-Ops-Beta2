@@ -49,7 +49,7 @@ import {
   BUDGET_MS, RETRIES, afterFilesPage, afterTablePart, countsOf, foldIntoIndex,
   forgetIndex, newRunCursor, nextPhaseAfterManifest, outOfBudget, pausePage,
   retryDelayMs, reviveCursor, shouldRetry, sliceDeadline, sliceLooksAlive,
-  startPrefixWalk, stillHoldsRun
+  startPrefixWalk, stillHoldsRun, gatewayRefusal
 } from "../_shared/backupRun.ts";
 import { carryOverId, chooseBaseFolder } from "../_shared/backupRun.ts";
 import type { RunCursor } from "../_shared/backupRun.ts";
@@ -99,7 +99,17 @@ Deno.serve(async (req) => {
 
   try {
     if (action === "tick") {
-      return json(await tick(db, caller.secret || await internalSecret(db)));
+      const secret = caller.secret || await internalSecret(db);
+      try { return json(await tick(db, secret)); }
+      catch (e) {
+        // A gateway page from the edge is a blink, not a fault: one more go
+        // after a moment, and a tick is safe to repeat — every claim it
+        // makes is conditional. Two in a row is worth the one line the
+        // outer catch writes, in plain words.
+        if (!gatewayRefusal((e as Error).message)) throw e;
+        await sleep(2000);
+        return json(await tick(db, secret));
+      }
     }
     if (action === "advance") {
       // The next link of a chain this function started. Not an Admin's to
@@ -118,8 +128,10 @@ Deno.serve(async (req) => {
     }
     return json({ error: `Unknown action "${action}"` }, 400);
   } catch (e) {
-    await logError("backup-run", (e as Error).message, { action });
-    return json({ error: (e as Error).message }, 400);
+    const plain = gatewayRefusal((e as Error).message);
+    const message = plain ? `${plain}; the next tick retries in five minutes.` : (e as Error).message;
+    await logError("backup-run", message, { action });
+    return json({ error: message }, 400);
   }
 });
 

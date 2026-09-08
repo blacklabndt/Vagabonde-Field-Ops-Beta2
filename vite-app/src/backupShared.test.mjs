@@ -39,7 +39,7 @@ import {
 import {
   BUDGET_MS, SLICE_ALIVE_MS, RETRIES, BACKOFF_MS,
   newRunCursor, reviveCursor, sliceDeadline, budgetLeft, outOfBudget,
-  sliceLooksAlive, isRetryable, shouldRetry, worthAnotherGo, retryDelayMs, stillHoldsRun,
+  sliceLooksAlive, isRetryable, shouldRetry, worthAnotherGo, retryDelayMs, stillHoldsRun, gatewayRefusal,
   afterTablePart, foldIntoIndex, forgetIndex, nextPhaseAfterManifest,
   startPrefixWalk, pausePage, afterFilesPage, countsOf, totalRows
 } from "../../supabase/functions/_shared/backupRun.ts";
@@ -1081,6 +1081,20 @@ test("a slice that matched no row has lost the run and must stop writing", () =>
   // a `.select("id")` on an update that matched nothing comes back as an
   // empty array, and the slice reading it was superseded while it hung.
   assert.equal(stillHoldsRun([{ id: "r1" }]), true);
+});
+
+test("a gateway page is named plainly, and anything else keeps its own words", () => {
+  // The whole message supabase-js hands back when Cloudflare answers for
+  // Supabase's API: the digest mailed this HTML to the office once.
+  const page = "<html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n<hr><center>cloudflare</center>\r\n</body>\r\n</html>\r\n";
+  assert.equal(gatewayRefusal(page), "Supabase's API answered 502 Bad Gateway — a passing outage at the edge, not the backup");
+  assert.match(gatewayRefusal("<html><head><title>504 Gateway Time-out</title></head></html>"), /504 Gateway Time-out/);
+  // A real refusal, a JSON error, or words that merely mention a number
+  // are not a gateway page and must reach the log as themselves.
+  assert.equal(gatewayRefusal("permission denied for table backup_runs"), null);
+  assert.equal(gatewayRefusal("Drive answered 502 for the upload"), null);
+  assert.equal(gatewayRefusal("<html><title>404 Not Found</title></html>"), null);
+  assert.equal(gatewayRefusal(""), null);
   assert.equal(stillHoldsRun({ id: "r1" }), true, "maybeSingle answers with the row itself");
   assert.equal(stillHoldsRun([]), false, "no row matched: another slice owns this run now");
   assert.equal(stillHoldsRun(null), false);

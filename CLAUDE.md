@@ -484,7 +484,12 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   never a tick, because a tick reads the heartbeat that same slice has just
   written and calls the run busy. There is no separate kick secret; the
   chain signs itself with the same `x-internal-secret` the cron sends. The
-  cron is the safety net, not the engine. A run whose `heartbeat_at` has
+  cron is the safety net, not the engine. A tick that meets a gateway page
+  (Cloudflare answering for Supabase's API with "<title>502 Bad
+  Gateway</title>") tries once more after two seconds, and what reaches
+  function_errors is `gatewayRefusal`'s plain sentence, never the HTML —
+  the digest mailed a page of it to the office once over a five-minute
+  blink. A real refusal keeps its own words (backupRun.ts, node-tested). A run whose `heartbeat_at` has
   been quiet for `SLICE_ALIVE_MS` — three minutes — died mid-slice and is
   reclaimed; every write a slice makes is conditional on the status it
   believes it holds, so a superseded slice writes nothing, not even its own
