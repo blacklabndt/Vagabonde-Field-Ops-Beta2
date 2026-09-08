@@ -64,6 +64,11 @@ export function FilesScreen({ currentUser }) {
     if (mine === loadSeq.current) setLoading(false);
   };
 
+  // Once per visit to this screen — a file added by somebody else, or from
+  // the chat composer, dates the tree the search walks just as this screen's
+  // own writes do, and nothing else clears it for the life of the tab. Not
+  // per folder click: that was the walk moving this out of load() saved.
+  useEffect(() => { Db.forgetFileTree(); }, []);
   useEffect(() => { load(prefix); }, [prefix]);
 
   const crumbs = prefix ? prefix.split("/") : [];

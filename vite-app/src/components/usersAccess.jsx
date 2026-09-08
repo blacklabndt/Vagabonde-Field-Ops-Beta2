@@ -172,7 +172,12 @@ export function UsersAccessScreen({ currentUser }) {
     <div className="page">
       <div style={{ display: "flex", alignItems: "flex-end", marginBottom: 20 }}>
         <h2 style={{ fontSize: 34, margin: 0 }}>Users &amp; access</h2>
-        <Btn variant="primary" style={{ marginLeft: "auto" }} onClick={() => setShowNew(true)}>+ New user</Btn>
+        {/* An Admin's, like the role picker and Remove account below:
+            create-user checks the caller's rank itself, so this button was a
+            dialog somebody filled in and then had refused. */}
+        {currentUser.role === "Admin" && (
+          <Btn variant="primary" style={{ marginLeft: "auto" }} onClick={() => setShowNew(true)}>+ New user</Btn>
+        )}
       </div>
       <ErrorBox>{error}</ErrorBox>
       {note && (

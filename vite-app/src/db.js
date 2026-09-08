@@ -1081,11 +1081,16 @@ export const Db = {
     // that pill is read as the job's status — a ticket started on it sat in
     // the outbox until the replay was refused. Patched in place rather than
     // dropped: dropping the page would leave a truck with no board at all.
+    const status = complete ? "Complete" : "Active";
     const board = await OfflineCache.read("jobs.recent").catch(() => null);
     if (board && board.value && Array.isArray(board.value.rows)) {
-      const status = complete ? "Complete" : "Active";
       OfflineCache.put("jobs.recent", { ...board.value, rows: board.value.rows.map(r => r.dbId === jobDbId ? { ...r, status } : r) });
     }
+    // The job's own key too — that is what Db.getJob serves out of range,
+    // and App.openJob reads it behind every board tap for the client's GST
+    // rate, so an unpatched copy put "Active" back over the board's.
+    const one = await OfflineCache.read("job." + jobDbId).catch(() => null);
+    if (one && one.value) OfflineCache.put("job." + jobDbId, { ...one.value, status });
   },
 
   // Anything that adds to a job goes through here first. A job someone marked

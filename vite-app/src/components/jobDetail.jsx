@@ -1618,7 +1618,11 @@ function UploadReportDialog({ job, jobRecord, currentUser, onClose, onSubmit }) 
       // answer finds the row that already landed. This dialog used to be
       // the only way to file a report from a phone and had no offline path
       // at all: "Couldn't upload — try again", and the PDF died with the tab.
-      if (!storedReport.current && OfflineQueue.isNetworkError(e)) {
+      // A refusal the server actually gave (.plain — humanizeError marks a
+      // 42501, a dead session is marked the same) is a reason whatever the
+      // radio says. Same order oqFlushOnce and the three field screens keep:
+      // .plain before isNetworkError.
+      if (!storedReport.current && !e.plain && OfflineQueue.isNetworkError(e)) {
         // The outbox itself can refuse — a PDF is the biggest thing this app
         // ever queues, and a tablet at its storage quota says no. Closing the
         // dialog then would throw the file away silently, so the failure is
