@@ -517,11 +517,15 @@ what authorises the rank.
 
 ```
 vite-app/
-  index.html                shell; the design system's CSS is linked from public/
+  index.html                shell; the fonts and the design system's CSS are linked
+                            from public/
   vite.config.js            React plugin, the PWA/service worker config, vendor chunk
   playwright.config.js      the end-to-end run: projects, the stored sign-ins, retries
   .env.example              VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY
-  public/_ds/industry-.../  the Industry design system (unmodified)
+  public/_ds/industry-.../  the Industry design system (one edit: its @import of
+                            Google Fonts, replaced by the files below)
+  public/fonts/             Barlow and Barlow Condensed, served by the app itself so a
+                            cold or offline launch draws in the right face
   public/icons/             app icons (192, 512, 512-maskable, 180 apple-touch)
   public/brand/wordmark.svg the logo, masked by .topbar-brand so it takes the theme colour
   src/

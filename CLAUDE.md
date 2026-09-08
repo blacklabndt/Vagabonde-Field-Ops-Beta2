@@ -677,6 +677,21 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   otherwise leave a rejection nobody awaited — fatal in the Edge runtime.
   Never memoized across requests.
 
+- Barlow and Barlow Condensed are OURS, in `vite-app/public/fonts` with
+  `barlow.css` beside them, linked from index.html ahead of the design
+  system's stylesheet (the two latin cuts preloaded, `crossorigin` and all —
+  a font is fetched in CORS mode even from our own origin). The design
+  system's `@import` of fonts.googleapis.com is gone, and it is the one edit
+  to that delivered file: an @import is fetched only after the stylesheet
+  holding it, and the font only after that, so a cold launch drew its
+  headings and buttons in the system fallback — the launch popup's "No more
+  tips" measured 121px against Barlow Condensed's 98px — and a device with
+  no signal never got the faces at all. Never put that @import back, and
+  never add a webfont by URL; a new weight is downloaded into public/fonts
+  the same way (Google's own css2 answer carries the unicode-ranges). The
+  SW's Google Fonts runtimeCaching rules went with the fetch they cached;
+  the woff2 glob precaches these.
+
 ## Verification habits that caught real bugs
 
 - "curl works" ≠ "a browser renders it": Supabase rewrites HTML to

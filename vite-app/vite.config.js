@@ -97,21 +97,11 @@ export default defineConfig({
         // Supabase calls are deliberately absent from runtimeCaching: a stale
         // ticket or rate served from a cache would be worse than an honest
         // failure, and a failure is what the offline queue is there to catch.
+        // The two Google Fonts rules that sat here are gone with the fetch
+        // they cached: Barlow ships in public/fonts and the glob above
+        // precaches it, so nothing asks googleapis.com or gstatic.com for
+        // anything any more.
         runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\//,
-            handler: "StaleWhileRevalidate",
-            options: { cacheName: "google-fonts-stylesheets" }
-          },
-          {
-            urlPattern: /^https:\/\/fonts\.gstatic\.com\//,
-            handler: "CacheFirst",
-            options: {
-              cacheName: "google-fonts-files",
-              expiration: { maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] }
-            }
-          },
           {
             // KLIPY media is immutable — the URL names the exact file
             // forever — and a GIF in the chat history was re-downloaded

@@ -30,6 +30,19 @@
     if (m === "off") document.documentElement.setAttribute("data-motion", "off");
   } catch (e) {}
 </script>
+<!-- The two faces every screen draws with, fetched as the page is parsed
+     rather than after a stylesheet has been read: without this the browser
+     only learns it needs a font once the CSS below has parsed, and the
+     first frame is drawn in the system fallback. crossorigin is not
+     optional even for our own files — a font is always fetched in CORS
+     mode, and without it the preload is ignored and the file downloaded
+     twice. The extended-Latin cuts are deliberately not preloaded: most
+     devices never need them. -->
+<link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/barlow-400-latin.woff2">
+<link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/barlow-condensed-600-latin.woff2">
+<!-- Ahead of the design system's stylesheet, which used to reach out to
+     Google for these. See public/fonts/barlow.css. -->
+<link rel="stylesheet" href="/fonts/barlow.css">
 <link rel="stylesheet" href="/_ds/industry-4eca1223-ce17-4bd0-9b75-9c7070304b91/styles.css">
 </head>
 <body>

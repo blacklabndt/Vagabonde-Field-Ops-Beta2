@@ -1,5 +1,10 @@
 /* Industry — design-system tokens and component classes. This file is the source of truth for the system's look; retune it here and see readme.md. */
-@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;700&family=Barlow+Condensed:wght@400;600&display=swap');
+/* The @import of fonts.googleapis.com that stood here is now index.html's
+   own <link> to /fonts/barlow.css, which serves the same faces from this
+   app. The one edit to this file as delivered: an @import is fetched only
+   after this stylesheet has been read, and the font only after that, which
+   drew every cold launch in the fallback face first — and got nothing at
+   all on a device with no signal. The faces and weights are unchanged. */
 
 :root {
   --color-bg: #f2f2f3;
