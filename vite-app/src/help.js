@@ -22,13 +22,13 @@ export const HELP = {
   board: {
     heading: "Home",
     body: [
-      "From this screen you see and open any of the created jobs, you can search through them, filter them and create new jobs using the +Job button on the top right of your screen. You can also create a new ticket within any active job using the +Ticket button also located at the top of your screen next to the +Job button. Press the hamburger menu button to see the other available tabs."
+      "From this screen you see and open any of the created jobs, you can search through them, filter them and create new jobs using the +Job button on the top right of your screen. If your account raises tickets — an Admin's or a Technician's, holding the billing ticket screen — a +Ticket button sits next to it and starts one on any active job. Other roles do not get that button. Press the hamburger menu button to see the other available tabs."
     ]
   },
   job: {
     heading: "Job detail",
     body: [
-      "From this screen you can see the job details, open, create and send JHAs, and Tickets as well as upload and send reports. When you upload a report the numbers should be automatically read and displayed but please double check they are correct for the next technician"
+      "From this screen you can see the job details, open, create and send JHAs, and Tickets as well as upload and send reports. \"+ Create ticket\" needs the billing ticket screen and a role that sees prices — an Admin's or a Technician's; \"+ Upload report\" needs the report upload screen, which a Helper does not hold. When you upload a report the numbers should be automatically read and displayed but please double check they are correct for the next technician"
     ]
   },
   jha: {
@@ -46,7 +46,7 @@ export const HELP = {
   ticket: {
     heading: "Billing ticket",
     body: [
-      "From here you build your ticket that will be sent to the client. Be sure to add your helper on to this as well as his hours are calculated from this screen"
+      "From here you build your ticket that will be sent to the client. Be sure to add your helper on to this as well as his hours are calculated from this screen. Once it has gone for the client's signature the save is refused — cancel the approval first, from the job or the tracker. Another technician's ticket opens read-only; only an Admin edits someone else's."
     ]
   },
   mytickets: {
@@ -64,7 +64,7 @@ export const HELP = {
   files: {
     heading: "Files",
     body: [
-      "Templates, decay charts, study material and other important docs can be stored here"
+      "Templates, decay charts, study material and other important docs can be stored here. Anyone with this screen can upload and make folders. Deleting a file or a whole folder is an Admin's or a Coordinator's — anyone else is told to ask one."
     ]
   },
   contacts: {
@@ -79,13 +79,13 @@ export const HELP = {
       "The fleet: exposure devices, survey meters, dosimeters and tools, with serials, calibration dates and who has each one.",
       "The two tiles at the top only appear when there is something to act on — anything overdue for calibration, and anything due inside 30 days. Overdue means pull it from service.",
       "Assigning equipment to a person is what makes the JHA builder pre-fill their kit. If a worker's dosimeter is wrong on an assessment, it is wrong here.",
-      "The filters are by kind; the search covers serial, type and the person it is assigned to."
+      "The filters are by kind, with Due soon and Overdue on the end; the search covers serial, type and the person it is assigned to. Adding an item or editing one is an Admin's or a Coordinator's."
     ]
   },
   timesheets: {
     heading: "Timesheets",
     body: [
-      "The most important page, double check that your hours are correct before sending it off for approval, you dont want anything missed!"
+      "The most important page: check your hours. There is no submit step — every line comes from a billing ticket, so a figure that is wrong is fixed on the ticket it came from, not here. An Admin approves each pay period, and the Approved timesheets tab is your record of it."
     ]
   },
   rates: {
@@ -94,7 +94,7 @@ export const HELP = {
       "The rate cards. This screen is not a reference — it is the billing menu: the lines here, in this order, are the dropdowns a technician gets on the ticket screen and the line order on the invoice the client sees.",
       "There is a house card, and each client can have their own. A client set to follow the default takes the house prices live, so a change to the house card changes them too. A client with their own card is on their own prices.",
       "Publish matters exactly once per card. After it has been published, edits go live as they save",
-      "\"Restore removed lines\" puts back any standard line missing from a schedule at zero, ready to be priced. A job override prices one line differently for one job. Every price change is logged with who made it; the history is on each line.",
+      "\"Restore removed lines\" puts back any standard line missing from a schedule at zero, ready to be priced. A job override prices one line differently for one job. Every price change is logged with who made it: \"Rate history\", at the top of the card, is where you read it. A label already on the card is refused.",
       "Prices are for Admins and Technicians: the screen opens for anyone given the Rate admin section, but the database hands other roles no figures and refuses their edits."
     ]
   },
@@ -102,7 +102,7 @@ export const HELP = {
     heading: "Billing tracker",
     body: [
       "Every ticket across every job, paged on the server, with the four running totals worked out by the database rather than by adding up the rows on screen.",
-      "Per row: resend the approval link, flag a ticket as chased, cancel an approval request so the ticket can be re-priced, and mark approved tickets as invoiced.",
+      "Per row: resend the approval link, flag a ticket as chased, and cancel an approval request so the ticket can be re-priced. Marking approved tickets invoiced is an Admin's, and so is \"Cancel and edit\".",
       "\"Chase all unsigned\" re-sends the approval link to everything still waiting. It leaves alone anything sent or chased in the last three days or carrying an open client query, sends three at a time so the mail service is not overrun, waits out a rate limit instead of writing the ticket off, has a Stop, and names by number anything that failed.",
       "A client rep can send a question back from the approval page. That query shows on the row, and resending the link clears it.",
       "The money, the chase and the accounting export are for Admins and Technicians only. Other roles are handed no totals at all, which is exactly why the buttons are hidden — a chase from an account that cannot see prices would mail every client a $0.00 approval."
@@ -114,7 +114,7 @@ export const HELP = {
       "Accounts, their role, and which screens each one gets. New accounts are created here and will be sent a link to set their own password",
       "The tick boxes are a permission. A screen someone does not hold is a screen the database refuses them — so removing a tab to tidy up a menu also revokes access to that page altogether. Strip every tab and the account can read nothing at all.",
       "Job detail, the JHA builder, report upload and the billing ticket never appear in anybody's menu; they open from a job. Their permissions are still set here.",
-      "An account with work on file is locked rather than deleted — the foreign keys are what keep their name on tickets and assessments. Unlock account lifts the ban and puts the role's usual screens back."
+      "An account with work on file is locked rather than deleted — the foreign keys are what keep their name on tickets and assessments. Unlock account lifts the ban and puts the role's usual screens back. New accounts, roles, Remove account and Unlock account are an Admin's; the users tab on its own gives you the tick boxes and nothing more."
     ]
   },
   mail: {
