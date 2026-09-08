@@ -80,7 +80,17 @@ Deno.serve(async (req) => {
         .eq("id", userId);
       if (lockErr) throw lockErr;
       const { error: banErr } = await admin.auth.admin.updateUserById(userId, { ban_duration: "876000h" });
-      if (banErr) throw banErr;
+      // The lock landed and the ban did not. That is still a lock — no tabs
+      // and a stamp is what every table and the token hook read — and saying
+      // so is what puts the row right in the list; a thrown 400 told the
+      // Admin nothing had happened and left them looking at stale tabs.
+      if (banErr) {
+        await logError("delete-user", `Locked ${userId}, but the Auth ban failed: ${banErr.message}`);
+        return new Response(JSON.stringify({
+          ok: true, deactivated: true, banFailed: true,
+          message: `${who?.name ?? "This person"} has tickets, JHAs or jobs on file, so the account was locked instead of deleted: every tab is off and the app refuses it. Auth would not take the sign-in ban (${banErr.message}) — press Remove account again to finish that half.`
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
       return new Response(JSON.stringify({
         ok: true, deactivated: true,
         message: `${who?.name ?? "This person"} has tickets, JHAs or jobs on file, so the account was locked instead of deleted: they can no longer sign in, and every tab is off. Their name stays on the records.`

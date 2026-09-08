@@ -87,9 +87,20 @@ Deno.serve(async (req) => {
       const wentIds = new Set((went || []).map((r) => r.id));
       const kept = ids.filter((id) => !wentIds.has(id));
       if (kept.length) {
-        const { error: healErr } = await admin.from("chat_messages")
-          .update({ image_key: null, audio_key: null }).in("id", kept);
-        if (healErr) throw healErr;
+        // A row must still say or show something (chat_messages_says_or_shows:
+        // words, a picture, a GIF, a voice note or a file link), so a
+        // picture-only pin gets words where the picture was, rather than a
+        // violation that fails the whole run every night after.
+        const { data: left, error: readErr } = await admin.from("chat_messages")
+          .select("id, body, gif_url, file_key").in("id", kept);
+        if (readErr) throw readErr;
+        for (const row of left || []) {
+          const shows = (row.body || "").trim() || row.gif_url || row.file_key;
+          const patch: Record<string, unknown> = { image_key: null, audio_key: null };
+          if (!shows) patch.body = "(the picture came down after 30 days)";
+          const { error: healErr } = await admin.from("chat_messages").update(patch).eq("id", row.id);
+          if (healErr) throw healErr;
+        }
       }
 
       if (expired.length < PAGE) break;

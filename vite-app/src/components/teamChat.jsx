@@ -1074,6 +1074,16 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
   };
 
+  // The bookmark move for reading the room by hand — scrolling back down
+  // to the tail, or taking the "New messages" chip down. The same write
+  // the feed's noteRead makes, without its debounce: this is one gesture.
+  const readRoom = () => {
+    if (document.visibilityState !== "visible") return;
+    Db.markChatRead(currentUser.id)
+      .then(() => { if (onReadRef.current) onReadRef.current(); })
+      .catch(() => {});
+  };
+
   const onScroll = () => {
     const el = listRef.current;
     if (!el) return;
@@ -1087,11 +1097,7 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
     // would until they left the screen, so the badge sat lit over messages
     // on screen. Once per return to the bottom, the same write noteRead
     // makes.
-    if (wasUp && stickToBottom.current && document.visibilityState === "visible") {
-      Db.markChatRead(currentUser.id)
-        .then(() => { if (onReadRef.current) onReadRef.current(); })
-        .catch(() => {});
-    }
+    if (wasUp && stickToBottom.current) readRoom();
   };
 
   const loadOlder = async () => {
@@ -1629,6 +1635,10 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
                       stickToBottom.current = true;
                       setJumpChip(false);
                       scrollBottom(true);
+                      // Taking the chip down is reading the room too, and
+                      // onScroll cannot write it: the stick is already set,
+                      // so its wasUp is false by the time the scroll fires.
+                      readRoom();
                     }}
                     style={{
                       fontSize: 12, fontWeight: 600, cursor: "pointer",
