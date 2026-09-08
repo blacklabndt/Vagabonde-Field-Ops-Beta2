@@ -459,7 +459,17 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   worse than before. The cursor carries `baseLooked`, `baseFilesFolderId`
   and `reused`; `counts.reused` and the manifest's `files.reused` say how
   many, and the panel says "N carried over". Nightly Supabase egress is
-  what is new, not the whole store times thirty.
+  what is new, not the whole store times thirty. Every file stored is
+  hashed (SHA-256 of the bytes read through Supabase) and recorded per run
+  in `backup_run_files` (service role only, rows go with the run); the
+  manifest phase folds them into `files.json.gz` beside manifest.json and
+  `manifest.files` says `hashed`, `index` and `spot`. A carry-over needs
+  the base index to hold the file's hash (else it is read through once),
+  the copy keeps that hash, one carried-over file a night is downloaded
+  and hashed against its record (`spot`: ok / re-stored / not checked —
+  never a failure), and a restore refuses to put back a file whose bytes
+  do not hash to the index (`damaged`, named in the notes). Spec:
+  `docs/superpowers/specs/2026-09-08-backup-hashes-every-file-design.md`.
 - The tick is the only scheduler. pg_cron fires `backup-run` every five
   minutes with `x-internal-secret` (chat-retention's shape, read from
   `private.internal_config` when the job fires); `backup-run` drives kinds

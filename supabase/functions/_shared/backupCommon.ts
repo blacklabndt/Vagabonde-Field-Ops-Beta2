@@ -12,7 +12,9 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 import { makeDrive, refreshAccessToken } from "./drive.ts";
 import type { DriveClient } from "./drive.ts";
 import { BACKUP_ROOT_NAME, MANIFEST_NAME } from "./backupManifest.ts";
-import { RETRIES, retryDelayMs, worthAnotherGo } from "./backupRun.ts";
+import { FILES_INDEX_NAME, RETRIES, parseFileIndex, retryDelayMs, worthAnotherGo } from "./backupRun.ts";
+import type { FileRecord } from "./backupRun.ts";
+import { gunzip } from "./gzip.ts";
 
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -257,6 +259,20 @@ export async function mapLimit<T, R>(items: T[], n: number, fn: (item: T, i: num
 // One backup's manifest, read out of its own folder. A folder with none is a
 // run that never finished, and saying so is the point: the restore has
 // nothing to work from and must not pretend otherwise.
+// The folder's per-file index (files.json.gz, written by the manifest
+// phase): name → what was stored, with the SHA-256 of the bytes. An empty
+// map for a folder from before the index existed, or one whose index
+// cannot be read — the callers treat "no record" as "nothing to check
+// against" for a restore and "read it through" for a carry-over.
+export async function readFileIndex(
+  drive: DriveClient, folderId: string
+): Promise<Map<string, FileRecord>> {
+  if (!folderId) return new Map();
+  const file = (await drive.listFiles(folderId)).find(f => f.name === FILES_INDEX_NAME);
+  if (!file) return new Map();
+  return parseFileIndex(new TextDecoder().decode(await gunzip(await drive.download(file.id))));
+}
+
 export async function readManifest(
   drive: DriveClient, folderId: string
 ): Promise<Record<string, unknown>> {

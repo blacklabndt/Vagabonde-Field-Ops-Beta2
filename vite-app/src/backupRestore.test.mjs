@@ -1290,3 +1290,13 @@ test("a save key already in use is checked for before the batch, not after", () 
   assert.match(source, /at \+= 100/);
   assert.doesNotMatch(source, /at \+= 200/);
 });
+
+test("a damaged file is counted on both cursors and reaches the panel's counts", () => {
+  const full = reviveRestoreCursor({ phase: "files", damaged: 2 });
+  assert.equal(full.damaged, 2);
+  assert.equal(reviveRestoreCursor({}).damaged, 0, "a cursor from before the check has none");
+  assert.equal(restoreCounts(full).damaged, 2);
+  const job = reviveJobRestoreCursor({ folderId: "f", folderName: "2026-09-08 00-00", jobIds: ["j1"], damaged: 1 });
+  assert.equal(job.damaged, 1);
+  assert.equal(jobRestoreCounts(job).damaged, 1);
+});

@@ -88,6 +88,10 @@ export interface RestoreCursor {
   filesDone: number;
   filesBytes: number;
   fileOffset: number;
+  // Files whose bytes off the drive did not hash to what the backup's own
+  // index says was stored. Not written back — a damaged PDF put over a
+  // good one is worse than a missing one — and named in the notes.
+  damaged: number;
   totalsPart: number;
   totalsDone: boolean;
   activityPart: number;
@@ -131,6 +135,7 @@ export function newRestoreCursor(o: {
     filesDone: 0,
     filesBytes: 0,
     fileOffset: 0,
+    damaged: 0,
     totalsPart: 0,
     totalsDone: false,
     activityPart: 0,
@@ -185,6 +190,7 @@ export function reviveRestoreCursor(raw: unknown): RestoreCursor {
     filesDone: num(c.filesDone),
     filesBytes: num(c.filesBytes),
     fileOffset: num(c.fileOffset),
+    damaged: num(c.damaged),
     totalsPart: num(c.totalsPart),
     totalsDone: c.totalsDone === true,
     activityPart: num(c.activityPart),
@@ -210,6 +216,7 @@ export function restoreCounts(c: RestoreCursor): Record<string, unknown> {
     rows: c.loaded ?? {},
     files: num(c.filesDone),
     bytes: num(c.filesBytes),
+    damaged: num(c.damaged),
     accounts: (c.accountsMade ?? []).length,
     accountsFailed: c.accountsFailed ?? [],
     accountsDropped: (c.droppedProfileIds ?? []).length,
@@ -788,6 +795,9 @@ export interface JobRestoreCursor {
   fileOffset: number;
   filesDone: number;
   filesBytes: number;
+  // Files whose bytes off the drive did not hash to the backup's own index;
+  // not put back, and named in `skipped`.
+  damaged: number;
   totalsPart: number;
   totalsDone: boolean;
   activityPart: number;
@@ -817,6 +827,7 @@ export function newJobRestoreCursor(o: {
     fileOffset: 0,
     filesDone: 0,
     filesBytes: 0,
+    damaged: 0,
     totalsPart: 0,
     totalsDone: false,
     activityPart: 0,
@@ -852,6 +863,7 @@ export function reviveJobRestoreCursor(raw: unknown): JobRestoreCursor {
     fileOffset: num(c.fileOffset),
     filesDone: num(c.filesDone),
     filesBytes: num(c.filesBytes),
+    damaged: num(c.damaged),
     totalsPart: num(c.totalsPart),
     totalsDone: c.totalsDone === true,
     activityPart: num(c.activityPart),
@@ -875,6 +887,7 @@ export function jobRestoreCounts(c: JobRestoreCursor): Record<string, unknown> {
     rows: c.loaded ?? {},
     files: num(c.filesDone),
     bytes: num(c.filesBytes),
+    damaged: num(c.damaged),
     skipped: c.skipped ?? [],
     collisions: c.collisions ?? []
   };

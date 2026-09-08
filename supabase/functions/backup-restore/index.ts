@@ -37,9 +37,9 @@ import {
 import type { DriveClient } from "../_shared/drive.ts";
 import {
   adminClient, backupDoor, connectDrive, corsHeaders,
-  internalSecret, json, kick, logError, readManifest
+  internalSecret, json, kick, logError, readFileIndex, readManifest
 } from "../_shared/backupCommon.ts";
-import { BUDGET_MS, outOfBudget, sliceDeadline, sliceLooksAlive, stillHoldsRun } from "../_shared/backupRun.ts";
+import { BUDGET_MS, hashBytes, outOfBudget, sliceDeadline, sliceLooksAlive, stillHoldsRun } from "../_shared/backupRun.ts";
 import {
   WRITE_BATCH, CHAT_INSERT_PASS,
   newRestoreCursor, reviveRestoreCursor, restoreCounts,
@@ -925,12 +925,24 @@ async function stepFilesBack(
   const folder = await subFolder(drive, c.folderId, FILES_FOLDER);
   if (!folder) { c.phase = "activity"; return c; }
   const entries = (await drive.listFiles(folder)).slice().sort((a, b) => a.name.localeCompare(b.name));
+  // The backup's own record of what each file hashed to when it was stored.
+  // Read once per slice; a folder from before the index existed has none,
+  // and its files go back unchecked, as they always did.
+  const index = await readFileIndex(drive, c.folderId);
 
   for (let i = c.fileOffset; i < entries.length; i++) {
     if (outOfBudget(deadline, Date.now())) { c.fileOffset = i; return c; }
     const parsed = parseFileEntryName(entries[i].name);
     if (!parsed) { c.skipped += 1; continue; }
     const bytes = await drive.download(entries[i].id);
+    const rec = index.get(entries[i].name);
+    if (rec && rec.sha256 && await hashBytes(bytes) !== rec.sha256) {
+      // Not put back: a damaged PDF written over a good one is worse than
+      // a missing one, and the note says which.
+      c.damaged += 1;
+      addRestoreNote(c.notes, `${parsed.bucket}/${parsed.key} is damaged in that backup — its bytes do not hash to what was stored — and was not put back.`);
+      continue;
+    }
     const { error } = await db.storage.from(parsed.bucket).upload(parsed.key, bytes, {
       upsert: true,
       // A backup holds the bytes and not the type the bucket served them as,
@@ -1378,6 +1390,9 @@ async function stepJobFiles(
   }
 
   const list = c.fileIndex;
+  // The same check the restore-all makes: a file whose bytes do not hash
+  // to the backup's own record is named and left out.
+  const index = await readFileIndex(drive, c.folderId);
   for (let i = c.fileOffset; i < list.length; i++) {
     if (outOfBudget(deadline, Date.now())) { c.fileOffset = i; return; }
     const item = list[i];
@@ -1389,6 +1404,12 @@ async function stepJobFiles(
     const bucket = item.key.slice(0, cut);
     const key = item.key.slice(cut + 1);
     const bytes = await drive.download(item.id);
+    const rec = index.get(fileEntryName(bucket, key));
+    if (rec && rec.sha256 && await hashBytes(bytes) !== rec.sha256) {
+      c.damaged += 1;
+      addRestoreNote(c.skipped, `${item.key} is damaged in that backup — its bytes do not hash to what was stored — so the record came back without its PDF.`);
+      continue;
+    }
     const { error } = await db.storage.from(bucket).upload(key, bytes, {
       upsert: true, contentType: contentTypeFor(key)
     });

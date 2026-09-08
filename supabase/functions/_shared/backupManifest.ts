@@ -32,7 +32,11 @@ export interface Manifest {
   tables: Record<string, { rows: number; parts: string[] }>;
   // `reused` is how many of `count` were copied over on the drive from
   // the night before rather than read out of Supabase (backupRun.ts).
-  files: { count: number; bytes: number; reused?: number };
+  // `hashed` is how many of `count` have a SHA-256 on record in `index`
+  // (files.json.gz, beside this file); `spot` is the manifest phase's one
+  // downloaded-and-hashed carried-over file: "ok", "re-stored", or why
+  // it could not be checked.
+  files: { count: number; bytes: number; reused?: number; hashed?: number; index?: string; spot?: string | null };
   jobs: ManifestJob[];
   note: string;
 }
@@ -64,7 +68,13 @@ export function recordTable(m: Manifest, table: string, rows: number, parts: str
 // Added to rather than set: a run is made of slices and the files phase
 // crosses several of them.
 export function recordFiles(m: Manifest, count: number, bytes: number, reused = 0): Manifest {
-  m.files = { count: m.files.count + count, bytes: m.files.bytes + bytes, reused: (m.files.reused ?? 0) + reused };
+  m.files = { ...m.files, count: m.files.count + count, bytes: m.files.bytes + bytes, reused: (m.files.reused ?? 0) + reused };
+  return m;
+}
+
+// Set, not added: the index is written once, by the manifest phase.
+export function recordFileIndex(m: Manifest, hashed: number, index: string, spot: string | null): Manifest {
+  m.files = { ...m.files, hashed, index, spot };
   return m;
 }
 

@@ -33,13 +33,13 @@ import {
 } from "../_shared/backupTables.ts";
 import {
   MANIFEST_NAME, TABLES_FOLDER, FILES_FOLDER,
-  newManifest, recordTable, recordFiles, finishManifest, jobsIndex,
+  newManifest, recordTable, recordFiles, recordFileIndex, finishManifest, jobsIndex,
   folderStamp, foldersToDelete, fileEntryName, beforeRestoreName
 } from "../_shared/backupManifest.ts";
 import type { DriveClient } from "../_shared/drive.ts";
 import {
   adminClient, backupDoor, connectDrive, corsHeaders, ensureFolder, ensureFolders, mapLimit,
-  internalSecret, json, kick, logError, readManifest
+  internalSecret, json, kick, logError, readFileIndex, readManifest
 } from "../_shared/backupCommon.ts";
 import type { Connection } from "../_shared/backupCommon.ts";
 
@@ -51,7 +51,7 @@ import {
   retryDelayMs, reviveCursor, shouldRetry, sliceDeadline, sliceLooksAlive,
   startPrefixWalk, stillHoldsRun, gatewayRefusal
 } from "../_shared/backupRun.ts";
-import { carryOverId, chooseBaseFolder } from "../_shared/backupRun.ts";
+import { FILES_INDEX_NAME, carryOverId, chooseBaseFolder, hashBytes } from "../_shared/backupRun.ts";
 import type { RunCursor } from "../_shared/backupRun.ts";
 import { gzip } from "../_shared/gzip.ts";
 import { nextRunAt } from "../_shared/backupSchedule.ts";
@@ -476,8 +476,8 @@ async function advance(db: SupabaseClient, run: Run, secret: string): Promise<Re
     let units = 0;
     while (!outOfBudget(deadline, Date.now()) && cursor.phase !== "done") {
       if (cursor.phase === "tables") cursor = await stepTables(db, conn.drive, tablesFolder, cursor);
-      else if (cursor.phase === "files") cursor = await stepFiles(db, conn.drive, filesFolder, cursor, deadline, conn.rootFolderId, folderId);
-      else if (cursor.phase === "manifest") cursor = await stepManifest(db, conn.drive, folderId, cursor, String(current.kind));
+      else if (cursor.phase === "files") cursor = await stepFiles(db, conn.drive, filesFolder, cursor, deadline, conn.rootFolderId, folderId, runId);
+      else if (cursor.phase === "manifest") cursor = await stepManifest(db, conn.drive, folderId, cursor, String(current.kind), runId);
       else if (cursor.phase === "retention") cursor = await stepRetention(db, conn.drive, conn.rootFolderId, conn.keep, cursor);
       else cursor.phase = "done";
       units += 1;
@@ -614,9 +614,21 @@ async function addAuthEmails(db: SupabaseClient, rows: Record<string, unknown>[]
 
 // ── Phase: files ─────────────────────────────────────────────────────────
 
+// One row per file this run stored, kept in backup_run_files between slices
+// and folded into files.json.gz by the manifest phase. Upserted, so a page
+// re-listed after a pause writes the same records again harmlessly.
+type FileRow = { run_id: string; name: string; bucket: string; key: string; size: number; sha256: string | null; reused: boolean; drive_id: string | null };
+async function flushFileRows(db: SupabaseClient, rows: FileRow[]): Promise<void> {
+  for (let i = 0; i < rows.length; i += 200) {
+    const { error } = await db.from("backup_run_files").upsert(rows.slice(i, i + 200), { onConflict: "run_id,name" });
+    if (error) throw error;
+  }
+  rows.length = 0;
+}
+
 async function stepFiles(
   db: SupabaseClient, drive: DriveClient, filesFolder: string, c: RunCursor, deadline: number,
-  rootFolderId: string, ownFolderId: string
+  rootFolderId: string, ownFolderId: string, runId: string
 ): Promise<RunCursor> {
   if (c.bucketIndex >= BUCKETS.length) { c.phase = "manifest"; return c; }
   const bucket = BUCKETS[c.bucketIndex];
@@ -643,24 +655,35 @@ async function stepFiles(
         ? (await withRetry("Opening last night's folder", () => drive.listFolders(base.id))).find(f => f.name === FILES_FOLDER)
         : undefined;
       c.baseFilesFolderId = sub ? sub.id : null;
+      c.baseFolderId = base ? base.id : null;
     } catch (e) {
       console.warn(`No base folder for carrying files over: ${(e as Error).message}`);
       c.baseFilesFolderId = null;
+      c.baseFolderId = null;
     }
     c.baseLooked = true;
   }
-  // Listed once per slice — a few calls for thousands of names.
-  const baseFiles = new Map<string, { id: string; size: number }>();
+  // Listed once per slice — a few calls for thousands of names — and the
+  // base's own index read with it, for the hash each copy will carry. A
+  // name the index does not hold is read through: a copy nothing could
+  // ever verify is not a saving worth having.
+  const baseFiles = new Map<string, { id: string; size: number; sha256: string | null }>();
   if (c.baseFilesFolderId) {
     try {
       for (const e of await withRetry("Listing last night's files", () => drive.listFiles(c.baseFilesFolderId!))) {
-        baseFiles.set(e.name, { id: e.id, size: e.size });
+        baseFiles.set(e.name, { id: e.id, size: e.size, sha256: null });
+      }
+      const index = await withRetry("Reading last night's file index", () => readFileIndex(drive, c.baseFolderId ?? ""));
+      for (const [name, held] of baseFiles) {
+        const rec = index.get(name);
+        if (rec) held.sha256 = rec.sha256;
       }
     } catch (e) {
       console.warn(`Last night's files could not be listed; copying everything through: ${(e as Error).message}`);
       baseFiles.clear();
     }
   }
+  const rows: FileRow[] = [];
 
   // An empty prefix stack means this bucket has not been started: the stack
   // and the bucket index are advanced together at the end of a bucket, so
@@ -683,7 +706,8 @@ async function stepFiles(
   for (let i = c.pageDone; i < objects.length; i++) {
     if (outOfBudget(deadline, Date.now())) {
       // Stop where we are: the same page is re-listed next slice and the
-      // first pageDone objects are skipped.
+      // first pageDone objects are skipped. The records so far go first.
+      await flushFileRows(db, rows);
       return pausePage(c, i, copied, bytes, reused);
     }
     const key = top.prefix + objects[i].name;
@@ -694,7 +718,9 @@ async function stepFiles(
     const from = carryOverId(bucket, name, size, baseFiles);
     if (from) {
       try {
-        await withRetry(`Carrying over ${bucket}/${key}`, () => drive.copy(from, filesFolder, name));
+        const id = await withRetry(`Carrying over ${bucket}/${key}`, () => drive.copy(from, filesFolder, name));
+        // The copy carries the hash of the copy it was made from.
+        rows.push({ run_id: runId, name, bucket, key, size, sha256: baseFiles.get(name)?.sha256 ?? null, reused: true, drive_id: id });
         copied += 1;
         reused += 1;
         bytes += size;
@@ -709,11 +735,15 @@ async function stepFiles(
       return data as Blob;
     });
     const payload = new Uint8Array(await blob.arrayBuffer());
-    await withRetry(`Uploading ${bucket}/${key}`, () =>
+    const id = await withRetry(`Uploading ${bucket}/${key}`, () =>
       drive.upload(filesFolder, name, payload, blob.type || "application/octet-stream"));
+    // Hashed from the bytes as they were read through Supabase: the record
+    // of what was stored, for every night after and for a restore.
+    rows.push({ run_id: runId, name, bucket, key, size: payload.byteLength, sha256: await hashBytes(payload), reused: false, drive_id: id });
     copied += 1;
     bytes += payload.byteLength;
   }
+  await flushFileRows(db, rows);
 
   // Depth first: sub-prefixes go on the stack, and this prefix advances.
   return afterFilesPage(c, {
@@ -724,8 +754,61 @@ async function stepFiles(
 
 // ── Phase: manifest, then retention ──────────────────────────────────────
 
+// Every file record this run wrote, in name order, a page at a time past
+// PostgREST's cap.
+async function listFileRows(db: SupabaseClient, runId: string): Promise<FileRow[]> {
+  const out: FileRow[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db.from("backup_run_files")
+      .select("run_id, name, bucket, key, size, sha256, reused, drive_id")
+      .eq("run_id", runId).order("name").range(from, from + 999);
+    if (error) throw error;
+    out.push(...((data ?? []) as FileRow[]));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+
+// One carried-over file a night, downloaded off the drive and hashed
+// against its record: the copy is the provider's and never passed through
+// here, and this is the one thing that would notice the drive's own copy
+// drifting from what was stored. Rotates through the reused files by day.
+// A mismatch is read through again from Supabase and re-stored, and the
+// record updated, so the folder is still complete on its own. Never a
+// failure of the run: the answer goes on the manifest and the row.
+async function spotCheck(
+  db: SupabaseClient, drive: DriveClient, folderId: string, runId: string, records: FileRow[]
+): Promise<string> {
+  const reusedRows = records.filter(r => r.reused && r.drive_id && r.sha256);
+  if (!reusedRows.length) return "nothing carried over to check";
+  const pick = reusedRows[Math.floor(Date.now() / 86400000) % reusedRows.length];
+  try {
+    const bytes = await withRetry(`Spot-checking ${pick.name}`, () => drive.download(pick.drive_id!));
+    if (await hashBytes(bytes) === pick.sha256) return `ok: ${pick.name}`;
+    const filesFolder = (await drive.listFolders(folderId)).find(f => f.name === FILES_FOLDER);
+    if (!filesFolder) return `not checked: ${pick.name} did not hash to its record and there is no files folder to re-store it in`;
+    const blob = await withRetry(`Re-reading ${pick.bucket}/${pick.key}`, async () => {
+      const { data, error } = await db.storage.from(pick.bucket).download(pick.key);
+      if (error) throw error;
+      return data as Blob;
+    });
+    const payload = new Uint8Array(await blob.arrayBuffer());
+    const id = await withRetry(`Re-storing ${pick.name}`, () =>
+      drive.upload(filesFolder.id, pick.name, payload, blob.type || "application/octet-stream"));
+    const sha = await hashBytes(payload);
+    const { error } = await db.from("backup_run_files")
+      .update({ sha256: sha, reused: false, drive_id: id, size: payload.byteLength })
+      .eq("run_id", runId).eq("name", pick.name);
+    if (error) throw error;
+    pick.sha256 = sha; pick.reused = false; pick.drive_id = id; pick.size = payload.byteLength;
+    return `re-stored: ${pick.name} did not hash to its record`;
+  } catch (e) {
+    return `not checked: ${(e as Error).message}`;
+  }
+}
+
 async function stepManifest(
-  db: SupabaseClient, drive: DriveClient, folderId: string, c: RunCursor, kind: string
+  db: SupabaseClient, drive: DriveClient, folderId: string, c: RunCursor, kind: string, runId: string
 ): Promise<RunCursor> {
   // The schema version is the newest migration this database has applied —
   // the one number that says whether a backup can be loaded back into it.
@@ -743,6 +826,15 @@ async function stepManifest(
     m = recordTable(m, table, Number(c.rows[table] ?? 0), c.parts[table] ?? []);
   }
   m = recordFiles(m, c.files, c.bytes, c.reused);
+  // The per-file index, beside the manifest: what every file in files/
+  // hashed to when it was stored. The spot check goes first, so a file it
+  // re-stores is in the index under its new hash.
+  const records = await listFileRows(db, runId);
+  c.spot = await spotCheck(db, drive, folderId, runId, records);
+  const index = records.map(r => ({ name: r.name, bucket: r.bucket, key: r.key, size: r.size, sha256: r.sha256, reused: r.reused }));
+  await withRetry("Uploading the file index", async () =>
+    drive.upload(folderId, FILES_INDEX_NAME, await gzip(new TextEncoder().encode(JSON.stringify(index))), "application/gzip"));
+  m = recordFileIndex(m, records.filter(r => r.sha256).length, FILES_INDEX_NAME, c.spot);
   m.jobs = jobsIndex(c.index as any);
   m = finishManifest(m, new Date().toISOString());
 

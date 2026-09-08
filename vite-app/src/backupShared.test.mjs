@@ -24,8 +24,7 @@ import {
   MANIFEST_NAME, BACKUP_ROOT_NAME, TABLES_FOLDER, FILES_FOLDER,
   newManifest, recordTable, recordFiles, finishManifest, jobsIndex,
   folderStamp, beforeRestoreName, isBeforeRestore, foldersToDelete,
-  schemaTooNew, fileEntryName, parseFileEntryName
-} from "../../supabase/functions/_shared/backupManifest.ts";
+  schemaTooNew, fileEntryName, parseFileEntryName, recordFileIndex } from "../../supabase/functions/_shared/backupManifest.ts";
 
 import {
   FakeDrive, GoogleDrive, OneDrive, Dropbox, authorizeUrl, SCOPES, PROVIDERS
@@ -40,6 +39,7 @@ import {
   BUDGET_MS, SLICE_ALIVE_MS, RETRIES, BACKOFF_MS,
   newRunCursor, reviveCursor, sliceDeadline, budgetLeft, outOfBudget,
   sliceLooksAlive, isRetryable, shouldRetry, worthAnotherGo, retryDelayMs, stillHoldsRun, gatewayRefusal,
+  hashBytes, parseFileIndex, FILES_INDEX_NAME,
   afterTablePart, foldIntoIndex, forgetIndex, nextPhaseAfterManifest,
   startPrefixWalk, pausePage, afterFilesPage, countsOf, totalRows
 } from "../../supabase/functions/_shared/backupRun.ts";
@@ -1396,4 +1396,41 @@ test("the counts the panel shows are the cursor's own", () => {
   // A run with nothing recorded yet counts zero rather than throwing.
   assert.equal(totalRows(null), 0);
   assert.equal(totalRows({}), 0);
+});
+
+test("a file is hashed the way the index and a restore will compare it", async () => {
+  // The SHA-256 of "abc", as every reference implementation prints it.
+  assert.equal(await hashBytes(new TextEncoder().encode("abc")),
+    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  assert.equal(await hashBytes(new Uint8Array(0)),
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+});
+
+test("the file index reads back only records that carry a hash", () => {
+  const good = "b".repeat(64);
+  const rows = [
+    { name: "reports%2Fa.pdf", bucket: "reports", key: "a.pdf", size: 10, sha256: good, reused: true },
+    { name: "reports%2Fb.pdf", bucket: "reports", key: "b.pdf", size: 11, sha256: null },
+    { name: "reports%2Fc.pdf", bucket: "reports", key: "c.pdf", size: 12, sha256: "not a hash" },
+    { name: "", bucket: "reports", key: "d.pdf", size: 13, sha256: good }
+  ];
+  const index = parseFileIndex(JSON.stringify(rows));
+  assert.deepEqual([...index.keys()], ["reports%2Fa.pdf"]);
+  assert.equal(index.get("reports%2Fa.pdf").reused, true);
+  // Not JSON, or not an array: an empty index, never a throw — a folder
+  // whose index cannot be read is read through, not failed.
+  assert.equal(parseFileIndex("<html>").size, 0);
+  assert.equal(parseFileIndex("{}").size, 0);
+  assert.equal(FILES_INDEX_NAME, "files.json.gz");
+});
+
+test("the manifest records how many files are hashed, where, and the spot check", () => {
+  let m = newManifest("0.92-beta 2", "20260908141656", "2026-09-08T06:00:00Z");
+  m = recordFiles(m, 25, 6054632, 7);
+  m = recordFileIndex(m, 25, "files.json.gz", "ok: reports%2FS-10113%2Fx.pdf");
+  assert.deepEqual(m.files, { count: 25, bytes: 6054632, reused: 7, hashed: 25, index: "files.json.gz", spot: "ok: reports%2FS-10113%2Fx.pdf" });
+  // recordFiles after it keeps the index fields: it adds, never resets.
+  m = recordFiles(m, 1, 100, 0);
+  assert.equal(m.files.hashed, 25);
+  assert.equal(m.files.count, 26);
 });

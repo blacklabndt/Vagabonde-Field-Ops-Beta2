@@ -40,7 +40,15 @@ export interface RunCursor {
   // through Supabase.
   baseLooked: boolean;
   baseFilesFolderId: string | null;
+  // The base folder itself, for its files.json.gz — the hashes the
+  // carry-over needs (a file with no recorded hash is read through).
+  baseFolderId: string | null;
   reused: number;
+  // The manifest phase's spot check: one carried-over file downloaded and
+  // hashed against its record. Null until then; "ok", "re-stored" (the
+  // hash did not match and the file was read through again), or the
+  // reason it could not be checked.
+  spot: string | null;
   removed?: string[];
   startedAt: string;
 }
@@ -84,7 +92,9 @@ export function newRunCursor(startedAt: string): RunCursor {
     bytes: 0,
     baseLooked: false,
     baseFilesFolderId: null,
+    baseFolderId: null,
     reused: 0,
+    spot: null,
     startedAt
   };
 }
@@ -121,7 +131,9 @@ export function reviveCursor(raw: unknown, startedAt: string): RunCursor {
     // costs one listing and nothing else.
     baseLooked: c.baseLooked === true,
     baseFilesFolderId: typeof c.baseFilesFolderId === "string" && c.baseFilesFolderId ? c.baseFilesFolderId : null,
-    reused: num(c.reused)
+    baseFolderId: typeof c.baseFolderId === "string" && c.baseFolderId ? c.baseFolderId : null,
+    reused: num(c.reused),
+    spot: typeof c.spot === "string" && c.spot ? c.spot : null
   };
 }
 
@@ -339,8 +351,43 @@ export function stillHoldsRun(matched: unknown): boolean {
 
 // ── What the panel counts ────────────────────────────────────────────────
 
-export function countsOf(c: RunCursor): { rows: Record<string, number>; files: number; bytes: number; reused: number } {
-  return { rows: c.rows, files: num(c.files), bytes: num(c.bytes), reused: num(c.reused) };
+export function countsOf(c: RunCursor): { rows: Record<string, number>; files: number; bytes: number; reused: number; spot: string | null } {
+  return { rows: c.rows, files: num(c.files), bytes: num(c.bytes), reused: num(c.reused), spot: c.spot ?? null };
+}
+
+// The per-file index written beside manifest.json: every file the folder
+// holds, with the SHA-256 of its bytes as read through Supabase the night
+// it was first stored. A carried-over file keeps the hash of the copy it
+// was made from. What the next night's carry-over and a restore read.
+export const FILES_INDEX_NAME = "files.json.gz";
+
+export interface FileRecord { name: string; bucket: string; key: string; size: number; sha256: string | null; reused: boolean }
+
+// Lower-case hex SHA-256. Web Crypto, which node and the Edge runtime
+// both carry, so this module stays import-free.
+export async function hashBytes(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// The index read back: an array of records, or nothing usable. A folder
+// from before the index existed has none, and every file in it is then
+// read through once so the new folder's index is complete.
+export function parseFileIndex(text: string): Map<string, FileRecord> {
+  const out = new Map<string, FileRecord>();
+  let rows: unknown;
+  try { rows = JSON.parse(text); } catch { return out; }
+  if (!Array.isArray(rows)) return out;
+  for (const r of rows as Record<string, unknown>[]) {
+    const name = String(r?.name ?? "");
+    const sha = typeof r?.sha256 === "string" && /^[0-9a-f]{64}$/.test(r.sha256) ? r.sha256 : null;
+    if (!name || !sha) continue;
+    out.set(name, {
+      name, bucket: String(r.bucket ?? ""), key: String(r.key ?? ""),
+      size: num(r.size), sha256: sha, reused: r.reused === true
+    });
+  }
+  return out;
 }
 
 // ── Carrying unchanged files over ────────────────────────────────────────
@@ -362,12 +409,15 @@ export const WRITE_ONCE_BUCKETS: readonly string[] = ["reports", "chat-media"];
 
 export function carryOverId(
   bucket: string, entryName: string, size: number,
-  base: Map<string, { id: string; size: number }>
+  base: Map<string, { id: string; size: number; sha256?: string | null }>
 ): string | null {
   if (!WRITE_ONCE_BUCKETS.includes(bucket)) return null;
   if (!Number.isFinite(size) || size < 0) return null;
   const held = base.get(entryName);
   if (!held || !held.id) return null;
+  // A copy with no recorded hash is a copy nothing can ever verify — the
+  // file is read through instead, once, and hashed for every night after.
+  if (!held.sha256) return null;
   return num(held.size) === size ? held.id : null;
 }
 

@@ -24,7 +24,7 @@ test("only buckets whose keys are never reused are carried over", () => {
 
 test("an object is carried over when the base holds its name at the same size", () => {
   const name = fileEntryName("reports", "S-10113/1787005997347-report.pdf");
-  const base = new Map([[name, { id: "drive-42", name, size: 230568 }]]);
+  const base = new Map([[name, { id: "drive-42", name, size: 230568, sha256: "a".repeat(64) }]]);
   assert.equal(carryOverId("reports", name, 230568, base), "drive-42");
   // A different size is a different file, whatever the name says.
   assert.equal(carryOverId("reports", name, 230567, base), null);
@@ -84,4 +84,15 @@ test("the panel says how many were carried over, and nothing when none were", ()
   assert.equal(carriedOverNote({ files: 10, reused: 0 }), "");
   assert.equal(carriedOverNote(null), "");
   assert.equal(carriedOverNote({ files: 6000, reused: 5988 }), ", 5988 carried over from the night before");
+});
+
+test("a copy with no recorded hash is not carried over — it is read through and hashed", () => {
+  // The night the index shipped, last night's folder has no files.json.gz:
+  // every file goes the long way round once, so this folder's index is
+  // complete and every night after can copy on the drive and verify.
+  const name = fileEntryName("reports", "S-10113/1787005997347-report.pdf");
+  const noHash = new Map([[name, { id: "drive-42", name, size: 230568, sha256: null }]]);
+  assert.equal(carryOverId("reports", name, 230568, noHash), null);
+  const legacy = new Map([[name, { id: "drive-42", name, size: 230568 }]]);
+  assert.equal(carryOverId("reports", name, 230568, legacy), null);
 });
