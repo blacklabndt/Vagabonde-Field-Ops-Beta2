@@ -879,9 +879,11 @@ export const splitContact = s => {
 };
 
 // Critical outranks High outranks the rest, and has to read that way at a
-// glance on a phone in daylight.
+// glance on a phone in daylight — so it climbs the severity ramp red → amber →
+// grey. ("solid" used to be the Critical variant, but no .tag-solid was ever
+// styled, so Critical rendered with no emphasis at all — less than High.)
 export const hazardTagVariant = level =>
-  level === "Critical" ? "solid" : level === "High" ? "accent" : "neutral";
+  level === "Critical" ? "bad" : level === "High" ? "warn" : "neutral";
 
 // Shown wherever a screen needs an open job and hasn't got one. The JHA,
 // upload and ticket screens all dereferenced `job.id` on their first line, so
@@ -1012,10 +1014,13 @@ export function ConnectionBar({ label }) {
 export function StatusTag({ status }) {
   // Two vocabularies, one tag: jobs are Active or Complete, tickets run Draft →
   // Awaiting approval → Approved → Invoiced.
+  // Colour tracks the ticket's progress: idle grey → amber (waiting on the
+  // client) → green (signed) → steel (filed as invoiced). Jobs stay steel while
+  // Active, grey once Complete.
   const map = {
     Active: { v: "accent" }, Complete: { v: "neutral" },
-    Draft: { v: "neutral" }, "Awaiting approval": { v: "outline" },
-    Approved: { v: "accent" }, Invoiced: { v: "neutral" }
+    Draft: { v: "neutral" }, "Awaiting approval": { v: "warn" },
+    Approved: { v: "ok" }, Invoiced: { v: "accent" }
   };
   const v = (map[status] || { v: "neutral" }).v;
   return <TagX variant={v}>{status}</TagX>;

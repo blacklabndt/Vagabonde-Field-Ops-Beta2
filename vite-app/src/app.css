@@ -23,6 +23,14 @@
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.5);
   --shadow-md: 0 3px 10px rgba(0,0,0,0.55);
   --shadow-lg: 0 12px 32px rgba(0,0,0,0.6);
+  /* Semantic status + field-hardening, dark. Lighter, less saturated than the
+     light values so they read on the dark ground without glowing. */
+  --color-ok: #6fbf95;   --color-ok-tint: color-mix(in srgb, #6fbf95 16%, transparent);
+  --color-warn: #e6b45a; --color-warn-tint: color-mix(in srgb, #e6b45a 16%, transparent);
+  --color-bad: #f08a80;  --color-bad-tint: color-mix(in srgb, #f08a80 15%, transparent);
+  --card-fill: #24282b;
+  --card-edge: color-mix(in srgb, var(--color-text) 22%, transparent);
+  --card-shadow: 0 1px 2px rgba(0,0,0,0.5);
 }
 /* The app's two motion curves — every entrance decelerates on the same
    ease, every exit accelerates on the same one, so the drawer, dialogs,
@@ -31,6 +39,18 @@
 :root {
   --ease-enter: cubic-bezier(.22, .75, .28, 1);
   --ease-exit: cubic-bezier(.55, .06, .68, .19);
+  /* Semantic status — a restrained green/amber/red, desaturated to live inside
+     the steel palette rather than shout, each tuned to AA on the light ground
+     and card. Dark values are in the [data-theme="dark"] block above. Used by
+     StatusTag and hazardTagVariant via the .tag-ok/.tag-warn/.tag-bad classes. */
+  --color-ok: #1c6b46;   --color-ok-tint: color-mix(in srgb, #1c6b46 12%, transparent);
+  --color-warn: #8a5a00; --color-warn-tint: color-mix(in srgb, #8a5a00 14%, transparent);
+  --color-bad: #a3271f;  --color-bad-tint: color-mix(in srgb, #a3271f 11%, transparent);
+  /* Field-hardening: a content card that keeps its shape on a dimmed tablet in
+     daylight — faint fill, firmer edge than the 16% hairline, a whisper of lift. */
+  --card-fill: #fcfcfd;
+  --card-edge: color-mix(in srgb, var(--color-text) 26%, transparent);
+  --card-shadow: 0 1px 2px color-mix(in srgb, #2b2b2d 12%, transparent);
 }
 
 /* The light theme's accent, darkened. The design system's #5980a6 measured
@@ -58,6 +78,21 @@ html, body, #root { min-height: 100%; }
    corner <i> elements stay in the DOM; this hides them everywhere at once,
    including the two screens that draw them on an inline .blueprint box. */
 .blueprint > .corner { display: none; }
+/* Field-hardened cards: the frame keeps its square corners and hairline
+   language, but a content card now takes a faint fill, a firmer edge and a
+   whisper of lift so it holds its shape on a dimmed tablet in daylight — the
+   16% hairline on a transparent card all but vanished in glare. Dialogs (their
+   own solid surface + shadow over the scrim, set by .dialog-backdrop .dialog)
+   and the full-bleed .phone-frame on the field screens are deliberately left
+   out. Cards that set their own background inline (the ticket editor's accent
+   highlight) keep it; only the border firms up. */
+.blueprint:not(.dialog):not(.phone-frame) {
+  background: var(--card-fill);
+  border-color: var(--card-edge);
+  box-shadow: var(--card-shadow);
+}
+/* Figures line up column to column across every table. */
+.table { font-variant-numeric: tabular-nums; }
 body {
   margin: 0; background: var(--color-bg); color: var(--color-text);
   font-family: var(--font-body); transition: background .15s, color .15s;
@@ -167,6 +202,18 @@ input[type=range] { accent-color: var(--color-accent); }
    65% takes it to 4.93:1; the border stays where it was, being decoration
    rather than something anybody has to read. */
 .tag-dashed { border: 1px dashed color-mix(in srgb, var(--color-text) 45%, transparent); color: color-mix(in srgb, var(--color-text) 65%, transparent); }
+
+/* — semantic status tags (StatusTag, hazardTagVariant) —
+   Green/amber/red on their own tint, with a 3px left stripe so the severity
+   still reads where the hue is hard to judge (bright sun, colour-blindness).
+   Square corners come from the DS's `.tag { border-radius: 0 }`. */
+.tag-ok, .tag-warn, .tag-bad { border: 1px solid; border-left-width: 3px; }
+.tag-ok   { background: var(--color-ok-tint);   color: var(--color-ok);
+            border-color: color-mix(in srgb, var(--color-ok) 45%, transparent);   border-left-color: var(--color-ok); }
+.tag-warn { background: var(--color-warn-tint); color: var(--color-warn);
+            border-color: color-mix(in srgb, var(--color-warn) 45%, transparent); border-left-color: var(--color-warn); }
+.tag-bad  { background: var(--color-bad-tint);  color: var(--color-bad);
+            border-color: color-mix(in srgb, var(--color-bad) 45%, transparent);  border-left-color: var(--color-bad); }
 
 /* — pdf glyph, drawn not imaged — */
 .pdf-glyph {
