@@ -30,13 +30,13 @@ export const HELP = {
   job: {
     heading: "Job detail",
     body: [
-      "On this screen you can see the job details, open, create and send JHAs, and Tickets as well as upload and send reports. Start with your JHA, then create a new ticket. The ticket number will be displayed for you, input that new ticket number into your corresponding report. Once you're done for the day, PDF your spreadsheet and upload and send it to the contractor. Then open your ticket and fill out the billing and send to the client"
+      "On this screen you can see the job details, open, create and send JHAs, and Tickets as well as upload and send reports. Start with your JHA, then create a new ticket. The ticket number will be displayed for you, input that new ticket number into your corresponding report. Once you're done for the day, PDF your spreadsheet, upload and send it to the contractor. Then open your ticket, fill out the billing and send to the client"
     ]
   },
   jha: {
     heading: "JHA builder",
     body: [
-      "On this screen you can build your JHA... Self explanatory"
+      "On this screen you can build your JHA. Your equipment should be automatically filled out from the system. If you recently picked up a new camera or dosimetry it may not have been updated yet and you might have to manually enter it in."
     ]
   },
   upload: {
