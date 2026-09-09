@@ -49,7 +49,7 @@ import {
   BUDGET_MS, RETRIES, afterFilesPage, afterTablePart, countsOf, foldIntoIndex,
   forgetIndex, newRunCursor, nextPhaseAfterManifest, outOfBudget, pausePage,
   retryDelayMs, reviveCursor, shouldRetry, sliceDeadline, sliceLooksAlive,
-  startPrefixWalk, stillHoldsRun, gatewayRefusal
+  startPrefixWalk, stillHoldsRun, gatewayRefusal, isTransientEdgeError, withinRetryWindow
 } from "../_shared/backupRun.ts";
 import { FILES_INDEX_NAME, VERIFY_KIND, addVerifyNote, carryOverId, chooseBaseFolder, hashBytes, nextVerifyAt, reviveVerifyCursor, verifyCounts } from "../_shared/backupRun.ts";
 import type { RunCursor } from "../_shared/backupRun.ts";
@@ -472,7 +472,7 @@ async function advance(db: SupabaseClient, run: Run, secret: string): Promise<Re
   try {
     conn = await connectDrive(db);
   } catch (e) {
-    return await fail(db, runId, (e as Error).message, guard);
+    return await failOrLeave(db, runId, run, guard, e);
   }
 
   let cursor: RunCursor;
@@ -531,7 +531,7 @@ async function advance(db: SupabaseClient, run: Run, secret: string): Promise<Re
     if (units > 0) kick("backup-run", { action: "advance", runId, chain: true }, secret);
     return { ok: true, runId, phase: cursor.phase, continuing: true };
   } catch (e) {
-    return await fail(db, runId, (e as Error).message, guard);
+    return await failOrLeave(db, runId, run, guard, e);
   }
 }
 
@@ -670,6 +670,25 @@ async function fail(
   return superseded
     ? { ok: false, runId, error: message, superseded: true }
     : { ok: false, runId, error: message };
+}
+
+// A slice's error is not always the run's failure. A passing edge blip — the
+// reset socket that lost a whole night's backup, a gateway page from the edge —
+// is not something to mark the run failed over: doing that makes the run
+// terminal and defeats the reclaim path built for exactly this, so the day's
+// backup is thrown away with no retry until tomorrow. Left alone, the run stays
+// running with its heartbeat ageing, and the next tick reclaims it and resumes
+// from the cursor once the edge recovers. Only a real error — or a run too old
+// to still finish before tomorrow's is due — is failed for good, so a sustained
+// outage cannot wedge the schedule with a run nobody can complete.
+async function failOrLeave(
+  db: SupabaseClient, runId: string, run: Run, guard: string, e: unknown
+): Promise<Record<string, unknown>> {
+  if (isTransientEdgeError(e) && withinRetryWindow(Date.parse(String(run.created_at ?? "")), Date.now())) {
+    console.warn(`backup-run: a passing edge error left ${runId} for the next tick to resume: ${(e as Error).message}`);
+    return { ok: false, runId, transient: true, retrying: true };
+  }
+  return await fail(db, runId, (e as Error).message, guard);
 }
 
 // ── Phase: tables ────────────────────────────────────────────────────────

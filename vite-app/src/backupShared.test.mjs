@@ -39,6 +39,7 @@ import {
   BUDGET_MS, SLICE_ALIVE_MS, RETRIES, BACKOFF_MS,
   newRunCursor, reviveCursor, sliceDeadline, budgetLeft, outOfBudget,
   sliceLooksAlive, isRetryable, shouldRetry, worthAnotherGo, retryDelayMs, stillHoldsRun, gatewayRefusal,
+  isTransientEdgeError, withinRetryWindow, RUN_RETRY_WINDOW_MS,
   hashBytes, parseFileIndex, FILES_INDEX_NAME,
   VERIFY_KIND, MAX_VERIFY_NOTES, newVerifyCursor, reviveVerifyCursor, addVerifyNote, verifyCounts, nextVerifyAt,
   afterTablePart, foldIntoIndex, forgetIndex, nextPhaseAfterManifest,
@@ -1200,6 +1201,53 @@ test("the token endpoint gets one more kind of second chance than a drive does",
   // not a network failure just because it has no status on it.
   assert.equal(worthAnotherGo(new Error("dropbox refused to refresh the connection.")), false);
   assert.equal(worthAnotherGo(null), false);
+});
+
+test("a passing edge error is transient; a real refusal is not", () => {
+  // The one that lost a night's backup: a conditional write to backup_runs
+  // whose socket was reset mid-flight. fetch throws a TypeError with no status.
+  const reset = new TypeError("error sending request from 10.32.165.66:43062 for " +
+    "https://x.supabase.co/rest/v1/backup_runs?id=eq.abc&status=eq.running&select=id " +
+    "(104.18.38.10:443): client error (SendRequest): connection error: connection reset");
+  assert.equal(isTransientEdgeError(reset), true);
+  // The gateway blips that followed it, in both shapes the edge answers them:
+  // the HTML page supabase-js hands back whole, and the bare phrase.
+  assert.equal(isTransientEdgeError(new Error("<html><head><title>502 Bad Gateway</title></head></html>")), true);
+  assert.equal(isTransientEdgeError(new Error("Gateway Timeout")), true);
+  // A flagged 429 from the drive is worth another go too — worthAnotherGo says so.
+  assert.equal(isTransientEdgeError(Object.assign(new Error("429: slow down"), { status: 429, retryable: true })), true);
+  // A real answer must still fail the run: a permission refusal, a drive 5xx
+  // named as the drive's (not a Supabase gateway page), and empty/null.
+  assert.equal(isTransientEdgeError(new Error("permission denied for table backup_runs")), false);
+  assert.equal(isTransientEdgeError(new Error("Drive answered 502 for the upload")), false);
+  assert.equal(isTransientEdgeError(null), false);
+});
+
+test("a run is left for reclaim only while it is young enough to still finish", () => {
+  const now = 10_000_000_000;
+  // A blip a minute into the run: keep it, the next tick resumes it.
+  assert.equal(withinRetryWindow(now - 60_000, now), true);
+  // Still failing hours later past the ceiling: fail it for good rather than
+  // wedge the schedule — and the ceiling is under a day, so tomorrow's backup
+  // is never blocked by a run that could not finish today.
+  assert.equal(withinRetryWindow(now - (RUN_RETRY_WINDOW_MS + 1), now), false);
+  assert.ok(RUN_RETRY_WINDOW_MS < 24 * 60 * 60 * 1000, "the ceiling clears before the next daily run is due");
+  // No timestamp yet — a transient failure at the very first slice, before the
+  // claim wrote started_at — reads as just-started, so it is kept, not failed.
+  assert.equal(withinRetryWindow(NaN, now), true);
+});
+
+test("a transient edge blip mid-slice leaves the run for the next tick, not failed", () => {
+  // The reclaim path (a stale heartbeat is picked up and the cursor resumed)
+  // only rescues a run still marked running. So the slice's catch must not turn
+  // a passing network blip into a terminal failure — that is exactly what threw
+  // a night's backup away. A real error still fails, on the else path.
+  const src = read("supabase/functions/backup-run/index.ts");
+  assert.match(src, /if \(isTransientEdgeError\(e\) && withinRetryWindow\(/,
+    "the catch asks whether the error is a passing edge blip and the run is still young");
+  assert.match(src, /transient: true/, "a transient blip returns rather than failing the run");
+  assert.match(src, /return await fail\(db, runId, \(e as Error\)\.message, guard\);/,
+    "a real error still fails the run");
 });
 
 test("connectDrive's refresh is under the same three goes as everything else", () => {

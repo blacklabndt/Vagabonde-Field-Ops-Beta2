@@ -193,6 +193,35 @@ export function worthAnotherGo(e: unknown): boolean {
   return err.status === undefined && err.name === "TypeError";
 }
 
+// The shapes a passing Supabase-edge blip reaches a slice as, folded into one
+// question the run's catch asks. worthAnotherGo already knows the socket that
+// dropped mid-request — a TypeError with no status, which is the connection
+// reset that threw a night's backup away — and the drive's own retryable flag.
+// The rest is the edge answering for the API with a 5xx: either the HTML page
+// supabase-js hands back whole (gatewayRefusal names it) or the bare phrase a
+// 502/503/504 carries. A real answer — a permission error, a drive 5xx named
+// as the drive's ("Drive answered 502…", which gatewayRefusal already declines)
+// — is none of these and must still fail the run.
+export function isTransientEdgeError(e: unknown): boolean {
+  if (worthAnotherGo(e)) return true;
+  const msg = String((e as { message?: unknown } | null)?.message ?? "");
+  if (gatewayRefusal(msg)) return true;
+  return /gateway time-?out|bad gateway|service unavailable/i.test(msg);
+}
+
+// How long a run whose slices keep hitting passing edge errors is left as it is
+// for the next tick to reclaim and resume, before it is failed for good rather
+// than sit running for ever and block every backup after it. Under a day on
+// purpose: a run that could not finish today must have given up well before
+// tomorrow's is due, so the ceiling never starves the schedule.
+export const RUN_RETRY_WINDOW_MS = 6 * 60 * 60 * 1000;
+export function withinRetryWindow(startedAtMs: number, now: number, windowMs = RUN_RETRY_WINDOW_MS): boolean {
+  // No timestamp yet means the claim that writes started_at has not landed —
+  // a blip at the very first slice — so the run has only just begun: keep it.
+  if (!Number.isFinite(startedAtMs)) return true;
+  return now - startedAtMs < windowMs;
+}
+
 export function retryDelayMs(attempt: number): number {
   const i = Math.max(0, Math.min(attempt, BACKOFF_MS.length - 1));
   return BACKOFF_MS[i];
