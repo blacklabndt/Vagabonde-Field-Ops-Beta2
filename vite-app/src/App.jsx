@@ -1511,7 +1511,7 @@ export function App() {
           {(TABS.find(t => t.key === screen) || {}).label || ""}
         </span>
         {cacheState.servingCached && (
-          <TagX variant="outline" title={`No connection. Showing what this device saved at ${new Date(cacheState.at).toLocaleTimeString("en-CA", { hour: "2-digit", minute: "2-digit", hour12: false })}.`}>
+          <TagX variant="warn" title={`No connection. Showing what this device saved at ${new Date(cacheState.at).toLocaleTimeString("en-CA", { hour: "2-digit", minute: "2-digit", hour12: false })}.`}>
             Offline
           </TagX>
         )}
@@ -1519,7 +1519,7 @@ export function App() {
         {updateReady && updateDeferred && (
           <button
             type="button"
-            className="tag tag-accent"
+            className="tag tag-ok"
             onClick={() => SwUpdates.apply()}
             style={{ cursor: "pointer", font: "inherit" }}
             title="A new version is ready — tap to restart into it. Anything queued or auto-saved on this device survives the restart."

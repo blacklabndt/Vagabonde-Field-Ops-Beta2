@@ -45,8 +45,8 @@ export function QueueBadge({ items, onOpen }) {
     <button
       type="button"
       onClick={onOpen}
-      className={stuck.length ? "tag tag-accent" : "tag tag-outline"}
-      style={{ cursor: "pointer", background: stuck.length ? undefined : "none", font: "inherit" }}
+      className={stuck.length ? "tag tag-bad" : "tag tag-warn"}
+      style={{ cursor: "pointer", font: "inherit" }}
       title={stuck.length
         ? `${stuck.length} item${stuck.length === 1 ? "" : "s"} couldn't sync — tap for the reason`
         : "Saved on this device — syncing automatically once you're back in range"}

@@ -153,6 +153,21 @@ input[type=range] { accent-color: var(--color-accent); }
 }
 .pill:not(.active):hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); border-color: color-mix(in srgb, var(--color-text) 45%, transparent); }
 .pill.active { background: var(--color-accent); color: var(--color-bg); border-color: var(--color-accent); }
+/* Status-toned filter pills: each carries an inset stripe in its status colour
+   so the bar reads as a legend before you tap, and fills with that colour when
+   active. The active caption stays var(--color-bg) — near-white on the light
+   ground, near-black on the dark one — which lands on the right side of AA over
+   every one of these fills. "All" keeps the default steel. */
+.pill-idle  { box-shadow: inset 3px 0 0 var(--color-neutral-500); }
+.pill-warn  { box-shadow: inset 3px 0 0 var(--color-warn); }
+.pill-ok    { box-shadow: inset 3px 0 0 var(--color-ok); }
+.pill-steel { box-shadow: inset 3px 0 0 var(--color-accent); }
+.pill-bad   { box-shadow: inset 3px 0 0 var(--color-bad); }
+.pill-idle.active  { background: var(--color-neutral-600); border-color: var(--color-neutral-600); box-shadow: none; }
+.pill-warn.active  { background: var(--color-warn); border-color: var(--color-warn); box-shadow: none; }
+.pill-ok.active    { background: var(--color-ok); border-color: var(--color-ok); box-shadow: none; }
+.pill-steel.active { background: var(--color-accent); border-color: var(--color-accent); box-shadow: none; }
+.pill-bad.active   { background: var(--color-bad); border-color: var(--color-bad); box-shadow: none; }
 
 /* — segmented control on real <button>s (Contacts' scope/type toggles) —
    the DS's .seg-opt styles a hidden radio input via :has(), which never
@@ -288,6 +303,23 @@ tbody tr.clickable { cursor: pointer; }
    not carrying .table-wide, so they no longer draw a scrollbar for content that
    already fits. */
 .table-scroll > .table.table-wide { min-width: 900px; }
+
+/* Freeze the first column of a wide table. On a tablet (a 900px table over a
+   ~768px viewport) these scroll sideways; the anchor — ticket number, work
+   date, name, or the bulk-select box — then stays in view while you scroll out
+   to the money columns. A no-op where the table already fits without scrolling.
+   The cell needs an opaque fill (scrolling columns would otherwise show
+   through) and a right hairline to mark the seam; the hover tint is composited
+   over that fill so it stays opaque under the pointer. */
+.table-scroll > .table.table-wide th:first-child,
+.table-scroll > .table.table-wide td:first-child {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--card-fill);
+  border-right: 1px solid var(--card-edge);
+}
+.table-scroll > .table.table-wide tbody tr:hover > :first-child {
+  background: color-mix(in srgb, var(--color-text) 4%, var(--card-fill));
+}
 
 /* — dialog field grid scrolls, not the dialog shell — */
 /* overflow-x hidden as well as the vertical auto: with overflow-x left at

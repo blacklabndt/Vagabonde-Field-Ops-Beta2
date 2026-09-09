@@ -9,6 +9,14 @@ import { rollUpAging, isMissingTicketAging, AGING_BUCKETS } from "../ticketAging
 import { ticketExportRows, lineExportRows } from "../accountingExport.js";
 
 const TRACKER_FILTERS = ["All", "Draft", "Awaiting approval", "Approved", "Invoiced", "Over 7 days"];
+// Each status filter wears its own colour (matching StatusTag), so the pill row
+// doubles as the legend for the table below it and triage is a glance: tap the
+// amber pill for the ones to chase, the red for the ones that have sat too long.
+// "All" has no tone and keeps the default steel.
+const PILL_TONE = {
+  Draft: "idle", "Awaiting approval": "warn", Approved: "ok",
+  Invoiced: "steel", "Over 7 days": "bad"
+};
 
 // How the bulk chase paces itself. Three sends in flight covers the round trip
 // to the Edge Function without the browser holding thousands of open requests;
@@ -616,10 +624,10 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
             return (
               <Blueprint key={b.key} className="stat-tile">
                 <div className="stat-label">{b.label}</div>
-                {/* The 90+ tile carries the accent the way Unsigned does:
-                    it is the one an office acts on, and a row of four
-                    identical tiles hides it. */}
-                <div className="stat-figure" style={b.key === "90" ? { color: "var(--color-accent-700)" } : undefined}>
+                {/* The 90+ tile goes red: it is the one an office acts on, a
+                    row of four identical tiles hides it, and red is the whole
+                    point of the aging table — money that has sat too long. */}
+                <div className="stat-figure" style={b.key === "90" ? { color: "var(--color-bad)" } : undefined}>
                   {cell ? (priced ? money(cell.total || 0) : cell.count) : "—"}
                 </div>
                 <div className="stat-note">{priced ? `${cell ? cell.count : "…"} tickets ${b.note}` : `tickets ${b.note}`}</div>
@@ -637,7 +645,7 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
           figure under a filter that says "Approved, March". */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
         {!byClient && TRACKER_FILTERS.map(f => (
-          <button key={f} className={`pill${filter === f ? " active" : ""}`} onClick={() => setFilter(f)}>{f}</button>
+          <button key={f} className={`pill${PILL_TONE[f] ? ` pill-${PILL_TONE[f]}` : ""}${filter === f ? " active" : ""}`} onClick={() => setFilter(f)}>{f}</button>
         ))}
         {showAging && (<>
           {!byClient && <span aria-hidden="true" style={{ width: 1, height: 20, background: "var(--color-neutral-300)", margin: "0 4px" }} />}
@@ -724,12 +732,12 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
                     onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenTicket(t); } }}
                     onClick={() => onOpenTicket(t)}>{t.id}</td>
                   <td>{t.date}</td>
-                  {/* Overdue was the accent colour and nothing else, which is
-                      no answer to anyone who can't see the difference — or to
-                      anyone reading it in daylight through a windscreen. */}
-                  <td className="tabular" style={{ color: overdue ? "var(--color-accent-700)" : "inherit", whiteSpace: "nowrap" }}>
+                  {/* Overdue reads red — the tag already carries a left stripe
+                      and a word, so it answers anyone who can't tell the hue
+                      apart or is reading it in daylight through a windscreen. */}
+                  <td className="tabular" style={{ color: overdue ? "var(--color-bad)" : "inherit", whiteSpace: "nowrap" }}>
                     {t.age === 0 ? "today" : t.age + " d"}
-                    {overdue && <TagX variant="accent" style={{ marginLeft: 6 }}>overdue</TagX>}
+                    {overdue && <TagX variant="bad" style={{ marginLeft: 6 }}>overdue</TagX>}
                   </td>
                   <td>{t.job}</td>
                   <td>{t.project}<div style={{ fontSize: 11, color: "color-mix(in srgb, var(--color-text) 55%, transparent)" }}>{t.client}</div></td>
