@@ -1677,7 +1677,8 @@ export function App() {
         />
       )}
       {updateReady && !updateDeferred && <UpdateBanner onLater={() => setUpdateDeferred(true)} />}
-      <Toast message={toast && toast.text} tone={toast && toast.tone} onDone={() => setToast(null)} />
+      <Toast message={toast && toast.text} tone={toast && toast.tone} action={toast && toast.action}
+        duration={toast && toast.action ? 6000 : undefined} onDone={() => setToast(null)} />
     </div>
   );
 }

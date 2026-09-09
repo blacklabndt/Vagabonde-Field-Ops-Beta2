@@ -3,6 +3,7 @@ import { money, todayLocal, localDate, dayMonth, initialsOf, crewRoleFor, hours,
 import { Db } from "../db.js";
 import { Blueprint, Btn, TagX, Field, ErrorBox, emailIn, NoJobSelected, QueuedPanel, NumField, Loading, useScreenFoot, SearchSelect } from "./common.jsx";
 import { OfflineQueue } from "../offlineQueue.js";
+import { Toasts } from "../toastBus.js";
 import { OfflineCache } from "../offlineCache.js";
 import { savingLabel, deviceOffline } from "../savingWords.js";
 import { overwroteKey, overwroteWords } from "../overwriteNote.js";
@@ -720,8 +721,31 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
   const setOtherQty = (key, qty) => { clearSaveError(); setOtherLines(p => p.map(l => l.key === key ? { ...l, qty: Math.max(0, qty) } : l)); };
   const removeWeld = key => { clearSaveError(); setWeldLines(p => p.filter(l => l.key !== key)); };
   const removeOther = key => { clearSaveError(); setOtherLines(p => p.filter(l => l.key !== key)); };
-  // By position: an off-card line has no catalog key to be known by.
-  const removeOrphan = i => { clearSaveError(); setOrphanLines(p => p.filter((_, j) => j !== i)); };
+  // By position: an off-card line has no catalog key to be known by. Dropping
+  // one takes real money off the ticket, so it offers an Undo that puts the
+  // line back exactly where it was, rate and quantity intact.
+  const removeOrphan = i => {
+    clearSaveError();
+    const removed = orphanLines[i];
+    setOrphanLines(p => p.filter((_, j) => j !== i));
+    if (removed) Toasts.show(`Removed ${removed.label}`, "ok", false, {
+      label: "Undo",
+      onClick: () => setOrphanLines(p => { const next = [...p]; next.splice(Math.min(i, next.length), 0, removed); return next; })
+    });
+  };
+  // Removing a person takes their hours — the day's pay — off the ticket, so it
+  // offers the same Undo, restoring the row with its figures untouched.
+  const removeCrew = c => {
+    clearSaveError();
+    const idx = crew.findIndex(x => x.profileId === c.profileId);
+    setCrew(p => p.filter(x => x.profileId !== c.profileId));
+    Toasts.show(`Removed ${c.name}`, "ok", false, {
+      label: "Undo",
+      onClick: () => setCrew(p => p.some(x => x.profileId === c.profileId)
+        ? p
+        : (() => { const next = [...p]; next.splice(Math.min(idx, next.length), 0, c); return next; })())
+    });
+  };
 
   // Stored — and therefore printed on the field invoice — in the card's
   // order, not the order lines were tapped in: the invoice reads like the
@@ -1252,7 +1276,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
                   {c.role === "Helper" && <TagX variant="neutral">Helper</TagX>}
                   {c.isSub && <TagX variant="outline">Sub</TagX>}
                   {crew.length > 1 && (
-                    <button onClick={() => { clearSaveError(); setCrew(p => p.filter(x => x.profileId !== c.profileId)); }}
+                    <button onClick={() => removeCrew(c)}
                       aria-label={`Remove ${c.name}`}
                       style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", color: "color-mix(in srgb, var(--color-text) 50%, transparent)", fontSize: 16 }}>×</button>
                   )}

@@ -32,12 +32,15 @@ export const Toasts = {
   // `force` is for the one message a muted replay must still deliver: the
   // outbox completed an item but could not apply all of it, and nobody
   // would otherwise hear.
-  show(text, tone = "ok", force = false) {
+  // `action` is an optional { label, onClick } the toast draws as a button —
+  // the "Undo" on a reversible removal. It rides through here so the single
+  // Toast in App can render it without every caller reaching into App.
+  show(text, tone = "ok", force = false, action = null) {
     if (!text || (muted && !force)) return;
     const now = Date.now();
     if (text === last.text && now - last.at < DEDUPE_MS) return;
     last = { text, at: now };
-    listeners.forEach(fn => fn({ text, tone, at: now }));
+    listeners.forEach(fn => fn({ text, tone, at: now, action }));
   },
 
   // Counted rather than boolean, so overlapping replays can't unmute early.

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Db } from "../db.js";
 import { nonNegative } from "../data.js";
 import { acceptsNumberText, isWholeStep } from "../numberInput.js";
+import { buzz } from "../haptics.js";
 
 // Re-exported from data.js, which is where they live now — the sign-in path
 // needs them and cannot import a file that pulls in React. Kept here so the
@@ -106,6 +107,25 @@ export function useDebounced(fn, delay = 500) {
 export function TagX({ variant = "neutral", style, children, ...rest }) {
   const cls = variant === "dashed" ? "tag tag-dashed" : `tag tag-${variant}`;
   return <span className={cls} style={style} {...rest}>{children}</span>;
+}
+
+// A rep is stored and shown as one string — "Name · phone · email", joined
+// with " · " (see jobDetail's fmtRep). This splits it back on that separator
+// and makes the phone a tel: link and the email a mailto:, so a tech can tap to
+// call or write from the job screen; the name stays plain text. Only these two
+// token shapes linkify, so an AFE or LSD run through it by mistake stays inert.
+const CONTACT_SEP = " · ";
+const CONTACT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const digitsIn = s => (String(s).match(/\d/g) || []).length;
+export function ContactText({ text }) {
+  const parts = String(text || "").split(CONTACT_SEP);
+  return parts.map((part, i) => {
+    const p = part.trim();
+    let node = part;
+    if (CONTACT_EMAIL_RE.test(p)) node = <a href={`mailto:${p}`}>{part}</a>;
+    else if (digitsIn(p) >= 7) node = <a href={`tel:${p.replace(/[^\d+]/g, "")}`}>{part}</a>;
+    return <React.Fragment key={i}>{i ? CONTACT_SEP : ""}{node}</React.Fragment>;
+  });
 }
 
 // The elements a `<label for>` can actually name. Pointed at anything else —
@@ -757,7 +777,7 @@ export function LoadingRow({ cols = 1, label = "Loading…" }) {
   );
 }
 
-export function Toast({ message, tone = "ok", onDone, duration = 2600 }) {
+export function Toast({ message, tone = "ok", onDone, duration = 2600, action = null }) {
   // onDone arrives as a fresh inline arrow each render; a ref keeps the timer
   // from re-arming on unrelated App re-renders. Left in the deps it restarted
   // the countdown every render, so under steady churn the toast never left.
@@ -765,11 +785,15 @@ export function Toast({ message, tone = "ok", onDone, duration = 2600 }) {
   onDoneRef.current = onDone;
   useEffect(() => {
     if (!message) return;
+    // A tactile confirmation for a tech who can't read the screen in glare: a
+    // single tick for a save/success, a double buzz for something wrong. Off
+    // with the Animations switch, silent where there's no vibration motor.
+    buzz(tone === "error" ? [22, 40, 22] : 10);
     const t = setTimeout(() => onDoneRef.current(), duration);
     // Re-armed per message, so a second save mid-fade resets the clock
     // instead of inheriting the tail of the first one's timer.
     return () => clearTimeout(t);
-  }, [message, duration]);
+  }, [message, duration, tone]);
 
   if (!message) return null;
   const bad = tone === "error";
@@ -793,6 +817,22 @@ export function Toast({ message, tone = "ok", onDone, duration = 2600 }) {
     }}>
       <span aria-hidden="true">{bad ? "!" : "✓"}</span>
       <span>{message}</span>
+      {action && (
+        // The container is click-through (pointerEvents none) so a toast never
+        // eats a tap meant for the screen; the one interactive thing on it opts
+        // back in. Running the action dismisses the toast with it.
+        <button type="button"
+          onClick={() => { action.onClick(); onDoneRef.current(); }}
+          style={{
+            pointerEvents: "auto", cursor: "pointer",
+            marginLeft: 4, padding: "2px 8px",
+            background: "none", border: "1px solid currentColor", borderRadius: 999,
+            font: "inherit", color: "inherit",
+            textTransform: "uppercase", letterSpacing: ".06em", fontSize: 12
+          }}>
+          {action.label}
+        </button>
+      )}
     </div>
   );
 }

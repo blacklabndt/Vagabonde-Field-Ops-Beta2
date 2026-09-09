@@ -10,7 +10,7 @@ import { Toasts } from "../toastBus.js";
 
 // An idempotency key for a save (see Db.createTicket / uploadReport).
 const newClientKey = () => (crypto.randomUUID ? crypto.randomUUID() : null);
-import { tabList, Blueprint, Btn, TableScroll, TagX, Field, PdfGlyph, PdfLink, Dialog, ErrorBox, emailIn, contactLabel, splitContact, StatusTag, useMissingFields, SearchSelect, Loading, LoadingRow } from "./common.jsx";
+import { tabList, Blueprint, Btn, TableScroll, TagX, Field, PdfGlyph, PdfLink, Dialog, ErrorBox, emailIn, contactLabel, splitContact, StatusTag, useMissingFields, SearchSelect, Loading, LoadingRow, ContactText } from "./common.jsx";
 
 export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, onStartTicket, jobRecord, setJobRecord, onJobChanged, onJobDeleted }) {
   // Prices — rate cards, ticket lines, the amounts they add up to — are for
@@ -698,8 +698,8 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
                   internal project name. */}
               <RecordCell label="Area" value={jobRecord.area} />
 
-              <RecordCell label="Client rep" value={jobRecord.clientRep} />
-              <RecordCell label="Contractor rep" value={jobRecord.contractorRep} />
+              <RecordCell label="Client rep" value={jobRecord.clientRep ? <ContactText text={jobRecord.clientRep} /> : ""} />
+              <RecordCell label="Contractor rep" value={jobRecord.contractorRep ? <ContactText text={jobRecord.contractorRep} /> : ""} />
               <RecordCell label="Started" value={jobRecord.started} />
             </div>
           ) : (
