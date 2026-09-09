@@ -10,8 +10,9 @@ import { acceptsNumberText, isWholeStep } from "../numberInput.js";
 export { UNIVERSAL_TABS, tabList } from "../data.js";
 
 // The wireframe frame every card/figure/primary-button wears: a transparent,
-// hairline-bordered box with four "+" registration marks at the corners.
-// Never drop the corners, never round it, never give it a surface fill.
+// hairline-bordered box. The four corner <i> elements are the old "+"
+// registration marks; they stay in the DOM but app.css hides them on every
+// screen at Kyle's request. Never round the frame, never give it a surface fill.
 export const Blueprint = React.forwardRef(function Blueprint({ style, className = "", children, as: Tag = "div", ...rest }, ref) {
   return (
     <Tag ref={ref} className={`blueprint ${className}`} style={style} {...rest}>

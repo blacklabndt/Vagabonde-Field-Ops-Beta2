@@ -53,6 +53,11 @@
 
 html, body, #root { min-height: 100%; }
 *, *::before, *::after { box-sizing: border-box; }
+/* The blueprint frame keeps its hairline border but drops the four "+"
+   registration marks at its corners, on every screen (Kyle's request). The
+   corner <i> elements stay in the DOM; this hides them everywhere at once,
+   including the two screens that draw them on an inline .blueprint box. */
+.blueprint > .corner { display: none; }
 body {
   margin: 0; background: var(--color-bg); color: var(--color-text);
   font-family: var(--font-body); transition: background .15s, color .15s;
