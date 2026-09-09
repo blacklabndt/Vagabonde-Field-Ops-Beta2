@@ -80,6 +80,15 @@ const iconProps = {
   fill: "none", stroke: "currentColor", strokeWidth: 1.8,
   strokeLinecap: "round", strokeLinejoin: "round"
 };
+// One box for all four composer buttons. Three hold a 20px icon and the
+// fourth holds the word "GIF" — left to size themselves, a letter button and
+// an icon button come out different widths (and, because a text line-box is
+// not 20px tall, different heights), which read as a misfit on the wider
+// desktop row. A fixed square that centres either keeps them a matched set.
+const composerBtnStyle = {
+  width: 48, height: 42, padding: 0, flex: "none",
+  display: "inline-flex", alignItems: "center", justifyContent: "center"
+};
 const IconPhoto = () => (
   <svg {...iconProps}>
     <rect x="3" y="5" width="18" height="14" />
@@ -1696,20 +1705,20 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
             <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
               <input ref={fileRef} type="file" accept="image/*" onChange={pickFile} style={{ display: "none" }} />
               <Btn variant="secondary" onClick={() => fileRef.current && fileRef.current.click()} disabled={sending}
-                title="Attach a picture" aria-label="Attach a picture" style={{ padding: "10px 12px" }}>
+                title="Attach a picture" aria-label="Attach a picture" style={composerBtnStyle}>
                 <IconPhoto />
               </Btn>
               <Btn variant="secondary" onClick={() => setGifOpen(true)} disabled={sending}
-                title="Search and send a GIF" aria-label="Search and send a GIF" style={{ padding: "10px 12px" }}>
+                title="Search and send a GIF" aria-label="Search and send a GIF" style={composerBtnStyle}>
                 GIF
               </Btn>
               <Btn variant="secondary" onClick={() => setFileOpen(true)} disabled={sending}
-                title="Share a file from the Files page" aria-label="Share a file from the Files page" style={{ padding: "10px 12px" }}>
+                title="Share a file from the Files page" aria-label="Share a file from the Files page" style={composerBtnStyle}>
                 <IconClip />
               </Btn>
               {canRecord && (
                 <Btn variant="secondary" onClick={startRecording} disabled={sending || !!voiceNote}
-                  title="Record a voice note" aria-label="Record a voice note" style={{ padding: "10px 12px" }}>
+                  title="Record a voice note" aria-label="Record a voice note" style={composerBtnStyle}>
                   <IconMic />
                 </Btn>
               )}
