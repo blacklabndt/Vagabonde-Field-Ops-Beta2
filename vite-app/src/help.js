@@ -23,31 +23,32 @@ export const HELP = {
   board: {
     heading: "Home",
     body: [
-      "From this screen you see and open any of the created jobs, you can search through them, filter them and create new jobs using the +Job button on the top right of your screen. If your account raises tickets — an Admin's or a Technician's, holding the billing ticket screen — a +Ticket button sits next to it and starts one on any active job. Other roles do not get that button. Press the hamburger menu button to see the other available tabs."
+      "Welcome to VagaboNDE Field-Ops",
+      "On this screen you can see and open any of the created jobs, search through them, filter them and create new jobs using the +Job button on the top right of your screen. Press the hamburger menu button to see the other available tabs."
     ]
   },
   job: {
     heading: "Job detail",
     body: [
-      "From this screen you can see the job details, open, create and send JHAs, and Tickets as well as upload and send reports. \"+ Create ticket\" needs the billing ticket screen and a role that sees prices — an Admin's or a Technician's; \"+ Upload report\" needs the report upload screen, which a Helper does not hold. When you upload a report the numbers should be automatically read and displayed but please double check they are correct for the next technician"
+      "On this screen you can see the job details, open, create and send JHAs, and Tickets as well as upload and send reports. Start with your JHA, then create a new ticket. The ticket number will be displayed for you, input that new ticket number into your corresponding report. Once you're done for the day, PDF your spreadsheet and upload and send it to the contractor. Then open your ticket and fill out the billing and send to the client"
     ]
   },
   jha: {
     heading: "JHA builder",
     body: [
-      "From this screen you can build your JHA... Self explanatory"
+      "On this screen you can build your JHA... Self explanatory"
     ]
   },
   upload: {
     heading: "Report upload",
     body: [
-      "Upload and send your report from this screen"
+      "Upload and send your report from this screen, your previously used numbers should be automatically pulled from the report and filled into the field. Just double check that it got them right in case another technician comes to work the job another day"
     ]
   },
   ticket: {
     heading: "Billing ticket",
     body: [
-      "From here you build your ticket that will be sent to the client. Be sure to add your helper on to this as well as his hours are calculated from this screen. Once it has gone for the client's signature the save is refused — cancel the approval first, from the job or the tracker. Another technician's ticket opens read-only; only an Admin edits someone else's."
+      "From here you build your ticket that will be sent to the client. Be sure to add your helper on to this as well as his hours are calculated from this screen. Once it has been sent to the client and has been signed for approval it can no longer be edited"
     ]
   },
   mytickets: {
@@ -65,7 +66,7 @@ export const HELP = {
   files: {
     heading: "Files",
     body: [
-      "Templates, decay charts, study material and other important docs can be stored here. Anyone with this screen can upload and make folders. Deleting a file or a whole folder is an Admin's or a Coordinator's — anyone else is told to ask one."
+      "Templates, decay charts, study material and other important docs can be stored here."
     ]
   },
   contacts: {
@@ -78,9 +79,8 @@ export const HELP = {
     heading: "Equipment",
     body: [
       "The fleet: exposure devices, survey meters, dosimeters and tools, with serials, calibration dates and who has each one.",
-      "The two tiles at the top only appear when there is something to act on — anything overdue for calibration, and anything due inside 30 days. Overdue means pull it from service.",
-      "Assigning equipment to a person is what makes the JHA builder pre-fill their kit. If a worker's dosimeter is wrong on an assessment, it is wrong here.",
-      "The filters are by kind, with Due soon and Overdue on the end; the search covers serial, type and the person it is assigned to. Adding an item or editing one is an Admin's or a Coordinator's."
+      "Assigning equipment to a person is what makes the JHA builder pre-fill their JHAs. If a worker's dosimeter is wrong on an assessment, it is wrong here.",
+      "The filters are by type, with Due soon and Overdue on the end; the search covers serial, type and the person it is assigned to."
     ]
   },
   timesheets: {
@@ -93,9 +93,9 @@ export const HELP = {
     heading: "Rate admin",
     body: [
       "The rate cards. This screen is not a reference — it is the billing menu: the lines here, in this order, are the dropdowns a technician gets on the ticket screen and the line order on the invoice the client sees.",
-      "There is a house card, and each client can have their own. A client set to follow the default takes the house prices live, so a change to the house card changes them too. A client with their own card is on their own prices.",
-      "Publish matters exactly once per card. After it has been published, edits go live as they save",
-      "\"Restore removed lines\" puts back any standard line missing from a schedule at zero, ready to be priced. A job override prices one line differently for one job. Every price change is logged with who made it: \"Rate history\", at the top of the card, is where you read it. A label already on the card is refused.",
+      "There is a house card, and each client can have their own personalized rates. A client set to follow the default takes the house prices live, so a change to the house card changes them too. A client with their own card is on their own prices.",
+      "Publish matters once per card. After it has been published, edits go live as they save",
+      "\"Restore removed lines\" puts back any standard line missing from a schedule at zero, ready to be priced. A job override prices one line differently for one job. Every price change is logged with who made it",
       "Prices are for Admins and Technicians: the screen opens for anyone given the Rate admin section, but the database hands other roles no figures and refuses their edits."
     ]
   },
@@ -114,7 +114,6 @@ export const HELP = {
     body: [
       "Accounts, their role, and which screens each one gets. New accounts are created here and will be sent a link to set their own password",
       "The tick boxes are a permission. A screen someone does not hold is a screen the database refuses them — so removing a tab to tidy up a menu also revokes access to that page altogether. Strip every tab and the account can read nothing at all.",
-      "Job detail, the JHA builder, report upload and the billing ticket never appear in anybody's menu; they open from a job. Their permissions are still set here.",
       "An account with work on file is locked rather than deleted — the foreign keys are what keep their name on tickets and assessments. Unlock account lifts the ban and puts the role's usual screens back. New accounts, roles, Remove account and Unlock account are an Admin's; the users tab on its own gives you the tick boxes and nothing more."
     ]
   },
