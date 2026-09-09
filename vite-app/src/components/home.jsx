@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { primaryContact, contactsForOrg, seesPrices as pricesFor } from "../data.js";
-import { attentionItems } from "../attention.js";
+import { primaryContact, contactsForOrg, seesPrices as pricesFor, Store } from "../data.js";
+import { attentionItems, attentionSignature, attentionDismissedKey, dismissAttention } from "../attention.js";
 import { Db } from "../db.js";
 import { OfflineQueue } from "../offlineQueue.js";
 import { tabList, Blueprint, Btn, TableScroll, TagX, Field, Dialog, ErrorBox, StatusTag, useMissingFields, RowsPerPage, useRowsPerPage, SearchSelect, RequiredLeft } from "./common.jsx";
@@ -116,6 +116,23 @@ export function HomeScreen({ onCreateJob, onOpenJob, onStartTicket, currentUser,
     return () => { live = false; };
   }, [isAdmin]);
 
+  // The strip is dismissible, and stays down until the trouble itself changes.
+  // The signature is what "the same trouble" means (attention.js): dismissing
+  // remembers it against this account, and anything genuinely new — a fresh
+  // failure, one more error, a cleared drive — signs differently and returns.
+  // Held per account on this device so a shared tablet does not silence the
+  // next person, and reloaded when the account changes under a persistent
+  // mount. Empty signatures never match, so a calm morning is never "hidden".
+  const uid = currentUser && currentUser.id;
+  const signature = useMemo(() => attentionSignature(attention), [attention]);
+  const [dismissedSig, setDismissedSig] = useState("");
+  useEffect(() => { setDismissedSig(uid ? Store.load(attentionDismissedKey(uid), "") : ""); }, [uid]);
+  const showAttention = signature !== "" && signature !== dismissedSig;
+  const dismissAttentionStrip = () => {
+    dismissAttention(Store, uid, signature);
+    setDismissedSig(signature);
+  };
+
   // A request token, so a slower earlier read can't land after a newer one.
   // Tapping through filters or pages fires overlapping, uncancelled reads;
   // whichever returned last used to win, painting stale rows (and a total)
@@ -205,13 +222,27 @@ export function HomeScreen({ onCreateJob, onOpenJob, onStartTicket, currentUser,
           the board exactly as it was. Each line is the fact and then where
           to go: Home cannot switch tabs for anybody (it is handed openers
           for jobs and tickets and nothing else), so the step has to be a
-          sentence rather than a link. */}
-      {attention.length > 0 && (
+          sentence rather than a link. "Got it" waves it away until the
+          trouble itself changes — the fact is the prompt, the detail lives
+          on the Admin screen where it can be read and acted on. */}
+      {showAttention && (
         <section aria-label="Needs attention" style={{
           border: "1px solid var(--color-accent-700)", padding: "10px 12px",
           marginBottom: 14, fontSize: 13, display: "grid", gap: 8
         }}>
-          <strong style={{ fontFamily: "var(--font-heading)" }}>Needs attention</strong>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <strong style={{ fontFamily: "var(--font-heading)", flex: 1 }}>Needs attention</strong>
+            <button
+              onClick={dismissAttentionStrip}
+              aria-label="Dismiss until something changes"
+              title="Hide until something changes"
+              style={{
+                flex: "none", border: 0, background: "transparent", cursor: "pointer",
+                fontSize: 12, textTransform: "uppercase", letterSpacing: ".06em",
+                color: "var(--color-accent-700)", padding: "0 2px"
+              }}
+            >Got it</button>
+          </div>
           {attention.map(item => (
             <div key={item.key}>
               {item.text}

@@ -80,6 +80,9 @@ export function attentionItems(backupState, errors, now) {
   if (connectionError) {
     items.push({
       key: "connection",
+      // The signature is the error's own words: a different refusal (or the
+      // same one clearing) is different news and the strip should return.
+      sig: connectionError,
       text: `The backup drive needs reconnecting — ${connectionError}`,
       where: "Open the Admin screen, Automatic backup, and connect the drive again. Backups are not running until you do."
     });
@@ -88,13 +91,21 @@ export function attentionItems(backupState, errors, now) {
   const last = s.last_run || null;
   if (last && last.status === "failed") {
     const word = KIND_WORDS[last.kind] || "backup";
-    const finished = Date.parse(last.finished_at || last.started_at || "");
+    const stamp = last.finished_at || last.started_at || "";
+    const finished = Date.parse(stamp);
     const ago = Number.isFinite(finished) ? ` ${agoPhrase(at - finished)}` : "";
-    const why = String(last.error || "").trim();
     items.push({
       key: "failed-run",
-      text: `Last ${word} failed${ago}${why ? ` — ${why}` : ""}`,
-      where: "Open the Admin screen, Automatic backup, to read what it says and start another."
+      // One run, one signature — a later failure is a later stamp, so a fresh
+      // bad night lifts a dismissal even when yesterday's is still on record.
+      sig: String(stamp),
+      // The fact belongs on the board; the reason does not. Every failed run
+      // writes its error to function_errors as well, so the Recent background
+      // errors card is where the stack lives — a raw "TypeError: error
+      // sending request … connection reset" across the top of Home reads as
+      // the app itself breaking, and it cannot be dismissed or acted on there.
+      text: `Last ${word} failed${ago}`,
+      where: "Open the Admin screen, Recent background errors, to see what went wrong. Automatic backup can start another."
     });
   }
 
@@ -107,6 +118,9 @@ export function attentionItems(backupState, errors, now) {
   if (s.connected && !connectionError && Number.isFinite(due) && at - due > OVERDUE_GRACE_MS) {
     items.push({
       key: "overdue",
+      // The due date itself: once the tick finally picks it up the date moves
+      // and this clears; a fresh missed date is a fresh signature.
+      sig: String(s.next_run_at || ""),
       text: `A backup was due ${agoPhrase(at - due)} and has not started`,
       where: "Open the Admin screen, Automatic backup, and press Back up now."
     });
@@ -120,12 +134,53 @@ export function attentionItems(backupState, errors, now) {
     return Number.isFinite(t) && at - t <= ERRORS_WINDOW_MS;
   });
   if (recent.length) {
+    // The count and the newest stamp: one more error, or a later one, is a
+    // new signature and lifts a dismissal — the whole point of "until a new
+    // one arrives". Grouping the same functions again is not.
+    const newest = recent.reduce((m, e) => {
+      const t = Date.parse((e && e.created_at) || "");
+      return Number.isFinite(t) && t > m ? t : m;
+    }, 0);
     items.push({
       key: "errors",
+      sig: `${recent.length}@${newest}`,
       text: `${recent.length} background error${recent.length === 1 ? "" : "s"} since yesterday — ${byFunction(recent).join(", ")}`,
       where: "Open the Admin screen, Recent background errors."
     });
   }
 
   return items;
+}
+
+// The strip can be waved away, and stays down until the trouble itself
+// changes. "The same trouble" is this signature: the ordered keys of what is
+// showing, each with a small mark of its own identity (sig above) — a
+// different refusal, a later failure, one more error each read as different.
+// An empty string is "nothing to say", which must never match a stored
+// dismissal, or a calm morning after a dismissed night would stay hidden.
+export function attentionSignature(items) {
+  return (items || []).map(i => `${i.key}:${i.sig || ""}`).join("|");
+}
+
+// Kept in Store (localStorage), per account on this device — the same shape
+// as help.tipsOff.<id>, and for the same reason: a shared tablet must not let
+// one Admin's dismissal silence the next. Store outlives the device cache, so
+// signing out and back in keeps a dismissal; a genuinely new problem carries
+// a new signature and returns regardless.
+export function attentionDismissedKey(userId) {
+  return "attention.dismissed." + userId;
+}
+
+// Is this exact set of problems the one this account last waved away? Only a
+// real signature can match — no account and no signature are never suppressed.
+export function attentionSuppressed(store, userId, signature) {
+  if (!userId || !signature) return false;
+  return store.load(attentionDismissedKey(userId), "") === signature;
+}
+
+// Remember that this account has read this exact set of problems. A missing
+// account or an empty signature writes nothing — there is nothing to dismiss.
+export function dismissAttention(store, userId, signature) {
+  if (!userId || !signature) return;
+  store.save(attentionDismissedKey(userId), signature);
 }

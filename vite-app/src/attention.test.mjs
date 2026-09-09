@@ -5,7 +5,10 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { attentionItems, agoPhrase, ERRORS_WINDOW_MS, OVERDUE_GRACE_MS } from "./attention.js";
+import {
+  attentionItems, agoPhrase, ERRORS_WINDOW_MS, OVERDUE_GRACE_MS,
+  attentionSignature, attentionDismissedKey, attentionSuppressed, dismissAttention
+} from "./attention.js";
 
 const NOW = Date.parse("2026-09-06T18:00:00Z");
 const agoMs = ms => new Date(NOW - ms).toISOString();
@@ -14,6 +17,15 @@ const hours = n => n * 3600000;
 
 const keys = items => items.map(i => i.key);
 const find = (items, key) => items.find(i => i.key === key);
+
+function fakeStore() {
+  const rows = {};
+  return {
+    rows,
+    load: (k, fb) => (k in rows ? rows[k] : fb),
+    save: (k, v) => { rows[k] = v; }
+  };
+}
 
 test("an ordinary morning says nothing", () => {
   const state = {
@@ -30,22 +42,23 @@ test("nothing read at all is nothing to say, not a crash", () => {
   assert.deepEqual(attentionItems({}, [], NOW), []);
 });
 
-test("a backup that failed three days ago says so, with its reason", () => {
+test("a failed backup names the failure but keeps the raw error off the board", () => {
   const state = {
     connected: true,
     next_run_at: new Date(NOW + hours(2)).toISOString(),
     last_run: {
       kind: "backup", status: "failed", finished_at: agoMs(days(3)),
-      error: "The drive is out of space."
+      error: "TypeError: error sending request … connection reset"
     }
   };
   const items = attentionItems(state, [], NOW);
   assert.deepEqual(keys(items), ["failed-run"]);
-  assert.equal(
-    find(items, "failed-run").text,
-    "Last backup failed 3 days ago — The drive is out of space."
-  );
-  assert.match(find(items, "failed-run").where, /Automatic backup/);
+  const it = find(items, "failed-run");
+  // The fact, not the stack: the reason is one click away in the log.
+  assert.equal(it.text, "Last backup failed 3 days ago");
+  assert.doesNotMatch(it.text, /TypeError|connection reset/);
+  // And the board points at the card that holds it.
+  assert.match(it.where, /Recent background errors/);
 });
 
 test("a failed restore is not called a backup", () => {
@@ -142,4 +155,71 @@ test("agoPhrase reads like a person saying it", () => {
   assert.equal(agoPhrase(hours(23)), "23 hours ago");
   assert.equal(agoPhrase(days(1)), "1 day ago");
   assert.equal(agoPhrase(days(9)), "9 days ago");
+});
+
+// ─── the dismissal signature ───────────────────────────────────────────
+// The strip can be waved away once the Admin has read it, and stays down
+// until the trouble itself changes: a new error, a cleared failure, a
+// higher count. The signature is how "the same trouble" is recognised.
+
+test("the signature is steady for one state and empty when there is nothing to say", () => {
+  const trouble = {
+    connected: true,
+    next_run_at: new Date(NOW + hours(2)).toISOString(),
+    last_run: { kind: "backup", status: "failed", finished_at: agoMs(hours(2)) }
+  };
+  const a = attentionSignature(attentionItems(trouble, [], NOW));
+  const again = attentionSignature(attentionItems(trouble, [], NOW));
+  assert.equal(a, again);
+  assert.notEqual(a, "");
+
+  // An ordinary morning signs as nothing, so it can never read as dismissed.
+  const calm = {
+    connected: true,
+    next_run_at: new Date(NOW + hours(8)).toISOString(),
+    last_run: { kind: "backup", status: "complete", finished_at: agoMs(hours(2)) }
+  };
+  assert.equal(attentionSignature(attentionItems(calm, [], NOW)), "");
+  assert.equal(attentionSignature([]), "");
+});
+
+test("a new error, or one more of them, moves the signature", () => {
+  const failing = { connected: true, next_run_at: new Date(NOW + hours(2)).toISOString(),
+    last_run: { kind: "backup", status: "failed", finished_at: agoMs(hours(2)) } };
+  const bare = attentionSignature(attentionItems(failing, [], NOW));
+  const withOne = attentionSignature(attentionItems(failing, [
+    { function_name: "chat-push", created_at: agoMs(hours(1)) }
+  ], NOW));
+  const withTwo = attentionSignature(attentionItems(failing, [
+    { function_name: "chat-push", created_at: agoMs(hours(1)) },
+    { function_name: "chat-push", created_at: agoMs(hours(2)) }
+  ], NOW));
+  // A fresh error appearing, and then a second one, each change the signature.
+  assert.notEqual(withOne, bare);
+  assert.notEqual(withTwo, withOne);
+});
+
+test("a dismissed strip stays down until its signature changes", () => {
+  const store = fakeStore();
+  const sig = "failed-run:2026-09-04";
+  assert.equal(attentionSuppressed(store, "admin1", sig), false);
+  dismissAttention(store, "admin1", sig);
+  assert.equal(attentionSuppressed(store, "admin1", sig), true);
+  // A different signature — the trouble changed — is not covered.
+  assert.equal(attentionSuppressed(store, "admin1", sig + "|errors:1@z"), false);
+  // Per account on the device: another Admin is not silenced by the first.
+  assert.equal(attentionSuppressed(store, "admin2", sig), false);
+  assert.notEqual(attentionDismissedKey("admin1"), attentionDismissedKey("admin2"));
+});
+
+test("nothing to say is never suppressed, and nothing is written for a non-signature", () => {
+  const store = fakeStore();
+  // An empty signature must never match a stored dismissal — else a calm
+  // morning after a dismissed night would read as "still dismissed".
+  dismissAttention(store, "admin1", "sig");
+  assert.equal(attentionSuppressed(store, "admin1", ""), false);
+  // No account, no signature: nothing is stored.
+  dismissAttention(store, "", "sig");
+  dismissAttention(store, "admin3", "");
+  assert.deepEqual(Object.keys(store.rows), [attentionDismissedKey("admin1")]);
 });
