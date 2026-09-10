@@ -24,7 +24,7 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
   const [archiveMode, setArchiveMode] = useState(null);
   const [form, setForm] = useState({
     resendApiKey: "", fromReports: "", fromBilling: "", replyTo: "",
-    klipyApiKey: "", approvalBaseUrl: "",
+    klipyApiKey: "", anthropicApiKey: "", approvalBaseUrl: "",
     invoiceTerms: "", invoiceRemitTo: "", businessNumber: ""
   });
   // "loading" | "ready" | "failed". Failed matters: saving writes the whole
@@ -51,6 +51,7 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
           fromBilling: row.from_billing || "",
           replyTo: row.reply_to || "",
           klipyApiKey: row.klipy_api_key || "",
+          anthropicApiKey: row.anthropic_api_key || "",
           approvalBaseUrl: row.approval_base_url || "",
           invoiceTerms: row.invoice_terms || "",
           invoiceRemitTo: row.invoice_remit_to || "",
@@ -252,6 +253,16 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
             <input className="input" type="password" value={form.klipyApiKey}
               onChange={e => set("klipyApiKey", e.target.value)}
               placeholder="from klipy.com — optional" autoComplete="off" style={{ width: "100%" }} />
+          </Field>
+          <p className="body-s" style={{ marginTop: 14 }}>
+            Ask &mdash; the button at the bottom right of every screen &mdash; answers questions
+            with Claude, through <a href="https://console.anthropic.com" target="_blank" rel="noreferrer">Anthropic</a>.
+            Each question costs a fraction of a cent.
+          </p>
+          <Field label="Anthropic API key">
+            <input className="input" type="password" value={form.anthropicApiKey}
+              onChange={e => set("anthropicApiKey", e.target.value)}
+              placeholder="from console.anthropic.com — optional" autoComplete="off" style={{ width: "100%" }} />
           </Field>
         </Blueprint>
 

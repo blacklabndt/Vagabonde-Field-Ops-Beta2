@@ -119,6 +119,7 @@ export const BUCKETS: string[] = ["reports", "jhas", "shared", "timesheets", "ch
 export const APP_SETTINGS_SECRETS: string[] = [
   "resend_api_key",
   "klipy_api_key",
+  "anthropic_api_key",
   "backup_refresh_token",
   "backup_oauth_state",
   "backup_client_secret_google",

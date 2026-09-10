@@ -1860,12 +1860,12 @@ export const Db = {
   // Admin-only, so everyone else errors rather than reads blanks.
   async getAppSettings() {
     const { data, error } = await sbClient.from("app_settings")
-      .select("resend_api_key, from_reports, from_billing, reply_to, klipy_api_key, approval_base_url, invoice_terms, invoice_remit_to, business_number").maybeSingle();
+      .select("resend_api_key, from_reports, from_billing, reply_to, klipy_api_key, anthropic_api_key, approval_base_url, invoice_terms, invoice_remit_to, business_number").maybeSingle();
     if (error) throw error;
     return data || {};
   },
 
-  async saveAppSettings({ resendApiKey, fromReports, fromBilling, replyTo, klipyApiKey, approvalBaseUrl,
+  async saveAppSettings({ resendApiKey, fromReports, fromBilling, replyTo, klipyApiKey, anthropicApiKey, approvalBaseUrl,
     invoiceTerms, invoiceRemitTo, businessNumber }) {
     // The approval link is built as `${base}/approve?t=…` and dropped into
     // an email — a bare "app.example.com" renders as dead text in every
@@ -1900,6 +1900,7 @@ export const Db = {
       from_billing: (fromBilling || "").trim() || null,
       reply_to: (replyTo || "").trim() || null,
       klipy_api_key: (klipyApiKey || "").trim() || null,
+      anthropic_api_key: (anthropicApiKey || "").trim() || null,
       approval_base_url: (approvalBaseUrl || "").trim().replace(/\/+$/, "") || null,
       // What the field invoice prints besides the money. Blank saves null,
       // and a null prints nothing at all — an invoice with an empty "Terms:"
@@ -1928,6 +1929,15 @@ export const Db = {
   // (which fixes the recipient itself). A direct call, never queued: it is
   // a nice-to-have, and a form that fails offline says so and keeps its
   // words in the dialog for another try.
+  // Ask: the thread so far (text only, ending on the question); the
+  // function answers with the next turn and a trace of what it read.
+  async ask(thread) {
+    const { data, error } = await sbClient.functions.invoke("ask", { body: { thread } });
+    if (error) throw await fnError(error);
+    if (data && data.error) throw new Error(data.error);
+    return data;
+  },
+
   async sendFeatureRequest({ title, details }) {
     const { data, error } = await sbClient.functions.invoke("feature-request", { body: { title, details } });
     if (error) throw await fnError(error);
