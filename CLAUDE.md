@@ -510,8 +510,16 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   what is new, not the whole store times thirty. Every file stored is
   hashed (SHA-256 of the bytes read through Supabase) and recorded per run
   in `backup_run_files` (service role only, rows go with the run); the
-  manifest phase folds them into `files.json.gz` beside manifest.json and
-  `manifest.files` says `hashed`, `index` and `spot`. A carry-over needs
+  manifest phase first reconciles them with the folder
+  (`reconcileFileRows`: a row whose drive id is no longer the folder's file
+  of that name was written over by another slice of the same run — two
+  slices alive at once after a reclaim can each upload one name, in either
+  order — and its file is hashed again from what is there; one listing a
+  night, a download only for the rare loser), then folds them into
+  `files.json.gz` beside manifest.json and `manifest.files` says `hashed`,
+  `index` and `spot`. An upload that lands after the manifest is the
+  residual: named `damaged` by a restore in between, repaired by the next
+  file check. A carry-over needs
   the base index to hold the file's hash (else it is read through once),
   the copy keeps that hash, one carried-over file a night is downloaded
   and hashed against its record (`spot`: ok / re-stored / not checked /
@@ -582,10 +590,15 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   error or no row leaves the folder alone, because the delete once took the
   winner's backup — or the safety copy — with it,
   instead of splitting one backup across two folders. `backup_next_run_at` moves when a run STARTS, so a long night
-=====OLD
-  in `backup_run_files` (service role only, rows go with the run); the
-  manifest phase folds them into `files.json.gz` beside manifest.json and
-  `manifest.files` says `hashed`, `index` and `spot`. A carry-over needs
+  does not make tomorrow late and a failure does not stop tomorrow; the move
+  is conditional on the due time the tick read, so two ticks that saw the
+  same due time queue one run, not two into one folder. The move comes
+  before the run row exists, so `queueRunOrUnmove` puts the clock back —
+  conditional on the value the tick wrote — when the insert fails, for both
+  clocks: a refused insert once cost the file check a fortnight (the kind
+  the table had not been taught), and a gateway page on the insert would
+  cost the backup a night, because the tick's retry reads a clock already
+  moved and goes idle.
 - Restoring everything is gated four times — the caller's own Admin profile,
   a backup from a newer schema refused outright (`backup_schema_version()`),
   the Admin typing the backup's folder name (held against the name the drive gives preflight, never the request's own copy), and a complete safety backup of
