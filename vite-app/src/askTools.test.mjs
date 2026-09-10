@@ -19,13 +19,26 @@ test("every tool sits behind a tab the app has", () => {
 test("toolsFor offers exactly the tools behind the tabs held, and the price roles for a ticket", () => {
   assert.deepEqual(toolsFor(["tracker"]).map(t => t.name), ["tracker_stats", "ticket_aging", "search_tickets"]);
   assert.deepEqual(toolsFor(["board", "job", "jha", "ticket"], "Helper").map(t => t.name),
-    ["find_client", "find_job", "job_record", "draft_job", "draft_jha"]);
+    ["find_client", "find_job", "job_record", "draft_job", "draft_jha", "list_jhas", "list_tickets", "send_jha"]);
   assert.ok(toolsFor(["ticket"], "Technician").some(t => t.name === "draft_ticket"));
   assert.ok(toolsFor(["ticket"], "Admin").some(t => t.name === "draft_ticket"));
   assert.ok(!toolsFor(["ticket"], "Coordinator").some(t => t.name === "draft_ticket"));
   assert.ok(!toolsFor(["ticket"]).some(t => t.name === "draft_ticket"));
   assert.deepEqual(toolsFor(["chat"]), []);
   assert.deepEqual(toolsFor(null), []);
+});
+
+test("the lists and the JHA send sit behind job; the ticket send behind ticket and a price role", () => {
+  const job = toolsFor(["job"], "Helper").map(t => t.name);
+  for (const n of ["list_jhas", "list_tickets", "send_jha"]) assert.ok(job.includes(n), n);
+  assert.ok(!job.includes("send_ticket_approval"));
+  assert.ok(toolsFor(["ticket"], "Technician").map(t => t.name).includes("send_ticket_approval"));
+  assert.ok(!toolsFor(["ticket"], "Coordinator").map(t => t.name).includes("send_ticket_approval"));
+  assert.ok(!toolsFor(["tracker", "board"], "Admin").map(t => t.name).includes("send_jha"));
+  assert.equal(traceLine("list_jhas", { job_number: "S-10113" }), "listed the JHAs on S-10113");
+  assert.equal(traceLine("list_tickets", { job_number: "S-10113" }), "listed the tickets on S-10113");
+  assert.equal(traceLine("send_jha", { jha_id: "x", recipients: ["Dave"] }), "proposed sending a JHA");
+  assert.equal(traceLine("send_ticket_approval", { ticket_id: "T-10231" }), "proposed sending T-10231 for approval");
 });
 
 test("the definitions carry only what the API takes", () => {

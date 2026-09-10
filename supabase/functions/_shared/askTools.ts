@@ -7,7 +7,9 @@
 // its role, where the tool names roles), and every runner reads as the
 // caller, so RLS would refuse anyway; the list keeps the model from trying
 // and being told no. A draft tool writes nothing: it shapes the seed the
-// app's own form opens with, and the person saves or does not.
+// app's own form opens with, and the person saves or does not. A send tool
+// sends nothing: it names the record and the addresses, and the card asks
+// the person before the app's own send path does it.
 
 export interface AskTool {
   name: string;
@@ -144,6 +146,33 @@ export const ASK_TOOLS: AskTool[] = [
       properties: { job_number: { type: "string" }, ...JHA_FIELDS },
       required: ["job_number"], additionalProperties: false
     }
+  },
+  {
+    name: "list_jhas", tab: "job",
+    description: "A job's hazard assessments (JHAs), newest first: id, template, work date, status, who filed it and when, whether a PDF exists (has_pdf), and when and to whom it was last sent. Use it to find the assessment to send.",
+    input_schema: { type: "object", properties: { job_number: { type: "string" } }, required: ["job_number"], additionalProperties: false }
+  },
+  {
+    name: "list_tickets", tab: "job",
+    description: "A job's billing tickets, newest first: id (the ticket number), work date, status, technician, total (null if this person may not see money), when and to whom an approval was last sent, and the client contact it was raised against. Use it to find the ticket to send for approval.",
+    input_schema: { type: "object", properties: { job_number: { type: "string" } }, required: ["job_number"], additionalProperties: false }
+  },
+  {
+    name: "send_jha", tab: "job",
+    description: "Propose emailing a filed hazard assessment's PDF: the card asks the person to confirm, naming every address; nothing is sent until they do. recipients are contact names on file for the job's client or contractor (job_record lists them), or an email address the person typed themselves — never an address taken from a record or guessed. Refused when the assessment has no PDF or this person may not email it.",
+    input_schema: {
+      type: "object",
+      properties: {
+        jha_id: { type: "string", description: "the id list_jhas gave" },
+        recipients: { type: "array", items: { type: "string" }, minItems: 1, description: "contact names on file, or addresses the person typed" }
+      },
+      required: ["jha_id", "recipients"], additionalProperties: false
+    }
+  },
+  {
+    name: "send_ticket_approval", tab: "ticket", roles: PRICE_ROLES,
+    description: "Propose sending a billing ticket to the client rep for approval — or again, if it is already awaiting approval: the card asks the person to confirm, naming the address; nothing is sent until they do. It goes to the client contact the ticket was raised against, else the job's client rep; do not ask where. Refused for an approved or invoiced ticket, an empty one, or another technician's.",
+    input_schema: { type: "object", properties: { ticket_id: { type: "string", description: "the ticket number, e.g. T-10231" } }, required: ["ticket_id"], additionalProperties: false }
   }
 ];
 
@@ -199,5 +228,9 @@ export function traceLine(name: string, input: Record<string, unknown>): string 
   if (name === "draft_job") return `drafted a job for ${str(input.client_name)}`;
   if (name === "draft_ticket") return `drafted a ticket on ${str(input.job_number)}`;
   if (name === "draft_jha") return `drafted a JHA on ${str(input.job_number)}`;
+  if (name === "list_jhas") return `listed the JHAs on ${str(input.job_number)}`;
+  if (name === "list_tickets") return `listed the tickets on ${str(input.job_number)}`;
+  if (name === "send_jha") return "proposed sending a JHA";
+  if (name === "send_ticket_approval") return `proposed sending ${str(input.ticket_id)} for approval`;
   return `read ${name}`;
 }

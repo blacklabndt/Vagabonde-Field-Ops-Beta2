@@ -10,21 +10,27 @@
 // Coordinator's tracker does. The service role is used for one read: the
 // Anthropic key from app_settings (appSettings(), env fallback).
 //
-// Nothing here writes. A draft tool resolves the client or the job as the
-// caller, shapes a seed (askDrafts.ts, pure) and puts an `action` on the
-// response beside the answer; the card offers it, App opens the form, and
-// the form's own save path — validation, idempotency key, offline queue —
-// does what it always does. One action per answer: a later draft call
-// replaces an earlier one.
+// Nothing here writes, and nothing here sends. A draft tool resolves the
+// client or the job as the caller, shapes a seed (askDrafts.ts, pure) and
+// puts an `action` on the response beside the answer; the card offers it,
+// App opens the form, and the form's own save path — validation,
+// idempotency key, offline queue — does what it always does. A send tool
+// (third slice) reads the record as the caller, applies the gate the
+// screen's function applies, resolves the recipients under askSends.ts's
+// rule — a contact on file by name, or an address the person typed — and
+// puts a send action on the response; the card asks the person, and App
+// calls the same Db method Job detail's button calls. One action per
+// answer: a later call replaces an earlier one.
 //
 // The loop itself is _shared/askLoop.ts, pure and node-tested; this file
 // is the door, the runners and the log line.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { appSettings, corsHeaders } from "../_shared/mail.ts";
-import { toolsFor, toolDefinitions, traceLine, searchArgs, JHA_TEMPLATES, HAZARD_NAMES } from "../_shared/askTools.ts";
+import { toolsFor, toolDefinitions, traceLine, searchArgs, JHA_TEMPLATES, HAZARD_NAMES, PRICE_ROLES } from "../_shared/askTools.ts";
 import { shapeJobDraft, shapeTicketDraft, shapeJhaDraft } from "../_shared/askDrafts.ts";
-import { askLoop, systemPrompt } from "../_shared/askLoop.ts";
+import { resolveRecipients, jhaSendGate, ticketSendGate, ticketApprovalAddress, jhaFileName, sendJhaWords, sendTicketWords, JHA_MESSAGE } from "../_shared/askSends.ts";
+import { askLoop, systemPrompt, windowTurns } from "../_shared/askLoop.ts";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -42,6 +48,23 @@ interface JobRecordRow {
 }
 interface ContactRow { id: string; org_type: string; org_id: string; name: string; email: string | null; phone: string | null; is_primary: boolean }
 interface ActiveJob { id: string; job_number: string; project: string | null; status: string | null; clients: { name: string } | null }
+interface JhaListRow {
+  id: string; template: string | null; work_date: string | null; status: string | null; signed_at: string | null;
+  pdf_key: string | null; sent_at: string | null; sent_to: string | null; profiles: { name: string | null } | null;
+}
+interface TicketListRow {
+  id: string; work_date: string | null; status: string | null; total: number | string | null; technician_id: string | null;
+  approval_sent_at: string | null; approval_sent_to: string | null; client_contact: { name?: string | null } | null;
+  profiles: { name: string | null } | null;
+}
+interface JhaSendRow {
+  id: string; job_id: string; signed_by: string | null; pdf_key: string | null; template: string | null; work_date: string | null;
+  sent_at: string | null; jobs: { id: string; job_number: string; client_id: string | null; contractor_id: string | null } | null;
+}
+interface TicketSendRow {
+  id: string; status: string | null; total: number | string | null; technician_id: string | null; client_contact: { name?: string | null } | null;
+  jobs: { id: string; job_number: string; client_id: string | null; client_contact_id: string | null } | null;
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -87,14 +110,26 @@ Deno.serve(async (req) => {
       if (!hits.length) throw new Error(`No client called "${name}" is in the directory. Ask the person which client it is; a new client is added on Home's New job form.`);
       throw new Error(`More than one client matches "${name}": ${hits.map(h => h.name).join(", ")}. Ask the person which.`);
     };
-    const activeJob = async (number: string) => {
+    // A job by number; a draft wants an Active one, a listing any.
+    const jobNumbered = async (number: string, activeOnly: boolean) => {
       if (!number) throw new Error("Which job? Ask the person for the job number.");
       const { data, error } = await asUser.from("jobs").select("id, job_number, project, status, clients(name)").eq("job_number", number).maybeSingle();
       if (error) throw new Error(error.message);
       const j = data as unknown as ActiveJob | null;
       if (!j) throw new Error(`No job numbered ${number}. Use find_job to look it up.`);
-      if (j.status === "Complete") throw new Error(`Job ${number} is complete; nothing new can be raised on it.`);
+      if (activeOnly && j.status === "Complete") throw new Error(`Job ${number} is complete; nothing new can be raised on it.`);
       return { id: j.id, job_number: j.job_number, project: j.project, client_name: j.clients?.name ?? null, status: j.status };
+    };
+    const activeJob = (number: string) => jobNumbered(number, true);
+    // The contacts on file for these organisations, primary first.
+    const contactsFor = async (orgIds: (string | null)[]): Promise<ContactRow[]> => {
+      const orgs = orgIds.filter((x): x is string => !!x);
+      if (!orgs.length) return [];
+      const { data, error } = await asUser.from("contacts")
+        .select("id, org_type, org_id, name, email, phone, is_primary").in("org_id", orgs)
+        .order("is_primary", { ascending: false }).order("name");
+      if (error) throw new Error(error.message);
+      return (data ?? []) as ContactRow[];
     };
     const jobRecord = async (number: string) => {
       if (!number) throw new Error("Which job? Ask the person for the job number.");
@@ -104,15 +139,7 @@ Deno.serve(async (req) => {
       if (error) throw new Error(error.message);
       const j = data as unknown as JobRecordRow | null;
       if (!j) throw new Error(`No job numbered ${number}.`);
-      const orgs = [j.client_id, j.contractor_id].filter((x): x is string => !!x);
-      let list: ContactRow[] = [];
-      if (orgs.length) {
-        const { data: people, error: cErr } = await asUser.from("contacts")
-          .select("id, org_type, org_id, name, email, phone, is_primary").in("org_id", orgs)
-          .order("is_primary", { ascending: false }).order("name");
-        if (cErr) throw new Error(cErr.message);
-        list = (people ?? []) as ContactRow[];
-      }
+      const list = await contactsFor([j.client_id, j.contractor_id]);
       const named = (id: string | null) => list.find(c => c.id === id) ?? null;
       return {
         job: {
@@ -125,8 +152,19 @@ Deno.serve(async (req) => {
       };
     };
 
-    // The form a draft proposes, if one did; the last draft call wins.
+    // The form a draft proposes, or the send a send tool proposes, if one
+    // did; the last call wins.
     let action: Record<string, unknown> | null = null;
+    // The person's own words, for the one place an address may come from
+    // that is not a contact on file. Computed once, and lazily: most
+    // questions never send.
+    let said: string | null = null;
+    const saidByPerson = () => {
+      if (said === null) said = windowTurns(thread).filter(t => t.role === "user").map(t => t.text).join("\n");
+      return said;
+    };
+    const seesMoney = PRICE_ROLES.includes(me.role ?? "");
+    const who = { id: user.id, role: me.role ?? "" };
 
     const runTool = async (name: string, input: Record<string, unknown>): Promise<unknown> => {
       tool = name;
@@ -164,6 +202,60 @@ Deno.serve(async (req) => {
         const d = name === "draft_ticket" ? shapeTicketDraft(input, job) : shapeJhaDraft(input, job, JHA_TEMPLATES, HAZARD_NAMES);
         action = { kind: name, summary: d.summary, seed: d.seed, job: { id: job.id, job_number: job.job_number } };
         out = { ready: true, summary: d.summary };
+      } else if (name === "list_jhas") {
+        const job = await jobNumbered(String(input.job_number ?? ""), false);
+        const { data, error } = await asUser.from("jhas")
+          .select("id, template, work_date, status, signed_at, pdf_key, sent_at, sent_to, profiles(name)")
+          .eq("job_id", job.id).order("signed_at", { ascending: false }).limit(50);
+        if (error) throw new Error(error.message);
+        out = ((data ?? []) as unknown as JhaListRow[]).map(r => ({
+          id: r.id, template: r.template, work_date: r.work_date, status: r.status,
+          filed_by: r.profiles?.name ?? null, filed_at: r.signed_at, has_pdf: !!r.pdf_key, sent_at: r.sent_at, sent_to: r.sent_to
+        }));
+      } else if (name === "list_tickets") {
+        const job = await jobNumbered(String(input.job_number ?? ""), false);
+        const { data, error } = await asUser.from("tickets")
+          .select("id, work_date, status, total, technician_id, approval_sent_at, approval_sent_to, client_contact, profiles(name)")
+          .eq("job_id", job.id).order("created_at", { ascending: false }).limit(50);
+        if (error) throw new Error(error.message);
+        out = ((data ?? []) as unknown as TicketListRow[]).map(r => ({
+          id: r.id, work_date: r.work_date, status: r.status, technician: r.profiles?.name ?? null,
+          total: seesMoney && r.total !== null ? Number(r.total) : null,
+          approval_sent_at: r.approval_sent_at, approval_sent_to: r.approval_sent_to, client_contact: r.client_contact?.name ?? null
+        }));
+      } else if (name === "send_jha") {
+        const { data, error } = await asUser.from("jhas")
+          .select("id, job_id, signed_by, pdf_key, template, work_date, sent_at, jobs(id, job_number, client_id, contractor_id)")
+          .eq("id", String(input.jha_id ?? "")).maybeSingle();
+        if (error) throw new Error(error.message);
+        const row = data as unknown as JhaSendRow | null;
+        if (!row || !row.jobs) throw new Error("No assessment with that id — use list_jhas to find it.");
+        jhaSendGate(row, who);
+        const people = await contactsFor([row.jobs.client_id, row.jobs.contractor_id]);
+        const to = resolveRecipients(input.recipients, people, saidByPerson());
+        const job = { id: row.jobs.id, job_number: row.jobs.job_number };
+        const words = sendJhaWords(row, job, to);
+        action = {
+          kind: "send_jha", summary: words.summary, done: words.done, to, message: JHA_MESSAGE,
+          jha: { id: row.id, file: jhaFileName(row.pdf_key, row.template) }, job
+        };
+        out = { ready: true, summary: words.summary, to };
+      } else if (name === "send_ticket_approval") {
+        const { data, error } = await asUser.from("tickets")
+          .select("id, status, total, technician_id, client_contact, jobs(id, job_number, client_id, client_contact_id)")
+          .eq("id", String(input.ticket_id ?? "").trim().toUpperCase()).maybeSingle();
+        if (error) throw new Error(error.message);
+        const row = data as unknown as TicketSendRow | null;
+        if (!row || !row.jobs) throw new Error("No ticket with that number — use list_tickets to find it.");
+        ticketSendGate(row, who);
+        // The job's current client rep, the way the job record names one.
+        const people = await contactsFor([row.jobs.client_id]);
+        const rep = people.find(c => c.id === row.jobs?.client_contact_id) ?? people.find(c => c.org_type === "client" && c.is_primary) ?? null;
+        const to = [ticketApprovalAddress(row.client_contact?.name, rep?.email)];
+        const job = { id: row.jobs.id, job_number: row.jobs.job_number };
+        const words = sendTicketWords(row, job, to);
+        action = { kind: "send_ticket_approval", summary: words.summary, done: words.done, to, ticket: { id: row.id }, job };
+        out = { ready: true, summary: words.summary, to };
       } else {
         throw new Error(`no tool named ${name}`);
       }

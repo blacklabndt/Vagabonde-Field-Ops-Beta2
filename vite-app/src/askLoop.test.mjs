@@ -134,6 +134,9 @@ test("an answer with no words still says something", async () => {
 
 test("the system prompt names the person, the day in Grande Prairie and the rules", () => {
   const s = systemPrompt({ name: "Kyle Keith", role: "Admin" }, Date.UTC(2026, 8, 10, 14, 45));
+  assert.match(s, /Sending:/);
+  assert.match(s, /typed themselves/);
+  assert.match(s, /A send tool sends nothing/);
   assert.match(s, /Kyle Keith/);
   assert.match(s, /Admin/);
   assert.match(s, /Thursday, September 10, 2026|Thursday 10 September 2026/);
