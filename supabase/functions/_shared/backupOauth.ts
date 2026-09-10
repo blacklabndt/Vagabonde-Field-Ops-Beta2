@@ -12,6 +12,8 @@
 // vite-app/src/backupShared.test.mjs imports this file straight and node
 // strips the types.
 
+import { secretsMatch } from "./constantTime.ts";
+
 export const NONCE_MS = 10 * 60 * 1000;
 
 // The same three as drive.ts's PROVIDERS and the panel's BACKUP_PROVIDERS,
@@ -118,7 +120,10 @@ export function nonceRefusal(
 ): string {
   const want = String(expected ?? "");
   const got = String(presented ?? "");
-  if (!want || !got || want !== got) {
+  // Constant time, never `===`: the nonce is the callback's whole
+  // credential for its ten minutes, and a compare that stops at the first
+  // byte that differs times out how much of it the caller has right.
+  if (!secretsMatch(got, want)) {
     return "That connection link wasn't the one this app started. Press Connect again.";
   }
   if (!Number.isFinite(mintedAtMs) || !mintedAtMs || nowMs - mintedAtMs > NONCE_MS) {

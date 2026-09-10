@@ -34,6 +34,7 @@ import { renderInvoice, invoiceCss, invoiceTotals, moneyCents, edmontonStamp, gs
 import type { InvoiceData } from "../_shared/invoice.ts";
 import { loadInvoice } from "../_shared/ticketInvoice.ts";
 import { hashToken, invoiceFingerprint } from "../_shared/approvalToken.ts";
+import { secretsMatch } from "../_shared/constantTime.ts";
 
 // A signature is a typed name and, optionally, a small PNG. Anything bigger
 // than this is not a form a person filled in, and formData() would buffer
@@ -412,7 +413,9 @@ async function handle(req: Request): Promise<Response> {
     // If the ticket has been edited since — or the page predates this check —
     // show the current bill and ask again, rather than recording a signature
     // against figures the rep never saw.
-    if (String(form.get("fp") ?? "") !== fingerprint) {
+    // Compared in constant time like a secret, though it is not one (the
+    // fingerprint is in the page), so no digest here is judged by `===`.
+    if (!secretsMatch(String(form.get("fp") ?? ""), fingerprint)) {
       return page(ask + header + `<div class="actions"><p style="color:#8a3b3b;font-size:13px">This ticket has changed since this page was opened. Please look over the charges above and sign again below.</p></div>` + signForm(fingerprint));
     }
     const name = String(form.get("name") ?? "").trim().slice(0, MAX_NAME_CHARS);

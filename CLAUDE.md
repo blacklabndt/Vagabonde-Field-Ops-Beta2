@@ -697,11 +697,12 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   `supabase/functions/_shared/backupSchedule.ts` — with a byte-identical
   block between the `shared core` markers, and `backupSchedule.test.mjs`
   reads both files off disk and compares them. Change one, change the other,
-  in the same commit. Seven shared modules — `backupSchedule.ts`,
+  in the same commit. Eight shared modules — `backupSchedule.ts`,
   `backupTables.ts`, `backupManifest.ts`, `backupRun.ts`, `backupOauth.ts`,
-  `drive.ts` and `gzip.ts` — are erasable TypeScript with no imports of
-  their own (`backupManifest.ts` may name `backupSchedule.ts`, and nothing
-  else), because the node suite imports them straight out of
+  `drive.ts`, `gzip.ts` and `constantTime.ts` — are erasable TypeScript with
+  no imports of their own (`backupManifest.ts` may name `backupSchedule.ts`,
+  `backupOauth.ts` may name `constantTime.ts`, and nothing else), because
+  the node suite imports them straight out of
   `supabase/functions/` — an `enum`, a constructor parameter property, a
   `Deno.env` read or a control character in any of them breaks `npm test`,
   and `backupShared.test.mjs` asserts each of those. `backupRestore.ts` is
@@ -717,7 +718,14 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   on the nonce actually presented — nulling it on the row's id alone let any
   stranger's GET clear the nonce Connect had just minted); `backup-run` and
   `backup-restore` on `x-internal-secret` OR an Admin JWT (`backupDoor` in
-  `backupCommon.ts`).
+  `backupCommon.ts`). No secret is ever judged by `===`: a compare that
+  stops at the first byte that differs hands the secret over a byte at a
+  time to anyone timing it, so `secretsMatch` in `_shared/constantTime.ts`
+  (constant time over the presented bytes, node-tested) is what every door
+  uses — the four x-internal-secret doors (`backupDoor`, chat-push,
+  chat-retention, admin-digest), the OAuth callback's nonce and the approval
+  page's fingerprint — and `constantTime.test.mjs` reads every function
+  back and refuses an operator against that header.
 
 ## Rules the 0.92 optimization pass added (Sept 2026)
 

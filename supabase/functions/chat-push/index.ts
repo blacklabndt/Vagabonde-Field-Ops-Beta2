@@ -17,6 +17,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import webpush from "npm:web-push@3.6.7";
+import { secretsMatch } from "../_shared/constantTime.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -41,7 +42,9 @@ Deno.serve(async (req) => {
     // log one malformed request at a time.
     const { data: expected, error: secretErr } = await admin.rpc("internal_secret");
     if (secretErr) throw secretErr;
-    if (!expected || req.headers.get("x-internal-secret") !== expected) {
+    // Constant time, never `===`: a compare that stops at the first byte
+    // that differs times out how much of the secret the caller has right.
+    if (!secretsMatch(req.headers.get("x-internal-secret"), expected)) {
       return json({ error: "Not authorized" }, 401);
     }
 

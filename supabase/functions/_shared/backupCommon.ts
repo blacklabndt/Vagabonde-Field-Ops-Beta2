@@ -15,6 +15,7 @@ import { BACKUP_ROOT_NAME, MANIFEST_NAME } from "./backupManifest.ts";
 import { FILES_INDEX_NAME, RETRIES, parseFileIndex, retryDelayMs, worthAnotherGo } from "./backupRun.ts";
 import type { FileRecord } from "./backupRun.ts";
 import { gunzip } from "./gzip.ts";
+import { secretsMatch } from "./constantTime.ts";
 
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -90,7 +91,9 @@ export async function backupDoor(
   const presented = req.headers.get("x-internal-secret");
   if (presented) {
     const expected = await internalSecret(db);
-    if (!expected || presented !== expected) return json({ error: "Not authorized" }, 401);
+    // Constant time, never `===`: a compare that stops at the first byte
+    // that differs times out how much of the secret the caller has right.
+    if (!secretsMatch(presented, expected)) return json({ error: "Not authorized" }, 401);
     return { internal: true, userId: "", secret: expected };
   }
   const who = await requireAdmin(req, refusal);

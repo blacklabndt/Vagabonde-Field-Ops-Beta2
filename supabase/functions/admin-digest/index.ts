@@ -28,6 +28,7 @@
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendMail, appSettings, corsHeaders, wrapEmail, esc } from "../_shared/mail.ts";
+import { secretsMatch } from "../_shared/constantTime.ts";
 
 const SUBJECT = "VagaboNDE Field Ops — needs attention";
 
@@ -154,7 +155,9 @@ Deno.serve(async (req) => {
 
     const { data: expected, error: secretErr } = await admin.rpc("internal_secret");
     if (secretErr) throw secretErr;
-    if (!expected || req.headers.get("x-internal-secret") !== expected) {
+    // Constant time, never `===`: a compare that stops at the first byte
+    // that differs times out how much of the secret the caller has right.
+    if (!secretsMatch(req.headers.get("x-internal-secret"), expected)) {
       return json({ error: "Not authorized" }, 401);
     }
 
