@@ -1658,8 +1658,14 @@ export function App() {
             Below 760px the name has nowhere to go and becomes initials
             rather than nothing: these are shared tablets, and "am I still
             signed in as the last shift?" was two taps to answer. The chip
-            carries the full name for anything reading the page aloud. */}
-        <div className="topbar-who" style={{ fontSize: 13, display: "flex", alignItems: "center", marginLeft: "auto" }}>
+            carries the full name for anything reading the page aloud.
+            Double-click (double-tap) it for the easter egg: the name on a
+            desktop, the initials chip on a phone — the one place that is
+            on every screen at every width. Nothing announces it and
+            nothing depends on it; a double-click on a label is not
+            something anyone does by accident. */}
+        <div className="topbar-who" onDoubleClick={() => setEgg(true)}
+          style={{ fontSize: 13, display: "flex", alignItems: "center", marginLeft: "auto", userSelect: "none" }}>
           <span className="topbar-name">{currentUser.name}</span>
           <span className="topbar-initials" role="img" aria-label={`Signed in as ${currentUser.name}`}
             title={currentUser.name}>
@@ -1699,15 +1705,8 @@ export function App() {
               </button>
             ))}
             <div className="drawer-foot">
-              {/* Double-click your own name. Nothing announces it and nothing
-                  depends on it; a double-click on a label is not something
-                  anyone does by accident on the way to signing out. */}
-              {/* The name yields first on a narrow drawer — an ellipsis on
-                  your own name beats the theme buttons wrapping away. */}
-              <span onDoubleClick={() => setEgg(true)}
-                style={{ userSelect: "none", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {currentUser.name}
-              </span>
+              {/* No name down here: the bar's chip says who is signed in on
+                  every screen, and the egg lives on it now. */}
               <Btn variant="secondary" onClick={signOut}>Sign out</Btn>
               {/* The bar drops the theme switch on the narrowest phones, so
                   the drawer carries it — in line with Sign out, where the
