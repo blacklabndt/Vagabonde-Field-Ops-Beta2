@@ -1,16 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import { Db } from "../db.js";
 import { Btn } from "./common.jsx";
-import { askTurns, pushTurn, threadForSend, jobLinks } from "../askThread.js";
+import { askTurns, pushTurn, threadForSend, jobLinks, mergeDictation } from "../askThread.js";
 
-// Ask: a square launcher at the bottom right of every screen and the card
-// it opens. Not a dialog — no backdrop, the screen stays usable — so the
-// person can read the tracker while asking about it. The thread is
-// askThread.js's, in memory for the session; a failed question stays in
-// the box with the reason under it, and the turn is pushed only once an
-// answer has come back, so the thread never carries a question with no
-// answer. Job numbers in an answer open the job, by membership against
-// the job list as the chat does.
+// Ask: a square launcher at the bottom right of every screen (it says
+// "AI", per Kyle) and the card it opens. Not a dialog — no backdrop, the
+// screen stays usable — so the person can read the tracker while asking
+// about it. The thread is askThread.js's, in memory for the session; a
+// failed question stays in the box with the reason under it, and the turn
+// is pushed only once an answer has come back, so the thread never
+// carries a question with no answer. Job numbers in an answer open the
+// job, by membership against the job list as the chat does.
+//
+// Dictation is the browser's own speech recognition (Chrome, Edge, Safari
+// on the tablets): no key, no server of ours, nothing stored. The mic
+// button hides itself where the browser has none. Words land in the box
+// as they are recognised — mergeDictation rebuilds it from what was typed
+// before the mic was pressed plus the whole session so far — and Send or
+// a second press on the mic stops listening.
 
 function useOnline() {
   const [online, setOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
@@ -24,6 +31,58 @@ function useOnline() {
   return online;
 }
 
+const Recognition = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+
+// Dictation into a draft. `setDraft` takes the rebuilt text; `onFail` a
+// sentence for the person when the microphone is refused or the browser
+// gives up. start() remembers the draft at that moment as the base.
+function useDictation(getDraft, setDraft, onFail) {
+  const [listening, setListening] = useState(false);
+  const recRef = useRef(null);
+  const baseRef = useRef("");
+
+  const stop = () => {
+    const rec = recRef.current;
+    recRef.current = null;
+    if (rec) { try { rec.stop(); } catch { /* already stopped */ } }
+    setListening(false);
+  };
+
+  const start = () => {
+    if (!Recognition || recRef.current) return;
+    const rec = new Recognition();
+    rec.lang = "en-CA";
+    rec.interimResults = true;
+    rec.continuous = true;
+    baseRef.current = getDraft();
+    rec.onresult = e => {
+      let finals = "";
+      let interim = "";
+      for (let i = 0; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) finals += r[0].transcript;
+        else interim += r[0].transcript;
+      }
+      setDraft(mergeDictation(baseRef.current, finals, interim));
+    };
+    rec.onerror = e => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") onFail("The microphone was refused — allow it for this site to dictate.");
+      else if (e.error !== "aborted" && e.error !== "no-speech") onFail("Dictation stopped: the browser couldn't hear you.");
+      stop();
+    };
+    rec.onend = () => { if (recRef.current === rec) stop(); };
+    recRef.current = rec;
+    setListening(true);
+    try { rec.start(); } catch { stop(); }
+  };
+
+  // Closing the card, or leaving the app, stops the microphone.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs at unmount alone; stop reads refs, never state
+  useEffect(() => stop, []);
+
+  return { supported: !!Recognition, listening, start, stop };
+}
+
 function Answer({ text, jobNums, onOpenJob }) {
   return jobLinks(text, jobNums).map((p, i) =>
     "job" in p
@@ -32,9 +91,7 @@ function Answer({ text, jobNums, onOpenJob }) {
   );
 }
 
-export function AskLauncher({ onOpenJob }) {
-  const online = useOnline();
-  const [open, setOpen] = useState(false);
+function AskCard({ onClose, onOpenJob }) {
   const [turns, setTurns] = useState(askTurns);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -42,31 +99,32 @@ export function AskLauncher({ onOpenJob }) {
   const [jobNums, setJobNums] = useState(null);
   const threadEl = useRef(null);
   const boxEl = useRef(null);
+  const draftRef = useRef("");
+  draftRef.current = draft;
+  const mic = useDictation(() => draftRef.current, setDraft, setError);
 
   // The job list for the links, read once the card opens; a failed read
   // only costs the links.
   useEffect(() => {
-    if (!open || jobNums) return;
     Db.listJobNumbers()
       .then(list => setJobNums(new Set(list.map(n => String(n).toUpperCase()))))
       .catch(() => setJobNums(new Set()));
-  }, [open, jobNums]);
+  }, []);
 
   useEffect(() => {
-    if (!open) return;
     const el = threadEl.current;
     if (el) el.scrollTop = el.scrollHeight;
     if (!busy && boxEl.current) boxEl.current.focus();
-  }, [open, turns, busy]);
+  }, [turns, busy]);
 
   useEffect(() => {
-    if (!open) return undefined;
-    const onKey = e => { if (e.key === "Escape") setOpen(false); };
+    const onKey = e => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+  }, [onClose]);
 
   const send = async () => {
+    mic.stop();
     const text = draft.trim();
     if (!text || busy) return;
     setBusy(true);
@@ -90,27 +148,25 @@ export function AskLauncher({ onOpenJob }) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
 
-  if (!open) {
-    return (
-      <button type="button" className="btn btn-primary ask-launcher" disabled={!online}
-        title={online ? "Ask the app a question" : "Ask needs a connection"} onClick={() => setOpen(true)}>
-        Ask
-      </button>
-    );
-  }
+  const toggleMic = () => {
+    if (mic.listening) { mic.stop(); return; }
+    setError("");
+    mic.start();
+  };
 
   return (
-    <div className="ask-card" role="dialog" aria-label="Ask">
+    <div className="ask-card" role="dialog" aria-label="AI">
       <div className="ask-card-head">
-        <h3>Ask</h3>
+        <h3>AI</h3>
         <button type="button" className="btn btn-secondary" style={{ padding: "4px 10px" }}
-          onClick={() => setOpen(false)} aria-label="Close">×</button>
+          onClick={onClose} aria-label="Close">×</button>
       </div>
       <div className="ask-thread" ref={threadEl}>
         {!turns.length && (
           <div className="ask-turn-answer" style={{ opacity: 0.8 }}>
             Ask about the billing tracker — what needs attention, which tickets are over 60 days,
             how much a client owes. Answers come from what your account can see.
+            {mic.supported && " Tap the microphone to say it instead of typing."}
           </div>
         )}
         {turns.map((t, i) => t.role === "user"
@@ -125,10 +181,31 @@ export function AskLauncher({ onOpenJob }) {
       </div>
       {error && <div className="ask-error">{error}</div>}
       <div className="ask-foot">
-        <textarea ref={boxEl} className="input" rows={2} value={draft} placeholder="Ask about the tracker…"
+        <textarea ref={boxEl} className="input" rows={2} value={draft}
+          placeholder={mic.listening ? "Listening…" : "Ask about the tracker…"}
           onChange={e => setDraft(e.target.value)} onKeyDown={onKeyDown} disabled={busy} />
+        {mic.supported && (
+          <button type="button" className={`btn btn-secondary ask-mic${mic.listening ? " ask-mic-on" : ""}`}
+            onClick={toggleMic} disabled={busy} aria-pressed={mic.listening}
+            title={mic.listening ? "Stop listening" : "Say it instead of typing"}>
+            {mic.listening ? "■" : "🎤"}
+          </button>
+        )}
         <Btn variant="primary" onClick={send} disabled={busy || !draft.trim()}>Send</Btn>
       </div>
     </div>
+  );
+}
+
+export function AskLauncher({ onOpenJob }) {
+  const online = useOnline();
+  const [open, setOpen] = useState(false);
+
+  if (open) return <AskCard onClose={() => setOpen(false)} onOpenJob={onOpenJob} />;
+  return (
+    <button type="button" className="btn btn-primary ask-launcher" disabled={!online}
+      title={online ? "Ask the app a question" : "AI needs a connection"} onClick={() => setOpen(true)}>
+      AI
+    </button>
   );
 }

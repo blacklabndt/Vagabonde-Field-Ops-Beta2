@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { askTurns, pushTurn, threadForSend, forgetAskThread, jobLinks, ASK_KEEP } from "./askThread.js";
+import { askTurns, pushTurn, threadForSend, forgetAskThread, jobLinks, mergeDictation, ASK_KEEP } from "./askThread.js";
+
+test("dictation rebuilds the box from what was typed plus what was said", () => {
+  assert.equal(mergeDictation("", "which tickets ", "are over sixty days"), "which tickets are over sixty days");
+  assert.equal(mergeDictation("only Pembina ", "please", ""), "only Pembina please");
+  assert.equal(mergeDictation("typed", "", ""), "typed");
+  assert.equal(mergeDictation("", "", "   "), "");
+  assert.equal(mergeDictation(null, "a  b", undefined), "a b");
+});
 
 test("a thread is turns in order, trace kept beside the answer and not sent", () => {
   forgetAskThread();

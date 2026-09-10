@@ -366,7 +366,7 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   carries z-index 100 (above the bar, banner and drawer; below the egg
   overlay at 200 and the toast at 300) — one rendered ahead of main once
   sat under the jobs table and took no clicks.
-- Ask (the square button bottom-right on every screen, `askPanel.jsx`) is
+- Ask (the square "AI" button bottom-right on every screen, `askPanel.jsx`) is
   the app-wide assistant, this slice over the tracker: the `ask` Edge
   Function opens the door on the caller's JWT, reads the caller's tabs,
   offers Claude (`ASK_MODEL` in `_shared/askLoop.ts`, Opus 5) only the
@@ -383,6 +383,10 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   function refuses in plain words. The thread lives in memory
   (`askThread.js`, forgotten at sign-out beside the chat drafts) and
   nowhere else; job numbers in an answer link by membership like the chat.
+  Dictation is the browser's own speech recognition (no key, no server,
+  nothing stored; the mic hides itself where the browser has none, such
+  as Firefox), rebuilding the box from what was typed plus the whole
+  session (`mergeDictation`, tested).
   It needs no tab, help entry or preset of its own. Spec:
   `docs/superpowers/specs/2026-09-10-ask-assistant-design.md`.
 - The screen is in the address bar: `vite-app/src/route.js` (pure, node-

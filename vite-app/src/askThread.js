@@ -21,6 +21,17 @@ export function threadForSend() { return turns.map(t => ({ role: t.role, text: t
 
 export function forgetAskThread() { turns = []; }
 
+// What the box shows while the person is dictating: whatever was typed
+// before the mic was pressed, then the words the browser has settled on,
+// then the ones it is still guessing at — the recogniser hands over the
+// whole session each time, so this is a rebuild, never an append.
+export function mergeDictation(base, finals, interim) {
+  const spoken = `${finals || ""}${interim || ""}`.replace(/\s+/g, " ").trim();
+  const typed = String(base || "").replace(/\s+$/, "");
+  if (!spoken) return typed;
+  return typed ? `${typed} ${spoken}` : spoken;
+}
+
 // An answer's text split into plain runs and real job numbers, by
 // membership against the job list (the chat's rule — job numbers are
 // freeform, so a pattern would link things that are not jobs).

@@ -577,8 +577,9 @@ vite-app/
     savingWords.js          "Saving…" against "Saved on this device" — what the
                             button says while a save is on its way
     chatDrafts.js           the chat composer held across screen changes, per account
-    askThread.js            Ask's thread, in memory for the session, and the job-number
-                            links in an answer (membership, like the chat)
+    askThread.js            Ask's thread, in memory for the session, the job-number
+                            links in an answer (membership, like the chat) and the
+                            merge of dictated words into the box
     dosimetryPrompt.js      the serials offer's pure questions: which typed serial is
                             news, what keeping writes, and the once-a-session mark
     wipDrafts.js            the half-entered work Open tickets lists off the device
@@ -624,7 +625,8 @@ vite-app/
       queuePanel.jsx        The offline-queue badge and its what's-waiting panel
       helpTip.jsx           The screen's popup, one screen's entry from help.js
       featureRequest.jsx    The drawer's Feature request form
-      askPanel.jsx          Ask — the square launcher bottom-right and the card it opens
+      askPanel.jsx          Ask — the square "AI" launcher bottom-right, the card it
+                            opens, and dictation through the browser's own recogniser
       flappy880.jsx         One of the two easter eggs
   e2e/                      Playwright against the live project — auth.setup.js signs
                             the accounts in once, then fieldOps, networkSync and
