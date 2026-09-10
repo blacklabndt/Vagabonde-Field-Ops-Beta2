@@ -11,10 +11,23 @@ let turns = [];
 
 export function askTurns() { return turns.slice(); }
 
-export function pushTurn(role, text, trace) {
+// An answer may carry an action — the form a draft proposes — kept on the
+// turn for the card's buttons and, like the trace, never sent back.
+export function pushTurn(role, text, trace, action) {
   const turn = { role, text };
   if (trace && trace.length) turn.trace = trace.slice();
+  if (action) turn.action = action;
   turns = [...turns, turn].slice(-ASK_KEEP);
+}
+
+// "Not now": the proposal goes, the words stay.
+export function dropAction(index) {
+  turns = turns.map((t, i) => {
+    if (i !== index || !t.action) return t;
+    const kept = { role: t.role, text: t.text };
+    if (t.trace) kept.trace = t.trace;
+    return kept;
+  });
 }
 
 export function threadForSend() { return turns.map(t => ({ role: t.role, text: t.text })); }

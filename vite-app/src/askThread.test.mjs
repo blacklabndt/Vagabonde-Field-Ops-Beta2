@@ -1,6 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { askTurns, pushTurn, threadForSend, forgetAskThread, jobLinks, mergeDictation, foldTranscripts, ASK_KEEP } from "./askThread.js";
+import { askTurns, pushTurn, threadForSend, forgetAskThread, dropAction, jobLinks, mergeDictation, foldTranscripts, ASK_KEEP } from "./askThread.js";
+
+test("an action rides the answer turn for the card, never the send, and Not now drops it", () => {
+  forgetAskThread();
+  const action = { kind: "draft_job", summary: "New job for Pembina.", seed: { project: "RT" } };
+  pushTurn("user", "new job for pembina");
+  pushTurn("assistant", "Ready.", ["looked up client \"pembina\""], action);
+  assert.deepEqual(askTurns()[1], { role: "assistant", text: "Ready.", trace: ["looked up client \"pembina\""], action });
+  assert.deepEqual(threadForSend(), [{ role: "user", text: "new job for pembina" }, { role: "assistant", text: "Ready." }]);
+  dropAction(1);
+  assert.deepEqual(askTurns()[1], { role: "assistant", text: "Ready.", trace: ["looked up client \"pembina\""] });
+  dropAction(0);
+  assert.deepEqual(askTurns()[0], { role: "user", text: "new job for pembina" });
+  forgetAskThread();
+});
 
 test("foldTranscripts takes segments in order and cumulative repeats once", () => {
   assert.equal(foldTranscripts(["which tickets", "are over sixty"]), "which tickets are over sixty");

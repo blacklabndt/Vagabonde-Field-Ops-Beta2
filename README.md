@@ -578,8 +578,10 @@ vite-app/
                             button says while a save is on its way
     chatDrafts.js           the chat composer held across screen changes, per account
     askThread.js            Ask's thread, in memory for the session, the job-number
-                            links in an answer (membership, like the chat) and the
-                            merge of dictated words into the box
+                            links in an answer (membership, like the chat), the action
+                            a draft proposes, and the merge of dictated words
+    ticketSeedLines.js      lines Ask drafted, matched to the rate card by label; the
+                            unmatched are named, never invented
     dosimetryPrompt.js      the serials offer's pure questions: which typed serial is
                             news, what keeping writes, and the once-a-session mark
     wipDrafts.js            the half-entered work Open tickets lists off the device
@@ -656,8 +658,9 @@ supabase/
                             invoice/JHA rendering, mail, the approval token, and the
                             nine modules the backup is built from (drive.ts and its
                             three vendors, backupTables/Manifest/Schedule/Run/
-                            Restore/Oauth/Common, gzip) and Ask's two (askTools, the
-                            tools and their tabs; askLoop, the Messages API loop),
+                            Restore/Oauth/Common, gzip) and Ask's three (askTools, the
+                            tools and their tabs; askLoop, the Messages API loop;
+                            askDrafts, the seed a draft opens a form with),
                             most of them erasable TypeScript the node suite imports
                             directly
   handover/                 the handover runbooks — the two wipes, the probes a

@@ -533,12 +533,17 @@ function NewTicketDialog({ onClose, onChosen }) {
   );
 }
 
-function NewJobDialog({ currentUser, clients, contractors, contacts, onClose, onCreate }) {
-  const [form, setForm] = useState({
-    project: "", jobNumber: "", client: "", lsd: "", afe: "",
+// `seed` is what Ask drafted (App mounts this dialog for that, over any
+// screen): the typed fields open filled, the client and contractor go
+// through the same pickers a tap would use, and nothing is created until
+// Save. Null is Home's own + Job.
+export function NewJobDialog({ currentUser, clients, contractors, contacts, onClose, onCreate, seed = null }) {
+  const [form, setForm] = useState(() => ({
+    project: (seed && seed.project) || "", jobNumber: (seed && seed.jobNumber) || "", client: "",
+    lsd: (seed && seed.lsd) || "", afe: (seed && seed.afe) || "",
     clientRepId: "", clientRepName: "", clientRepEmail: "", clientRepPhone: "",
     contractor: "", contractorRepId: "", contractorRepName: "", contractorRepEmail: "", contractorRepPhone: ""
-  });
+  }));
   const [clientChip, setClientChip] = useState("");
   // A client added here is added for real, not just for this job — but the
   // parent's `clients` prop won't know about it until it refetches, so keep
@@ -680,6 +685,32 @@ function NewJobDialog({ currentUser, clients, contractors, contacts, onClose, on
       setContractorChip(lastUsedChip(c));
     } else { setContractorChip(""); }
   };
+
+  // A draft from Ask: the client and contractor go through the pickers (so
+  // the primary rep fills in as it would on a tap), and a rep named in words
+  // is matched to the organisation's people; a name not on file is kept as
+  // typed, never filed as a new contact by the assistant. A client the
+  // directory does not hold is left for the person to pick.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: applied once at mount; the seed is fixed for the dialog's life
+  useEffect(() => {
+    if (!seed) return;
+    const byName = (list, name) => name && list.find(c => String(c.name).toLowerCase() === String(name).toLowerCase());
+    const client = seed.client && clientList.find(c => c.name === seed.client);
+    if (client) {
+      pickClient(client.name);
+      const rep = byName(contactsForOrg(contacts, "client", client.id), seed.clientRepName);
+      if (rep) setForm(p => ({ ...p, clientRepId: rep.id, clientRepName: rep.name, clientRepEmail: rep.email || "", clientRepPhone: rep.phone || "" }));
+      else if (seed.clientRepName) setForm(p => ({ ...p, clientRepId: "", clientRepName: seed.clientRepName, clientRepEmail: "", clientRepPhone: "" }));
+    }
+    if (seed.contractor) {
+      const known = contractorList.find(c => c.name.toLowerCase() === seed.contractor.toLowerCase());
+      if (!known) setContractorList(p => [...p, { id: null, name: seed.contractor }].sort((a, b) => a.name.localeCompare(b.name)));
+      pickContractor(known ? known.name : seed.contractor);
+      const rep = known && byName(contactsForOrg(contacts, "contractor", known.id), seed.contractorRepName);
+      if (rep) setForm(p => ({ ...p, contractorRepId: rep.id, contractorRepName: rep.name, contractorRepEmail: rep.email || "", contractorRepPhone: rep.phone || "" }));
+      else if (seed.contractorRepName) setForm(p => ({ ...p, contractorRepId: "", contractorRepName: seed.contractorRepName, contractorRepEmail: "", contractorRepPhone: "" }));
+    }
+  }, []);
 
   // The same three conditions submit() is about to check, counted instead of
   // reported — so the dialog can say how much is in the way before the button

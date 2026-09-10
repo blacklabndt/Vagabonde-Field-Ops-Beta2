@@ -389,6 +389,31 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   session (`mergeDictation`, tested).
   It needs no tab, help entry or preset of its own. Spec:
   `docs/superpowers/specs/2026-09-10-ask-assistant-design.md`.
+  The second slice drafts: three reads (`find_client` over
+  search_org_directory, `find_job` over search_jobs, `job_record` — the
+  row, the org names and both organisations' contacts) and three draft
+  tools (`draft_job` behind board, `draft_ticket` behind ticket AND a
+  price role, `draft_jha` behind jha) that write NOTHING: the runner
+  resolves the client (exact name, else the one hit, else the model is
+  told what to ask) or the job (by number, Active only) as the caller,
+  `_shared/askDrafts.ts` (pure) shapes a seed and a sentence, and the
+  response carries an `action` beside the answer — the last draft call
+  wins. The card shows it on the latest answer only (Open the form / Not
+  now; `dropAction` keeps the words); App's `runAskAction` opens the
+  app's OWN form with the seed: the New job dialog (exported from
+  home.jsx, mounted in App under `jobSeed` so it opens over any screen;
+  a `next` JHA draft opens the builder once the job is saved, else the
+  job opens), `startTicketForJob(job, seed)` (the seed's `lines` are
+  matched to the rate card by label in `ticketSeedLines.js`, once the
+  card lands and only when no recovery copy took the form; the unmatched
+  are named in a toast) and `startJhaForJob(job, seed)` (`jhaSeed`,
+  keyed remount; template, day, helper by name, site fields into the
+  baseline so an untouched seeded form writes no WIP; hazards as an "AI
+  suggests" line, never ticked). Precedence in the builder stays: a WIP
+  copy wins, then the seed, then the last assessment fills the blanks.
+  `JHA_TEMPLATES` and the hazard names live in askTools.ts as well as
+  data.js, and askTools.test.mjs fails on drift. Spec:
+  `docs/superpowers/specs/2026-09-10-ask-drafts-design.md`.
 - The screen is in the address bar: `vite-app/src/route.js` (pure, node-
   tested) spells `#/board`, `#/chat`, `#/job/S-10113` and
   `#/job/S-10113/ticket`; App.jsx pushes one history entry per screen
@@ -778,8 +803,8 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   reads both files off disk, strips the types from the function's with
   Node's own stripper, folds the whitespace and compares them. Change one,
   change the other, in the same commit; an interface goes ABOVE the marker,
-  where the twin has nothing to match. Ten shared modules — `backupSchedule.ts`,
-  `askTools.ts`, `askLoop.ts`,
+  where the twin has nothing to match. Eleven shared modules — `backupSchedule.ts`,
+  `askTools.ts`, `askLoop.ts`, `askDrafts.ts`,
   `backupTables.ts`, `backupManifest.ts`, `backupRun.ts`, `backupOauth.ts`,
   `drive.ts`, `gzip.ts` and `constantTime.ts` — are erasable TypeScript with
   no imports of their own (`backupManifest.ts` may name `backupSchedule.ts`,

@@ -7,6 +7,7 @@ import { Toasts } from "../toastBus.js";
 import { OfflineCache } from "../offlineCache.js";
 import { savingLabel, deviceOffline } from "../savingWords.js";
 import { overwroteKey, overwroteWords } from "../overwriteNote.js";
+import { seedLinesToForm } from "../ticketSeedLines.js";
 
 // Stored ticket lines back into the two on-screen lists, matched by label
 // against the client's catalog — what's offered, in what order, at what
@@ -400,6 +401,28 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
     draftLoaded.current = true;
     loadDraft().then(() => setLoadingTicket(false));
   }, [ticket, rates]);
+
+  // Lines Ask drafted, applied once the card is here — and only when no
+  // recovery copy took the form first, since that copy is somebody's work.
+  // The recovery read may still be in flight when the card lands, so this
+  // looks again a moment later until it has answered.
+  const seedLinesApplied = useRef(false);
+  const [seedLinesTick, setSeedLinesTick] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the rates land, and again on its own tick until the recovery read has answered; the seed is fixed for the editor's life
+  useEffect(() => {
+    if (ticket || !rates || seedLinesApplied.current || !(seed && seed.lines && seed.lines.length)) return undefined;
+    if (!wipReady.current) {
+      const t = setTimeout(() => setSeedLinesTick(n => n + 1), 150);
+      return () => clearTimeout(t);
+    }
+    seedLinesApplied.current = true;
+    if (wipRestored.current) return undefined;
+    const { welds, others, unmatched } = seedLinesToForm(seed.lines, rates);
+    if (welds.length) setWeldLines(welds);
+    if (others.length) setOtherLines(others);
+    if (unmatched.length) Toasts.show(`Not on this client's rate card: ${unmatched.join(", ")} — add them by hand if they belong.`, "error", true);
+    return undefined;
+  }, [rates, seedLinesTick]);
 
   // ── Start from the last ticket ─────────────────────────────────────────
   // Offered, never applied on its own: a ticket must never arrive carrying

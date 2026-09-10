@@ -50,7 +50,12 @@ function priorityOf(r) {
   return { total, band: total <= 5 ? "Low" : total <= 7 ? "Med" : "High" };
 }
 
-export function JhaBuilderScreen({ job, jobRecord, currentUser, onSubmitted, onCancel }) {
+// `seed` is what Ask drafted for this assessment — template, day, helper,
+// site details, hazards to suggest — and null for a JHA started by hand.
+// A recovery copy on the device still wins (it is somebody's work); the
+// last assessment's details fill only what the seed left blank; and the
+// suggested hazards are said above the list, never ticked.
+export function JhaBuilderScreen({ job, jobRecord, currentUser, onSubmitted, onCancel, seed = null }) {
   const [hazards, setHazards] = useState(() => SEED_HAZARDS.map(h => ({ ...h })));
   const [extra, setExtra] = useState([]);
   const [ratings, setRatings] = useState({});
@@ -92,10 +97,14 @@ export function JhaBuilderScreen({ job, jobRecord, currentUser, onSubmitted, onC
   // it almost always is — but a JHA that got missed on site and is being
   // written up afterwards has to be able to say which day it was for, or the
   // record (and the PDF) claims the wrong one.
-  const [workDate, setWorkDate] = useState(todayLocal);
+  const [workDate, setWorkDate] = useState(() => (seed && seed.workDate) || todayLocal());
+  // The template is the tie-in one unless a draft said otherwise; there is
+  // no picker for it on the form yet.
+  const [template] = useState(() => (seed && seed.template) || JHA_TEMPLATES[0]);
   const backdated = workDate !== todayLocal();
 
-  const [site, setSite] = useState(BLANK_SITE);
+  const seededSite = seed && seed.site && Object.keys(seed.site).length ? { ...BLANK_SITE, ...seed.site } : BLANK_SITE;
+  const [site, setSite] = useState(seededSite);
   const [equip, setEquip] = useState(BLANK_EQUIP);
 
   // Worker (1) is whoever is filing. Worker (2) is the helper with them, if
@@ -158,7 +167,7 @@ export function JhaBuilderScreen({ job, jobRecord, currentUser, onSubmitted, onC
   // today's facts and start empty. `baseline` is what the prefill wrote, so
   // the recovery copy counts only what the person changed themselves.
   const [prefilledFrom, setPrefilledFrom] = useState(null);
-  const baseline = useRef({ site: BLANK_SITE, equip: BLANK_EQUIP });
+  const baseline = useRef({ site: seededSite, equip: BLANK_EQUIP });
   // What the form holds right now, readable from inside the fetch's callback
   // without a stale closure — a box typed into before the last assessment
   // arrives keeps what was typed.
@@ -391,6 +400,16 @@ export function JhaBuilderScreen({ job, jobRecord, currentUser, onSubmitted, onC
     setW2(helper ? kitOf(helper, equipment) : { unit: "", idCode: "", tld: "", drd: "", alarm: "" });
   }, [helperId, people, equipment]);
 
+  // A helper named by Ask, matched to the crew once the list is here; a
+  // name with no match leaves the box on "working alone" for the person.
+  useEffect(() => {
+    if (!seed || !seed.helperName || helperId || !people.length) return;
+    const want = seed.helperName.toLowerCase();
+    const label = p => String(p.displayName || p.name || "").toLowerCase();
+    const hit = people.find(p => label(p) === want) || people.find(p => label(p).includes(want));
+    if (hit) setHelperId(hit.id);
+  }, [seed, people, helperId]);
+
   // The exposure device is one shared piece of kit for the day, not per
   // worker like TLD/DRD/alarm — defaulted from whatever's assigned to
   // whoever is filing, same as the rest of their kit.
@@ -459,7 +478,7 @@ export function JhaBuilderScreen({ job, jobRecord, currentUser, onSubmitted, onC
       dosimetry.push({ slot: 2, profileId: helper.id, name: helper.displayName, ...w2, startReading: 0, endReading: null, doseMr: null });
     }
     const jhaPayload = {
-      jobDbId: job.dbId, template: JHA_TEMPLATES[0],
+      jobDbId: job.dbId, template,
       hazards: selected.map(h => ({ ...h, rating: ratings[h.name] || null })),
       signedBy: currentUser.id, siteRep: siteRepJoined,
       // Job numbers are free text; storage keys are not (# and ? truncate,
@@ -610,6 +629,16 @@ export function JhaBuilderScreen({ job, jobRecord, currentUser, onSubmitted, onC
           <div style={{ fontSize: 11, color: "color-mix(in srgb, var(--color-text) 55%, transparent)", marginTop: -2 }}>
             At least one hazard has to be ticked.
           </div>
+          {seed && seed.template && (
+            <div style={{ fontSize: 11, color: "color-mix(in srgb, var(--color-text) 55%, transparent)", marginTop: -2 }}>
+              Template: {seed.template}
+            </div>
+          )}
+          {seed && seed.suggestedHazards && seed.suggestedHazards.length > 0 && (
+            <div style={{ fontSize: 11, color: "var(--color-accent)", marginTop: -2 }}>
+              AI suggests: {seed.suggestedHazards.join(", ")}. Tick the ones that apply — nothing is ticked for you.
+            </div>
+          )}
           {Object.keys(remembered).length > 0 && (
             <div style={{ fontSize: 11, color: "color-mix(in srgb, var(--color-text) 55%, transparent)", marginTop: -2 }}>
               Sev, Prob and Freq start from what you rated each hazard last time. Change any that are different today.

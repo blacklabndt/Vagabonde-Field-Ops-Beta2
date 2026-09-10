@@ -26,7 +26,7 @@ import { parseRoute, formatRoute, landingRoute, historyStep } from "./route.js";
 const IDENTITY_TTL_MS = 12 * 60 * 60 * 1000;
 import { Recovery } from "./recovery.js";
 import { SignInScreen, SetNewPasswordScreen } from "./components/auth.jsx";
-import { HomeScreen } from "./components/home.jsx";
+import { HomeScreen, NewJobDialog } from "./components/home.jsx";
 import { JobDetailScreen } from "./components/jobDetail.jsx";
 import { JhaBuilderScreen } from "./components/jhaMobile.jsx";
 import { UploadMobileScreen } from "./components/uploadMobile.jsx";
@@ -308,6 +308,12 @@ export function App() {
   // a hook below it renders only once signed in, and React refuses a
   // component whose hook count grows between renders.
   const [ticketSeed, setTicketSeed] = useState(null);
+  // What a job drafted by Ask opens the New job dialog with (from any
+  // screen — the dialog is mounted here for that), and what a drafted JHA
+  // opens the builder with; each with a nonce that remounts its form, as
+  // the ticket's does. Null is the plain form.
+  const [jobSeed, setJobSeed] = useState(null);
+  const [jhaSeed, setJhaSeed] = useState(null);
   // This person's hazard assessments still waiting for end readings, across
   // every job — listed on Open tickets, loaded with the draft list.
   const [myOpenJhas, setMyOpenJhas] = useState([]);
@@ -1310,11 +1316,12 @@ export function App() {
   // builder seeds the site rep from the job record at mount, and Job detail
   // replaces that record asynchronously — tapped before it resolved, the
   // assessment opened naming the previous job's contractor rep.
-  const startJhaForJob = async job => {
+  const startJhaForJob = async (job, seed = null) => {
     if (!job) return;
     const record = heldRecordFor(job) || await recordFor(job, "hazard assessment");
     if (!record) return;
     setJobRecord(record);
+    setJhaSeed(seed ? { ...seed, nonce: Date.now() } : null);
     gotoContext("jha");
   };
   // From the billing tracker: a draft opens in the billing screen to be
@@ -1359,11 +1366,12 @@ export function App() {
   const createJob = async ({ id, job }) => {
     // A job started with no signal comes back already shaped — there is
     // nothing to fetch, and fetching is exactly what didn't work.
-    if (job) { setActiveJob(job); return; }
+    if (job) { setActiveJob(job); return job; }
     try {
       const created = await Db.getJobByNumber(id);
       setActiveJob(created);
       Db.listContractors().then(setContractors).catch(() => {});
+      return created;
     } catch (e) {
       // The job was raised — this is only the read-back that fills the board's
       // row in. Left silent, the dialog closed on nothing and the job that had
@@ -1372,6 +1380,22 @@ export function App() {
       // the mistake openTicket used to make.
       console.error("Couldn't load the new job:", e.message);
       Toasts.show(`${id} was created, but couldn't be opened: ${e.message || "open it from the board."}`, "error");
+    }
+  };
+
+  // What Ask proposed: the app's own form, filled in. Nothing is written
+  // until that form saves. A job draft opens the dialog mounted below; a
+  // ticket or JHA draft reads the job by number first, the way the tracker
+  // and the chat open one, so a job this account may not see stops here.
+  const runAskAction = async action => {
+    if (!action) return;
+    if (action.kind === "draft_job") { setJobSeed({ ...action.seed, next: action.next || null, nonce: Date.now() }); return; }
+    try {
+      const job = await Db.getJobByNumber(action.job.job_number);
+      if (action.kind === "draft_ticket") await startTicketForJob(job, action.seed);
+      else if (action.kind === "draft_jha") await startJhaForJob(job, action.seed);
+    } catch (e) {
+      Toasts.show(`Couldn't open ${action.job.job_number}: ${e.message || "try again."}`, "error");
     }
   };
 
@@ -1424,7 +1448,11 @@ export function App() {
       ) : <div className="page">No job selected — pick one from Home.</div>;
       break;
     case "jha":
-      body = <JhaBuilderScreen job={activeJob} jobRecord={jobRecord} currentUser={currentUser} onSubmitted={() => gotoContext("job")} onCancel={() => gotoContext("job")} />;
+      body = (
+        <JhaBuilderScreen key={`jha-${activeJob ? activeJob.dbId : ""}-${jhaSeed ? jhaSeed.nonce : ""}`}
+          job={activeJob} jobRecord={jobRecord} currentUser={currentUser} seed={jhaSeed}
+          onSubmitted={() => gotoContext("job")} onCancel={() => gotoContext("job")} />
+      );
       break;
     case "upload":
       body = <UploadMobileScreen job={activeJob} jobRecord={jobRecord} currentUser={currentUser} onSent={() => gotoContext("job")} />;
@@ -1678,7 +1706,23 @@ export function App() {
       {/* Ask, on every screen while signed in. It needs no tab of its own:
           the function decides what it can reach from the tabs this account
           holds. Here after main for the same reason the dialogs are. */}
-      {currentUser && <AskLauncher onOpenJob={openJobByNumber} />}
+      {/* A job Ask drafted: the same dialog Home's + Job opens, mounted here
+          so it can open over any screen. Saving it opens the job — or the
+          JHA builder on it, when the draft said "and start the JHA". */}
+      {jobSeed && currentUser && (
+        <NewJobDialog key={jobSeed.nonce} seed={jobSeed}
+          currentUser={currentUser} clients={clients} contractors={contractors} contacts={contacts}
+          onClose={() => setJobSeed(null)}
+          onCreate={async made => {
+            const next = jobSeed.next;
+            setJobSeed(null);
+            const job = await createJob(made);
+            if (!job) return;
+            if (next && next.kind === "draft_jha") await startJhaForJob(job, next.seed);
+            else openJob(job);
+          }} />
+      )}
+      {currentUser && <AskLauncher onOpenJob={openJobByNumber} onAction={runAskAction} />}
       {/* The screen's own introduction, the first time this account opens
           it. Gated on the screen the tip was raised for still being the
           screen underneath: one that changes out from under it — an account

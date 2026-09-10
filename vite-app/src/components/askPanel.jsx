@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Db } from "../db.js";
 import { Btn } from "./common.jsx";
-import { askTurns, pushTurn, threadForSend, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
+import { askTurns, pushTurn, threadForSend, dropAction, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
 
 // Ask: a square launcher at the bottom right of every screen (it says
 // "AI", per Kyle) and the card it opens. Not a dialog — no backdrop, the
@@ -127,7 +127,7 @@ function Answer({ text, jobNums, onOpenJob }) {
   );
 }
 
-function AskCard({ onClose, onOpenJob }) {
+function AskCard({ onClose, onOpenJob, onAction }) {
   const [turns, setTurns] = useState(askTurns);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -166,9 +166,9 @@ function AskCard({ onClose, onOpenJob }) {
     setBusy(true);
     setError("");
     try {
-      const { answer, trace } = await Db.ask([...threadForSend(), { role: "user", text }]);
+      const { answer, trace, action } = await Db.ask([...threadForSend(), { role: "user", text }]);
       pushTurn("user", text);
-      pushTurn("assistant", answer, trace);
+      pushTurn("assistant", answer, trace, action);
       setTurns(askTurns());
       setDraft("");
     } catch (e) {
@@ -211,6 +211,19 @@ function AskCard({ onClose, onOpenJob }) {
             <div key={i} className="ask-turn-answer">
               <Answer text={t.text} jobNums={jobNums} onOpenJob={onOpenJob} />
               {t.trace && t.trace.length > 0 && <div className="ask-trace">{t.trace.join(" · ")}</div>}
+              {/* A draft's proposal: the app's own form, filled in, one tap
+                  away. Offered on the latest answer only — an older one may
+                  be about a job that has since been made. Nothing is written
+                  until that form saves. */}
+              {i === turns.length - 1 && t.action && (
+                <div className="ask-proposal">
+                  <div>{t.action.summary}</div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <Btn variant="primary" onClick={() => { onClose(); onAction(t.action); }}>Open the form</Btn>
+                    <Btn variant="secondary" onClick={() => { dropAction(i); setTurns(askTurns()); }}>Not now</Btn>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         {busy && <div className="ask-turn-answer" style={{ opacity: 0.7 }}>Reading the tracker…</div>}
@@ -233,11 +246,11 @@ function AskCard({ onClose, onOpenJob }) {
   );
 }
 
-export function AskLauncher({ onOpenJob }) {
+export function AskLauncher({ onOpenJob, onAction }) {
   const online = useOnline();
   const [open, setOpen] = useState(false);
 
-  if (open) return <AskCard onClose={() => setOpen(false)} onOpenJob={onOpenJob} />;
+  if (open) return <AskCard onClose={() => setOpen(false)} onOpenJob={onOpenJob} onAction={onAction} />;
   return (
     <button type="button" className="btn btn-primary ask-launcher" disabled={!online}
       title={online ? "Ask the app a question" : "AI needs a connection"} onClick={() => setOpen(true)}>
