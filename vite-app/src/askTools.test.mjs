@@ -7,8 +7,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { TABS, JHA_TEMPLATES as DATA_TEMPLATES, SEED_HAZARDS } from "./data.js";
 import {
-  ASK_TOOLS, toolsFor, toolDefinitions, traceLine, searchArgs, TRACKER_STATUSES, JHA_TEMPLATES, HAZARD_NAMES
+  ASK_TOOLS, toolsFor, toolDefinitions, traceLine, searchArgs, TRACKER_STATUSES, JHA_TEMPLATES, HAZARD_NAMES, SEND_KINDS
 } from "../../supabase/functions/_shared/askTools.ts";
+import { KINDS } from "../../supabase/functions/_shared/scheduledSends.ts";
 
 test("every tool sits behind a tab the app has", () => {
   const keys = new Set(TABS.map(t => t.key));
@@ -19,7 +20,7 @@ test("every tool sits behind a tab the app has", () => {
 test("toolsFor offers exactly the tools behind the tabs held, and the price roles for a ticket", () => {
   assert.deepEqual(toolsFor(["tracker"]).map(t => t.name), ["tracker_stats", "ticket_aging", "search_tickets"]);
   assert.deepEqual(toolsFor(["board", "job", "jha", "ticket"], "Helper").map(t => t.name),
-    ["find_client", "find_job", "job_record", "draft_job", "draft_jha", "list_jhas", "list_tickets", "send_jha"]);
+    ["find_client", "find_job", "job_record", "draft_job", "draft_jha", "list_jhas", "list_tickets", "send_jha", "list_reports", "schedule_send", "list_scheduled", "cancel_scheduled"]);
   assert.ok(toolsFor(["ticket"], "Technician").some(t => t.name === "draft_ticket"));
   assert.ok(toolsFor(["ticket"], "Admin").some(t => t.name === "draft_ticket"));
   assert.ok(!toolsFor(["ticket"], "Coordinator").some(t => t.name === "draft_ticket"));
@@ -39,6 +40,17 @@ test("the lists and the JHA send sit behind job; the ticket send behind ticket a
   assert.equal(traceLine("list_tickets", { job_number: "S-10113" }), "listed the tickets on S-10113");
   assert.equal(traceLine("send_jha", { jha_id: "x", recipients: ["Dave"] }), "proposed sending a JHA");
   assert.equal(traceLine("send_ticket_approval", { ticket_id: "T-10231" }), "proposed sending T-10231 for approval");
+});
+
+test("the timer tools sit behind job, and the kinds are scheduledSends.ts's", () => {
+  const job = toolsFor(["job"], "Helper").map(t => t.name);
+  for (const n of ["list_reports", "schedule_send", "list_scheduled", "cancel_scheduled"]) assert.ok(job.includes(n), n);
+  assert.deepEqual(SEND_KINDS, [...KINDS]);
+  assert.equal(traceLine("list_reports", { job_number: "S-10113" }), "listed the reports on S-10113");
+  assert.equal(traceLine("schedule_send", { kind: "jha", run_at: "2026-09-11 07:00" }), "proposed a send at 2026-09-11 07:00");
+  assert.equal(traceLine("list_scheduled", {}), "listed the scheduled sends");
+  assert.equal(traceLine("list_scheduled", { job_number: "S-10113" }), "listed the scheduled sends on S-10113");
+  assert.equal(traceLine("cancel_scheduled", { id: "x" }), "proposed cancelling a scheduled send");
 });
 
 test("the definitions carry only what the API takes", () => {

@@ -29,7 +29,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { appSettings, corsHeaders } from "../_shared/mail.ts";
 import { toolsFor, toolDefinitions, traceLine, searchArgs, JHA_TEMPLATES, HAZARD_NAMES, PRICE_ROLES } from "../_shared/askTools.ts";
 import { shapeJobDraft, shapeTicketDraft, shapeJhaDraft } from "../_shared/askDrafts.ts";
-import { resolveRecipients, jhaSendGate, ticketSendGate, ticketApprovalAddress, jhaFileName, sendJhaWords, sendTicketWords, JHA_MESSAGE } from "../_shared/askSends.ts";
+import { resolveRecipients, jhaSendGate, ticketSendGate, ticketApprovalAddress, jhaFileName, sendJhaWords, sendTicketWords, JHA_MESSAGE, REPORT_MESSAGE } from "../_shared/askSends.ts";
+import { isKind, localToUtc, checkRunAt, whenWords, labelFor, scheduleWords, cancelWords, REPORT_SEND_ROLES } from "../_shared/scheduledSends.ts";
 import { askLoop, systemPrompt, windowTurns } from "../_shared/askLoop.ts";
 
 const json = (body: unknown, status = 200) =>
@@ -64,6 +65,18 @@ interface JhaSendRow {
 interface TicketSendRow {
   id: string; status: string | null; total: number | string | null; technician_id: string | null; client_contact: { name?: string | null } | null;
   jobs: { id: string; job_number: string; client_id: string | null; client_contact_id: string | null } | null;
+}
+interface ReportListRow {
+  id: string; filename: string | null; welds: string | null; result: string | null; uploaded_at: string | null;
+  pdf_key: string | null; sent_at: string | null; sent_to: string | null;
+}
+interface ReportSendRow {
+  id: string; job_id: string; filename: string | null; pdf_key: string | null;
+  jobs: { id: string; job_number: string; client_id: string | null; contractor_id: string | null } | null;
+}
+interface ScheduledRow {
+  id: string; kind: string; label: string; to_list: string; run_at: string; status: string; error: string | null;
+  job_id: string; jobs: { job_number: string } | null;
 }
 
 Deno.serve(async (req) => {
@@ -152,6 +165,49 @@ Deno.serve(async (req) => {
       };
     };
 
+    // A record read as the caller, gated as the screen's function gates it,
+    // with its recipients resolved — for a send now and for a scheduled one.
+    const jhaForSend = async (jhaId: string, recipients: unknown) => {
+      const { data, error } = await asUser.from("jhas")
+        .select("id, job_id, signed_by, pdf_key, template, work_date, sent_at, jobs(id, job_number, client_id, contractor_id)")
+        .eq("id", jhaId).maybeSingle();
+      if (error) throw new Error(error.message);
+      const row = data as unknown as JhaSendRow | null;
+      if (!row || !row.jobs) throw new Error("No assessment with that id — use list_jhas to find it.");
+      jhaSendGate(row, who);
+      const people = await contactsFor([row.jobs.client_id, row.jobs.contractor_id]);
+      const to = resolveRecipients(recipients, people, saidByPerson());
+      return { row, job: { id: row.jobs.id, job_number: row.jobs.job_number }, to };
+    };
+    const reportForSend = async (reportId: string, recipients: unknown) => {
+      const { data, error } = await asUser.from("reports")
+        .select("id, job_id, filename, pdf_key, jobs(id, job_number, client_id, contractor_id)")
+        .eq("id", reportId).maybeSingle();
+      if (error) throw new Error(error.message);
+      const row = data as unknown as ReportSendRow | null;
+      if (!row || !row.jobs) throw new Error("No report with that id — use list_reports to find it.");
+      // send-report's gate.
+      if (!row.pdf_key) throw new Error("This report has no PDF on file — upload it first.");
+      if (!REPORT_SEND_ROLES.includes(who.role)) throw new Error("Only a Technician, Coordinator or Admin can email a report.");
+      const people = await contactsFor([row.jobs.client_id, row.jobs.contractor_id]);
+      const to = resolveRecipients(recipients, people, saidByPerson());
+      return { row, job: { id: row.jobs.id, job_number: row.jobs.job_number }, to };
+    };
+    const ticketForSend = async (ticketId: string) => {
+      const { data, error } = await asUser.from("tickets")
+        .select("id, status, total, technician_id, client_contact, jobs(id, job_number, client_id, client_contact_id)")
+        .eq("id", ticketId.trim().toUpperCase()).maybeSingle();
+      if (error) throw new Error(error.message);
+      const row = data as unknown as TicketSendRow | null;
+      if (!row || !row.jobs) throw new Error("No ticket with that number — use list_tickets to find it.");
+      ticketSendGate(row, who);
+      // The job's current client rep, the way the job record names one.
+      const people = await contactsFor([row.jobs.client_id]);
+      const rep = people.find(c => c.id === row.jobs?.client_contact_id) ?? people.find(c => c.org_type === "client" && c.is_primary) ?? null;
+      const to = [ticketApprovalAddress(row.client_contact?.name, rep?.email)];
+      return { row, job: { id: row.jobs.id, job_number: row.jobs.job_number }, to };
+    };
+
     // The form a draft proposes, or the send a send tool proposes, if one
     // did; the last call wins.
     let action: Record<string, unknown> | null = null;
@@ -224,16 +280,7 @@ Deno.serve(async (req) => {
           approval_sent_at: r.approval_sent_at, approval_sent_to: r.approval_sent_to, client_contact: r.client_contact?.name ?? null
         }));
       } else if (name === "send_jha") {
-        const { data, error } = await asUser.from("jhas")
-          .select("id, job_id, signed_by, pdf_key, template, work_date, sent_at, jobs(id, job_number, client_id, contractor_id)")
-          .eq("id", String(input.jha_id ?? "")).maybeSingle();
-        if (error) throw new Error(error.message);
-        const row = data as unknown as JhaSendRow | null;
-        if (!row || !row.jobs) throw new Error("No assessment with that id — use list_jhas to find it.");
-        jhaSendGate(row, who);
-        const people = await contactsFor([row.jobs.client_id, row.jobs.contractor_id]);
-        const to = resolveRecipients(input.recipients, people, saidByPerson());
-        const job = { id: row.jobs.id, job_number: row.jobs.job_number };
+        const { row, job, to } = await jhaForSend(String(input.jha_id ?? ""), input.recipients);
         const words = sendJhaWords(row, job, to);
         action = {
           kind: "send_jha", summary: words.summary, done: words.done, to, message: JHA_MESSAGE,
@@ -241,21 +288,73 @@ Deno.serve(async (req) => {
         };
         out = { ready: true, summary: words.summary, to };
       } else if (name === "send_ticket_approval") {
-        const { data, error } = await asUser.from("tickets")
-          .select("id, status, total, technician_id, client_contact, jobs(id, job_number, client_id, client_contact_id)")
-          .eq("id", String(input.ticket_id ?? "").trim().toUpperCase()).maybeSingle();
-        if (error) throw new Error(error.message);
-        const row = data as unknown as TicketSendRow | null;
-        if (!row || !row.jobs) throw new Error("No ticket with that number — use list_tickets to find it.");
-        ticketSendGate(row, who);
-        // The job's current client rep, the way the job record names one.
-        const people = await contactsFor([row.jobs.client_id]);
-        const rep = people.find(c => c.id === row.jobs?.client_contact_id) ?? people.find(c => c.org_type === "client" && c.is_primary) ?? null;
-        const to = [ticketApprovalAddress(row.client_contact?.name, rep?.email)];
-        const job = { id: row.jobs.id, job_number: row.jobs.job_number };
+        const { row, job, to } = await ticketForSend(String(input.ticket_id ?? ""));
         const words = sendTicketWords(row, job, to);
         action = { kind: "send_ticket_approval", summary: words.summary, done: words.done, to, ticket: { id: row.id }, job };
         out = { ready: true, summary: words.summary, to };
+      } else if (name === "list_reports") {
+        const job = await jobNumbered(String(input.job_number ?? ""), false);
+        const { data, error } = await asUser.from("reports")
+          .select("id, filename, welds, result, uploaded_at, pdf_key, sent_at, sent_to")
+          .eq("job_id", job.id).order("uploaded_at", { ascending: false }).limit(50);
+        if (error) throw new Error(error.message);
+        out = ((data ?? []) as ReportListRow[]).map(r => ({
+          id: r.id, file: r.filename, welds: r.welds, result: r.result, uploaded_at: r.uploaded_at,
+          has_pdf: !!r.pdf_key, sent_at: r.sent_at, sent_to: r.sent_to
+        }));
+      } else if (name === "schedule_send") {
+        // The same gate and the same recipients a send now would have, plus
+        // the time; the row is inserted by App through RLS once the person
+        // presses Schedule, and gated again when it fires.
+        const kind = input.kind;
+        if (!isKind(kind)) throw new Error("kind must be jha, report or ticket_approval.");
+        const runAt = localToUtc(input.run_at);
+        checkRunAt(runAt, Date.now());
+        const recordId = String(input.record_id ?? "").trim();
+        let job: { id: string; job_number: string };
+        let label: string;
+        let to: string[];
+        let message = "";
+        if (kind === "jha") {
+          const found = await jhaForSend(recordId, input.recipients);
+          job = found.job; to = found.to; label = labelFor("jha", found.row); message = JHA_MESSAGE;
+        } else if (kind === "report") {
+          const found = await reportForSend(recordId, input.recipients);
+          job = found.job; to = found.to; label = labelFor("report", found.row); message = REPORT_MESSAGE;
+        } else {
+          if (!seesMoney) throw new Error("Only an Admin or a Technician can send a ticket for approval from here.");
+          const found = await ticketForSend(recordId);
+          job = found.job; to = found.to; label = labelFor("ticket_approval", found.row);
+        }
+        const words = scheduleWords(kind, label, job, to, runAt);
+        action = {
+          kind: "schedule_send", summary: words.summary, done: words.done, to, send_kind: kind,
+          record_id: kind === "ticket_approval" ? recordId.trim().toUpperCase() : recordId, label, message,
+          run_at: new Date(runAt).toISOString(), job
+        };
+        out = { ready: true, summary: words.summary, to, run_at: new Date(runAt).toISOString() };
+      } else if (name === "list_scheduled") {
+        const query = asUser.from("scheduled_sends")
+          .select("id, kind, label, to_list, run_at, status, error, job_id, jobs(job_number)")
+          .in("status", ["queued", "failed"]).order("run_at").limit(50);
+        const number = String(input.job_number ?? "").trim();
+        if (number) query.eq("job_id", (await jobNumbered(number, false)).id);
+        const { data, error } = await query;
+        if (error) throw new Error(error.message);
+        out = ((data ?? []) as unknown as ScheduledRow[]).map(r => ({
+          id: r.id, kind: r.kind, label: r.label, to: r.to_list, run_at: r.run_at, when: whenWords(Date.parse(r.run_at)),
+          status: r.status, error: r.error, job_number: r.jobs?.job_number ?? null
+        }));
+      } else if (name === "cancel_scheduled") {
+        const { data, error } = await asUser.from("scheduled_sends")
+          .select("id, label, run_at, status").eq("id", String(input.id ?? "").trim()).maybeSingle();
+        if (error) throw new Error(error.message);
+        const row = data as { id: string; label: string; run_at: string; status: string } | null;
+        if (!row) throw new Error("No scheduled send with that id — use list_scheduled to find it.");
+        if (row.status !== "queued" && row.status !== "failed") throw new Error(`That send is already ${row.status}; there is nothing to cancel.`);
+        const words = cancelWords(row.label, Date.parse(row.run_at));
+        action = { kind: "cancel_scheduled", summary: words.summary, done: words.done, id: row.id };
+        out = { ready: true, summary: words.summary };
       } else {
         throw new Error(`no tool named ${name}`);
       }

@@ -137,6 +137,8 @@ test("the system prompt names the person, the day in Grande Prairie and the rule
   assert.match(s, /Sending:/);
   assert.match(s, /typed themselves/);
   assert.match(s, /A send tool sends nothing/);
+  assert.match(s, /Timers:/);
+  assert.match(s, /YYYY-MM-DD HH:MM/);
   assert.match(s, /Kyle Keith/);
   assert.match(s, /Admin/);
   assert.match(s, /Thursday, September 10, 2026|Thursday 10 September 2026/);

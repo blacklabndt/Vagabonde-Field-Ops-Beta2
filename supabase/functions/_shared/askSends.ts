@@ -32,6 +32,7 @@ export const TICKET_SEND_ROLES = ["Admin", "Coordinator"];
 export const MAX_RECIPIENTS = 10;
 // The default Job detail's Send dialog offers for an assessment.
 export const JHA_MESSAGE = "Attached: the signed hazard assessment for the work noted below. Let us know if you have questions.";
+export const REPORT_MESSAGE = "Attached: interpreted RT report for the welds noted below. Let us know if you have questions.";
 
 // mail.ts's ADDRESS, and common.jsx's emailIn — the two patterns the
 // screens already apply, so what passes here passes there.

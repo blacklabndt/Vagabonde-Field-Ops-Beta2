@@ -34,6 +34,9 @@ export const HAZARD_NAMES = [
 ];
 // Who may see money, and so draft a ticket (seesPrices in data.js).
 export const PRICE_ROLES = ["Admin", "Technician"];
+// What a scheduled send may be; scheduledSends.ts's KINDS, and
+// askTools.test.mjs fails on drift.
+export const SEND_KINDS = ["jha", "report", "ticket_approval"];
 
 const DATE = "a date as YYYY-MM-DD";
 
@@ -173,6 +176,35 @@ export const ASK_TOOLS: AskTool[] = [
     name: "send_ticket_approval", tab: "ticket", roles: PRICE_ROLES,
     description: "Propose sending a billing ticket to the client rep for approval — or again, if it is already awaiting approval: the card asks the person to confirm, naming the address; nothing is sent until they do. It goes to the client contact the ticket was raised against, else the job's client rep; do not ask where. Refused for an approved or invoiced ticket, an empty one, or another technician's.",
     input_schema: { type: "object", properties: { ticket_id: { type: "string", description: "the ticket number, e.g. T-10231" } }, required: ["ticket_id"], additionalProperties: false }
+  },
+  {
+    name: "list_reports", tab: "job",
+    description: "A job's radiographic reports, newest first: id, file name, welds, result, when it was uploaded, whether a PDF is on file, and when and to whom it was last sent. Use it to find the report to schedule.",
+    input_schema: { type: "object", properties: { job_number: { type: "string" } }, required: ["job_number"], additionalProperties: false }
+  },
+  {
+    name: "schedule_send", tab: "job",
+    description: "Schedule a send for a time: a JHA's PDF, a report's PDF, or a ticket's approval link. The card asks the person to confirm, naming the record, every address and the time; nothing is scheduled until they do, and it then goes out at that time whether or not the app is open. kind is jha, report or ticket_approval; record_id is the id list_jhas or list_reports gave, or the ticket number. recipients as for send_jha — contact names on file for the job's client or contractor, or an address the person typed themselves; a ticket approval goes to the ticket's client rep and recipients is ignored. run_at is the time in Grande Prairie's clock as YYYY-MM-DD HH:MM; if the person gave no hour, ask for one.",
+    input_schema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: SEND_KINDS },
+        record_id: { type: "string" },
+        recipients: { type: "array", items: { type: "string" }, description: "contact names on file, or addresses the person typed; ignored for a ticket approval" },
+        run_at: { type: "string", description: "YYYY-MM-DD HH:MM, Grande Prairie's clock" }
+      },
+      required: ["kind", "record_id", "run_at"], additionalProperties: false
+    }
+  },
+  {
+    name: "list_scheduled", tab: "job",
+    description: "Sends waiting for their time, and ones that failed, that this person may see: id, what, the addresses, the time, the job, status and any error. Give job_number to limit it to one job.",
+    input_schema: { type: "object", properties: { job_number: { type: "string" } }, additionalProperties: false }
+  },
+  {
+    name: "cancel_scheduled", tab: "job",
+    description: "Propose cancelling a scheduled send that is still queued, or dismissing one that failed, by the id list_scheduled gave: the card asks the person to confirm. Nothing changes until they do.",
+    input_schema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false }
   }
 ];
 
@@ -232,5 +264,9 @@ export function traceLine(name: string, input: Record<string, unknown>): string 
   if (name === "list_tickets") return `listed the tickets on ${str(input.job_number)}`;
   if (name === "send_jha") return "proposed sending a JHA";
   if (name === "send_ticket_approval") return `proposed sending ${str(input.ticket_id)} for approval`;
+  if (name === "list_reports") return `listed the reports on ${str(input.job_number)}`;
+  if (name === "schedule_send") return `proposed a send at ${str(input.run_at)}`;
+  if (name === "list_scheduled") return str(input.job_number) ? `listed the scheduled sends on ${str(input.job_number)}` : "listed the scheduled sends";
+  if (name === "cancel_scheduled") return "proposed cancelling a scheduled send";
   return `read ${name}`;
 }
