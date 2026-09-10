@@ -1561,6 +1561,34 @@ test("a run row that could not be made puts the clock back, for both clocks", ()
   assert.doesNotMatch(source, /await queueRun\(db, (VERIFY_KIND|"backup"), null\)/, "the tick never queues its own kinds without the way back");
 });
 
+test("a due time that already has its run is not queued a second one, for both clocks", () => {
+  const source = read("supabase/functions/backup-run/index.ts");
+  // queueRunOrUnmove puts the clock back when it cannot tell whether the
+  // row landed — its reply lost, and the read after it refused too — because
+  // that is the choice that never costs a night. The row that did land is
+  // then taken and finished by the ticks between, and the clock is read
+  // again still due: without this guard one night stood in the drive twice.
+  assert.match(source, /async function servedSince\(/);
+  assert.match(source, /\.eq\("kind", kind\)\.neq\("status", "failed"\)\.gte\("created_at", since\)/, "a run of the kind since the due time, bar a failed one");
+  assert.match(source, /const SERVED_SLACK_MS = 60 \* 1000;/, "a minute of slack between the two clocks");
+  // The refused read still puts the clock back: the guard is what makes that
+  // safe, so the two must stay together.
+  assert.match(source, /const landed = await openRun\(db, "queued", \[kind\]\)\.catch\(\(\) => null\);\s*\n\s*if \(!landed\) await db\.from\("app_settings"\)\.update\(\{ \[column\]: was \}\)/);
+  for (const [kind, column, movedName, servedName] of [
+    ["\"backup\"", "backup_next_run_at", "moved", "served"],
+    ["VERIFY_KIND", "backup_verify_next_at", "movedV", "servedV"]
+  ]) {
+    const askedAt = source.indexOf(`const ${servedName} = await servedSince(db, ${kind}, s.${column});`);
+    const wonAt = source.indexOf(`.eq("id", true).eq("${column}", s.${column}).select("id");`);
+    const skipAt = source.indexOf(`if (${servedName}) return { ok: true, idle: true, served: true, next: ${movedName} };`);
+    const queueAt = source.indexOf(`queueRunOrUnmove(db, ${kind}, "${column}", s.${column}, ${movedName})`);
+    assert.ok(askedAt > 0, `${column}: the due time is asked about`);
+    assert.ok(wonAt > askedAt, `${column}: asked before the move, so a refusal moves nothing`);
+    assert.ok(skipAt > wonAt, `${column}: the clock moves on past a served due time`);
+    assert.ok(queueAt > skipAt, `${column}: and only an unserved one is queued`);
+  }
+});
+
 test("the file rows are reconciled with the folder before the index is written from them", () => {
   const source = read("supabase/functions/backup-run/index.ts");
   // Two slices alive at once after a reclaim can each upload one name and

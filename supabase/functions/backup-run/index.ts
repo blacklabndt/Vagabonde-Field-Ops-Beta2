@@ -152,6 +152,30 @@ async function openRun(db: SupabaseClient, status: string, kinds = MY_KINDS): Pr
   return (data ?? null) as Run | null;
 }
 
+// Whether a due time already has its run. The clock moves before the run
+// row exists, and queueRunOrUnmove puts it back when the insert's reply was
+// lost and the read after it is refused too — it cannot tell a row that
+// landed from one that did not, and putting the clock back is the choice
+// that never costs a night. The ticks in between then take the row that did
+// land and finish it, and the next tick to read the clock finds it still
+// due. A run of this kind created since that due time IS the due time's run
+// — bar one that failed, which the schedule gives no second go and this
+// guard need not either — so the clock moves on and nothing is queued, or
+// one night stands in the drive twice and a night of history falls off the
+// far end of backup_keep. A minute of slack: the row's created_at is the
+// database's clock and the due-time test was this function's, and no
+// schedule the panel offers repeats inside a day.
+const SERVED_SLACK_MS = 60 * 1000;
+async function servedSince(db: SupabaseClient, kind: string, due: unknown): Promise<boolean> {
+  const dueMs = Date.parse(String(due ?? ""));
+  if (!Number.isFinite(dueMs)) return false;
+  const since = new Date(dueMs - SERVED_SLACK_MS).toISOString();
+  const { data, error } = await db.from("backup_runs").select("id")
+    .eq("kind", kind).neq("status", "failed").gte("created_at", since).limit(1);
+  if (error) throw error;
+  return (data ?? []).length > 0;
+}
+
 async function tick(db: SupabaseClient, secret: string): Promise<Record<string, unknown>> {
   // This function's own kinds first, always. A restore's safety backup is a
   // before_restore run raised AFTER the restore itself, and a tick that took
@@ -204,11 +228,14 @@ async function tick(db: SupabaseClient, secret: string): Promise<Record<string, 
     // claim on it.
     if (s.backup_verify_next_at && Date.parse(String(s.backup_verify_next_at)) <= Date.now()) {
       const movedV = nextVerifyAt(Date.now(), Number(s.backup_verify_every_days ?? 14));
+      // Asked before the move, so a refusal here moves nothing.
+      const servedV = await servedSince(db, VERIFY_KIND, s.backup_verify_next_at);
       const { data: wonV, error: vErr } = await db.from("app_settings")
         .update({ backup_verify_next_at: movedV })
         .eq("id", true).eq("backup_verify_next_at", s.backup_verify_next_at).select("id");
       if (vErr) throw vErr;
       if (!stillHoldsRun(wonV)) return { ok: true, idle: true };
+      if (servedV) return { ok: true, idle: true, served: true, next: movedV };
       const verify = await queueRunOrUnmove(db, VERIFY_KIND, "backup_verify_next_at", s.backup_verify_next_at, movedV);
       return await advance(db, verify, secret);
     }
@@ -228,10 +255,13 @@ async function tick(db: SupabaseClient, secret: string): Promise<Record<string, 
     weekday: Number(s.backup_weekday ?? 0),
     hour: Number(s.backup_hour ?? 2)
   }, Date.now());
+  // Asked before the move, so a refusal here moves nothing.
+  const served = await servedSince(db, "backup", s.backup_next_run_at);
   const { data: won, error: nErr } = await db.from("app_settings").update({ backup_next_run_at: moved })
     .eq("id", true).eq("backup_next_run_at", s.backup_next_run_at).select("id");
   if (nErr) throw nErr;
   if (!stillHoldsRun(won)) return { ok: true, idle: true };
+  if (served) return { ok: true, idle: true, served: true, next: moved };
 
   const created = await queueRunOrUnmove(db, "backup", "backup_next_run_at", s.backup_next_run_at, moved);
   return await advance(db, created, secret);
@@ -364,7 +394,11 @@ async function queueRunOrUnmove(
   } catch (e) {
     // A reply the radio lost may sit on a row that did land. The next tick
     // takes a queued run before it reads the clock, so when one of this
-    // kind is there the clock stays moved and nothing is run twice.
+    // kind is there the clock stays moved and nothing is run twice. A read
+    // that is refused too says nothing either way, and the clock goes back
+    // all the same: a row that did NOT land under a clock left moved is a
+    // night lost, while a row that did land under a clock put back is met
+    // by servedSince, which queues nothing for a due time that has its run.
     const landed = await openRun(db, "queued", [kind]).catch(() => null);
     if (!landed) await db.from("app_settings").update({ [column]: was }).eq("id", true).eq(column, moved);
     throw e;
