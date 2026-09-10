@@ -13,7 +13,8 @@ import {
   BACKUP_PROVIDERS, PROVIDER_LABEL,
   redirectUriFor, backupSettingsPatch, readBackupOutcome, cleanClientId,
   BEFORE_RESTORE_PREFIX, isBeforeRestore, restoreNameMatches, failedRunAdvice,
-  keepToSave, keepPhrase, runRows, runFiles, runBytes, sizeTrend, verifySentence, verifyNotes } from "./backupPanelLogic.js";
+  keepToSave, keepPhrase, runRows, runFiles, runBytes, sizeTrend, verifySentence, verifyNotes,
+  verifyNotesUnsaid } from "./backupPanelLogic.js";
 
 // ── The redirect URI ─────────────────────────────────────────────────────
 
@@ -398,4 +399,21 @@ test("a file check reads as one sentence, and says when there was nothing to rep
     "no files were checked — There is no complete backup to check yet");
   assert.deepEqual(verifyNotes({ notes: ["a", 2] }), ["a", "2"]);
   assert.deepEqual(verifyNotes(null), []);
+});
+
+test("the panel lists only the notes the file check's sentence has not already said", () => {
+  // When nothing was checked the sentence quotes the first note as the why,
+  // and the list under it once repeated it: the same report read twice.
+  assert.deepEqual(verifyNotesUnsaid({ notes: ["There is no complete backup to check yet."] }), []);
+  assert.deepEqual(verifyNotesUnsaid({ notes: ["no index", "and more"] }), ["and more"]);
+  assert.deepEqual(verifyNotesUnsaid({ verified: 3, notes: ["one file was odd"] }), ["one file was odd"]);
+  assert.deepEqual(verifyNotesUnsaid({ unread: 1, notes: ["a.pdf was left alone"] }), ["a.pdf was left alone"]);
+  assert.deepEqual(verifyNotesUnsaid(null), []);
+  // The panel's list is this helper and not the raw notes, and a check that
+  // found no complete backup has no folder to put between the separators.
+  const panel = readFileSync(new URL("./components/backupPanel.jsx", import.meta.url), "utf8");
+  const block = panel.slice(panel.indexOf('s.last_run.kind === "verify" ? ('), panel.indexOf(') : s.last_run.status === "complete" ? ('));
+  assert.match(block, /verifyNotesUnsaid\(s\.last_run\.counts\)\.map\(/);
+  assert.doesNotMatch(block, /verifyNotes\(s\.last_run\.counts\)/);
+  assert.match(block, /\{s\.last_run\.folder_name\s*\?\s*<> &middot; \{s\.last_run\.folder_name\}<\/> : null\}/);
 });

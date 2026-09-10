@@ -390,7 +390,9 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   row showing records, files and size from `runRows/runFiles/runBytes` in
   `backupPanelLogic.js` — the same helpers the last-run sentence uses, so
   the two cannot drift — except a `verify` row, which shows `verifySentence`
-  in their place, again the helper the last-run sentence uses for that kind.
+  in their place, again the helper the last-run sentence uses for that kind;
+  the list under that sentence is `verifyNotesUnsaid`, the notes the sentence
+  has not already quoted (the first, when nothing was checked).
   `sizeTrend` draws complete backup and before_restore runs scaled from zero
   and flags `halved` when the latest is under half the one before. Five
   points on a daily schedule was too short to read as a trend.
