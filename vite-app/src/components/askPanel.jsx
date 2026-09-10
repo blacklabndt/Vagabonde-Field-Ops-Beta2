@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Db } from "../db.js";
 import { Btn } from "./common.jsx";
-import { askTurns, pushTurn, threadForSend, dropAction, isSendAction, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
+import { askTurns, pushTurn, threadForSend, dropAction, isConfirmAction, confirmLabel, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
 
 // Ask: a square launcher at the bottom right of every screen (it says
 // "AI", per Kyle) and the card it opens. Not a dialog — no backdrop, the
@@ -186,10 +186,11 @@ function AskCard({ onClose, onOpenJob, onAction }) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
 
-  // The person said Send: App calls the same Db method Job detail's button
-  // calls and answers a sentence, which becomes the answer turn so a later
-  // question can see it went. A refusal — the function's own words — stays
-  // on the error line with the proposal still up, for Not now.
+  // The person said Send, Schedule or Cancel it: App calls the same Db
+  // method Job detail's button calls and answers a sentence, which becomes
+  // the answer turn so a later question can see it went. A refusal — the
+  // function's own words — stays on the error line with the proposal still
+  // up, for Not now.
   const confirmSend = async (i, action) => {
     if (sending || busy) return;
     setSending(true);
@@ -202,7 +203,7 @@ function AskCard({ onClose, onOpenJob, onAction }) {
     } catch (e) {
       setError(e.networkFailure
         ? "No connection — nothing was sent. Try again when you have signal."
-        : (e.message || "Couldn't send it."));
+        : (e.message || "Couldn't do that."));
     } finally {
       setSending(false);
     }
@@ -243,12 +244,12 @@ function AskCard({ onClose, onOpenJob, onAction }) {
               {i === turns.length - 1 && t.action && (
                 <div className="ask-proposal">
                   <div>{t.action.summary}</div>
-                  {isSendAction(t.action) && (
-                    <div className="ask-proposal-to">To: {(t.action.to || []).join(", ")}</div>
+                  {isConfirmAction(t.action) && t.action.to && (
+                    <div className="ask-proposal-to">To: {t.action.to.join(", ")}</div>
                   )}
                   <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                    {isSendAction(t.action)
-                      ? <Btn variant="primary" disabled={sending} onClick={() => confirmSend(i, t.action)}>{sending ? "Sending…" : "Send"}</Btn>
+                    {isConfirmAction(t.action)
+                      ? <Btn variant="primary" disabled={sending} onClick={() => confirmSend(i, t.action)}>{sending ? "Working…" : confirmLabel(t.action)}</Btn>
                       : <Btn variant="primary" onClick={() => { onClose(); onAction(t.action); }}>Open the form</Btn>}
                     <Btn variant="secondary" disabled={sending} onClick={() => { dropAction(i); setTurns(askTurns()); }}>Not now</Btn>
                   </div>

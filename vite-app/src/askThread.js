@@ -30,10 +30,18 @@ export function dropAction(index) {
   });
 }
 
-// A send proposal (the card asks before the app sends) as against a draft
-// (the card opens a form).
-export function isSendAction(action) {
-  return !!action && typeof action.kind === "string" && action.kind.startsWith("send_");
+// A proposal the card confirms in place — a send, a scheduled send, a
+// cancel — as against a draft, which opens a form. The button's word is
+// the action's.
+export const CONFIRM_KINDS = ["send_jha", "send_ticket_approval", "schedule_send", "cancel_scheduled"];
+export function isConfirmAction(action) {
+  return !!action && CONFIRM_KINDS.includes(action.kind);
+}
+export function confirmLabel(action) {
+  if (!action) return "";
+  if (action.kind === "schedule_send") return "Schedule";
+  if (action.kind === "cancel_scheduled") return "Cancel it";
+  return "Send";
 }
 
 export function threadForSend() { return turns.map(t => ({ role: t.role, text: t.text })); }

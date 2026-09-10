@@ -3,6 +3,7 @@ import { money, todayLocal, localDate, dayMonth, initialsOf, ticketDateStamp, la
 import { acceptsNumberText } from "../numberInput.js";
 import { serialsOnProfile, newSerials, mergedSerials, isMissingSetOwnDosimetry, dosimetryAskedFor, markDosimetryAsked } from "../dosimetryPrompt.js";
 import { Db } from "../db.js";
+import { describeScheduled } from "../scheduledSends.js";
 import { OfflineCache } from "../offlineCache.js";
 import { OfflineQueue } from "../offlineQueue.js";
 import { deviceOffline } from "../savingWords.js";
@@ -59,6 +60,11 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
   // The assessment or report being emailed — each holds its row so the
   // dialog can name the file it's about to send.
   const [sendingJha, setSendingJha] = useState(null);
+  // Sends waiting for their time on this job, and ones that failed — read
+  // live with the cards, never from the device cache.
+  const [scheduled, setScheduled] = useState([]);
+  const [cancellingId, setCancellingId] = useState("");
+  const [scheduledError, setScheduledError] = useState("");
   const [sendingReport, setSendingReport] = useState(null);
   const [deletingJhaId, setDeletingJhaId] = useState(null);
   const [deletingReportId, setDeletingReportId] = useState(null);
@@ -207,7 +213,8 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
     const out = await Promise.allSettled([
       Db.listJhasForJob(job.dbId).then(fresh(setJhas)),
       Db.listReportsForJob(job.dbId).then(fresh(setReports)),
-      Db.listTicketsForJob(job.dbId).then(fresh(setTickets))
+      Db.listTicketsForJob(job.dbId).then(fresh(setTickets)),
+      Db.listScheduledSendsForJob(job.dbId).then(fresh(setScheduled))
     ]);
     if (mine !== filedSeq.current) return;
     const bad = out.find(r => r.status === "rejected");
@@ -347,6 +354,40 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
         <div style={{ fontSize: 13, color: "color-mix(in srgb, var(--color-text) 65%, transparent)", marginBottom: 18 }}>
           This job is complete — it's kept as a record and nothing further can be added.{isAdmin ? " Reopen it to make changes." : " An admin can reopen it."}
         </div>
+      )}
+
+      {scheduled.length > 0 && (
+        <Blueprint style={{ padding: "14px 20px", marginBottom: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <h4 style={{ margin: 0, fontSize: 17 }}>Scheduled sends</h4>
+            <span style={{ fontSize: 12, color: "color-mix(in srgb, var(--color-text) 55%, transparent)" }}>
+              go out at their time whether or not the app is open
+            </span>
+          </div>
+          <ErrorBox>{scheduledError}</ErrorBox>
+          {scheduled.map(row => {
+            const d = describeScheduled(row);
+            return (
+              <div key={row.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "6px 0", fontSize: 13, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 220 }}>
+                  <div style={{ color: d.failed ? "var(--color-accent-700)" : undefined }}>{d.line}</div>
+                  {d.error && <div style={{ fontSize: 12, color: "color-mix(in srgb, var(--color-text) 65%, transparent)" }}>{d.error}</div>}
+                </div>
+                {/* The same conditional update Ask's Cancel it makes: zero
+                    rows back means it already went, and the list re-reads
+                    either way so the strip shows what is true. */}
+                <Btn variant="secondary" disabled={cancellingId === row.id} onClick={async () => {
+                  setCancellingId(row.id);
+                  setScheduledError("");
+                  try { await Db.cancelScheduledSend(row.id); }
+                  catch (e) { setScheduledError(e.message || "Couldn't cancel that send."); }
+                  try { setScheduled(await Db.listScheduledSendsForJob(job.dbId)); } catch { /* the next open re-reads */ }
+                  setCancellingId("");
+                }}>{cancellingId === row.id ? "Working…" : d.failed ? "Dismiss" : "Cancel"}</Btn>
+              </div>
+            );
+          })}
+        </Blueprint>
       )}
 
       {/* One column: the job record leads (order: -1), then the work filed

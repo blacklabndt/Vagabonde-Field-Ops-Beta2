@@ -1699,6 +1699,43 @@ export const Db = {
   },
 
   // ── Reports ──────────────────────────────────────────────────────────
+  // ── Scheduled sends (Ask's timers) ───────────────────────────────────
+  // One row per send that waits for its time. The insert goes through RLS
+  // as the signed-in person — the policy accepts a row only in their own
+  // name, still queued, for a record they can read on that job — and the
+  // scheduled-sends tick gates it again when it fires. Never the device
+  // cache: a remembered "queued" would be a lie about what is going out.
+  async scheduleSend({ kind, recordId, jobId, label, to, message, runAt }) {
+    const { data: { user } } = await sbClient.auth.getUser();
+    if (!user) throw plainError("Not signed in.");
+    const { data, error } = await sbClient.from("scheduled_sends").insert({
+      kind, record_id: recordId, job_id: jobId, label, to_list: to, message: message || "", run_at: runAt, set_by: user.id
+    }).select("id").single();
+    if (error) throw error;
+    return data;
+  },
+
+  // Queued and failed rows on a job — what the strip shows. Sent and
+  // cancelled rows are history the strip does not list.
+  async listScheduledSendsForJob(jobDbId) {
+    const { data, error } = await sbClient.from("scheduled_sends")
+      .select("id, kind, label, to_list, run_at, status, error, set_by")
+      .eq("job_id", jobDbId).in("status", ["queued", "failed"]).order("run_at");
+    if (error) throw error;
+    return data || [];
+  },
+
+  // Queued → cancelled, or a failed row dismissed the same way. Conditional
+  // on the row still being one of those: zero rows back means it already
+  // went, or somebody else cancelled it, and the person is told so rather
+  // than shown a success over a send that happened.
+  async cancelScheduledSend(id) {
+    const { data, error } = await sbClient.from("scheduled_sends")
+      .update({ status: "cancelled" }).eq("id", id).in("status", ["queued", "failed"]).select("id");
+    if (error) throw error;
+    if (!data || !data.length) throw plainError("That send already went, or was cancelled meanwhile.");
+  },
+
   async listReportsForJob(jobDbId) {
     return OfflineCache.readThrough("reports." + jobDbId, async () => {
     const { data, error } = await sbClient

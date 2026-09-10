@@ -1406,6 +1406,21 @@ export function App() {
       await OfflineCache.remove(`tickets.${action.job.id}`);
       return action.done;
     }
+    // A scheduled send is one row, inserted as this person through RLS —
+    // the policy looks the record up under their own read policies — and
+    // gated again by the tick when it fires. A cancel is the conditional
+    // update the Job detail strip makes.
+    if (action.kind === "schedule_send") {
+      await Db.scheduleSend({
+        kind: action.send_kind, recordId: action.record_id, jobId: action.job.id, label: action.label,
+        to: action.to.join(","), message: action.message || "", runAt: action.run_at
+      });
+      return action.done;
+    }
+    if (action.kind === "cancel_scheduled") {
+      await Db.cancelScheduledSend(action.id);
+      return action.done;
+    }
     try {
       const job = await Db.getJobByNumber(action.job.job_number);
       if (action.kind === "draft_ticket") await startTicketForJob(job, action.seed);

@@ -1,13 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { askTurns, pushTurn, threadForSend, forgetAskThread, dropAction, isSendAction, jobLinks, mergeDictation, foldTranscripts, ASK_KEEP } from "./askThread.js";
+import { askTurns, pushTurn, threadForSend, forgetAskThread, dropAction, isConfirmAction, confirmLabel, jobLinks, mergeDictation, foldTranscripts, ASK_KEEP } from "./askThread.js";
 
-test("a send action is told from a draft by its kind", () => {
-  assert.equal(isSendAction({ kind: "send_jha" }), true);
-  assert.equal(isSendAction({ kind: "send_ticket_approval" }), true);
-  assert.equal(isSendAction({ kind: "draft_jha" }), false);
-  assert.equal(isSendAction(null), false);
-  assert.equal(isSendAction({}), false);
+test("a proposal the card confirms in place is told from a draft by its kind, and the button says what it does", () => {
+  assert.equal(isConfirmAction({ kind: "send_jha" }), true);
+  assert.equal(isConfirmAction({ kind: "send_ticket_approval" }), true);
+  assert.equal(isConfirmAction({ kind: "schedule_send" }), true);
+  assert.equal(isConfirmAction({ kind: "cancel_scheduled" }), true);
+  assert.equal(isConfirmAction({ kind: "draft_jha" }), false);
+  assert.equal(isConfirmAction(null), false);
+  assert.equal(isConfirmAction({}), false);
+  assert.equal(confirmLabel({ kind: "send_jha" }), "Send");
+  assert.equal(confirmLabel({ kind: "send_ticket_approval" }), "Send");
+  assert.equal(confirmLabel({ kind: "schedule_send" }), "Schedule");
+  assert.equal(confirmLabel({ kind: "cancel_scheduled" }), "Cancel it");
+  assert.equal(confirmLabel(null), "");
 });
 
 test("an action rides the answer turn for the card, never the send, and Not now drops it", () => {
