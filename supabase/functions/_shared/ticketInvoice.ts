@@ -12,9 +12,24 @@
 // the other two read as the signed-in user so row-level security still
 // decides what they can see. Same shape either way.
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { InvoiceData, InvoiceSettings } from "./invoice.ts";
 import { LEVEL_LEGEND } from "./levels.ts";
+
+// The two reads below are typed by hand: supabase-js infers a row only from
+// a literal select string, and these two are constants shared with nobody
+// else so that the column list is written once. A ticket row is the invoice's
+// own ticket columns with its three embeds; a crew row is the hours and the
+// person they belong to.
+type TicketReadRow = InvoiceData["ticket"] & {
+  jobs?: InvoiceData["job"] | null;
+  client_contact?: { name?: string | null } | null;
+  ticket_lines?: InvoiceData["lines"] | null;
+};
+interface CrewReadRow {
+  straight_hours?: number | string | null; ot_hours?: number | string | null; mileage_km?: number | string | null;
+  profiles?: { name?: string | null; level?: string | null; id_code?: string | null } | null;
+}
 
 // Everything the invoice prints, and nothing else.
 const TICKET_INVOICE_SELECT =
@@ -34,8 +49,7 @@ const TICKET_LINES_ORDER = ["line_order", { referencedTable: "ticket_lines" }] a
 const CREW_SELECT =
   "straight_hours, ot_hours, mileage_km, profiles(name, level, id_code)";
 
-// deno-lint-ignore no-explicit-any
-type Client = any;
+type Client = SupabaseClient;
 
 // The terms, the remit-to block and the GST number, off the one app_settings
 // row. Read with the service role the way _shared/mail.ts appSettings() does:
@@ -103,18 +117,16 @@ export async function loadInvoice(
   if (error) return { data: null, error: error.message };
   if (!ticket) return { data: null, error: "Ticket not found, or you don't have access to it." };
 
+  const row = ticket as unknown as TicketReadRow;
+  const crew = (crewRows ?? []) as unknown as CrewReadRow[];
   return {
     error: null,
     data: {
-      ticket: ticket as InvoiceData["ticket"],
-      // deno-lint-ignore no-explicit-any
-      job: ((ticket as any).jobs ?? {}) as InvoiceData["job"],
-      // deno-lint-ignore no-explicit-any
-      contact: ((ticket as any).client_contact?.name as string) || fallbackContact,
-      // deno-lint-ignore no-explicit-any
-      lines: ((ticket as any).ticket_lines ?? []) as InvoiceData["lines"],
-      // deno-lint-ignore no-explicit-any
-      crew: (crewRows ?? []).map((c: any) => ({
+      ticket: row,
+      job: row.jobs ?? {},
+      contact: row.client_contact?.name || fallbackContact,
+      lines: row.ticket_lines ?? [],
+      crew: crew.map(c => ({
         name: c.profiles?.name ?? "",
         level: c.profiles?.level ?? "",
         certNo: c.profiles?.id_code ?? "",

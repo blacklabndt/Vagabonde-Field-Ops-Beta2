@@ -9,6 +9,14 @@
 // checked first, so this can't be used as an open relay.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+// The report as the read below returns it. supabase-js types an embed as a
+// list without database types, so the row is named here and cast.
+interface JobEmbed { job_number?: string | null; project?: string | null; clients?: { name?: string | null } | null }
+interface ReportMailRow {
+  id: string; filename: string; pdf_key: string | null;
+  welds: number | string | null; result: string | null; jobs: JobEmbed | null;
+}
 import { sendMail, base64, corsHeaders, wrapEmail, esc, MAX_ATTACHMENT_BYTES,
          recipients, optionalRecipients, type Attachment } from "../_shared/mail.ts";
 
@@ -50,13 +58,14 @@ Deno.serve(async (req) => {
     // RLS that need nothing from each other, so they go out together; the
     // checks keep their order below. (RLS still applies to the report read,
     // so a user who can't see the report can't email it either.)
-    const [{ data: caller }, { data: report, error: rErr }] = await Promise.all([
+    const [{ data: caller }, { data: reportRead, error: rErr }] = await Promise.all([
       asUser.from("profiles").select("role").eq("id", user.id).single(),
       asUser
         .from("reports")
         .select("id, filename, pdf_key, welds, result, jobs(job_number, project, clients(name))")
         .eq("id", reportId).single()
     ]);
+    const report = reportRead as unknown as ReportMailRow | null;
     if (!["Admin", "Coordinator", "Technician"].includes(caller?.role ?? "")) {
       return new Response(JSON.stringify({ error: "Only a Technician, Coordinator or Admin can email a report." }), {
         status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" }
@@ -68,7 +77,7 @@ Deno.serve(async (req) => {
     // how a report quietly never goes out. Same guard as send-jha.
     if (!report.pdf_key) throw new Error("This report has no PDF on file — nothing was sent. Upload it first.");
 
-    const job = report.jobs as any;
+    const job: JobEmbed = report.jobs ?? {};
     const admin = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!

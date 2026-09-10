@@ -88,10 +88,11 @@
         "useExponentiationOperator": "error"
       },
       "suspicious": {
-        // The functions read supabase-js rows loosely on purpose; the
-        // erasable-TypeScript guard in backupShared.test.mjs is the type
-        // discipline that matters there.
-        "noExplicitAny": "off",
+        // A row a function reads is named by a small interface beside the
+        // read (supabase-js types an embed as a list without database
+        // types, so the read is cast to it); `unknown` where the shape is
+        // JSON another module owns. `any` is not written here.
+        "noExplicitAny": "error",
         // Every list keyed by index here is static text (notes, help
         // paragraphs, breadcrumbs) or rows with no state of their own —
         // HazardRow keeps none; the ratings live in the builder by name.

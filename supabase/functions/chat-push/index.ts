@@ -62,7 +62,9 @@ Deno.serve(async (req) => {
       return json({ ok: true, sent: 0, reason: "stale" });
     }
 
-    const p = msg.profiles as any;
+    // The sender's embed, typed by hand: supabase-js reads an embed as a
+    // list without database types.
+    const p = msg.profiles as unknown as { name?: string | null; first_name?: string | null; last_name?: string | null } | null;
     const name = [p?.first_name, p?.last_name].filter(Boolean).join(" ").trim() || p?.name || "Someone";
     const text = (msg.body || "").trim();
     const body = text
@@ -106,7 +108,7 @@ Deno.serve(async (req) => {
         );
         sent++;
       } catch (e) {
-        const code = (e as any)?.statusCode;
+        const code = (e as { statusCode?: number } | null)?.statusCode;
         // 404/410: the browser threw the subscription away. Anything
         // else is one phone missing one buzz — not worth failing the rest.
         if (code === 404 || code === 410) dead.push(s.id);

@@ -15,6 +15,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendMail, appSettings, corsHeaders, wrapEmail, esc, recipients, optionalRecipients } from "../_shared/mail.ts";
 import { invoicePage, gstLabelOf, invoiceTotals, lineCents } from "../_shared/invoice.ts";
+import type { InvoiceLine } from "../_shared/invoice.ts";
 import { loadInvoice } from "../_shared/ticketInvoice.ts";
 import { hashToken } from "../_shared/approvalToken.ts";
 
@@ -61,7 +62,7 @@ Deno.serve(async (req) => {
     // The ticket and the caller's role, two reads under the caller's own RLS
     // that need nothing from each other, go out together — "Chase all
     // unsigned" is thousands of these. The checks keep their order.
-    const [{ data: ticket, error: tErr }, { data: caller }] = await Promise.all([
+    const [{ data: ticketRead, error: tErr }, { data: caller }] = await Promise.all([
       // Only what the two gates read: the bill, its job and the work date
       // come from loadInvoice's own read below, so the three-table embed
       // this once carried was two RLS-checked subqueries per send for
@@ -72,6 +73,8 @@ Deno.serve(async (req) => {
         .eq("id", ticketId).single(),
       asUser.from("profiles").select("role").eq("id", user.id).single()
     ]);
+    // The three columns the two gates read, named rather than inferred.
+    const ticket = ticketRead as { id: string; technician_id: string | null; status: string | null } | null;
     if (tErr || !ticket) throw new Error("Ticket not found, or you don't have access to it");
     if (ticket.status === "Approved" || ticket.status === "Invoiced") {
       throw new Error("That ticket is already approved — nothing to send.");
@@ -84,7 +87,7 @@ Deno.serve(async (req) => {
     // this restores it. Without it, anyone could send a co-worker's ticket
     // to an inbox they control and self-approve a fabricated signature.
     const privileged = caller?.role === "Admin" || caller?.role === "Coordinator";
-    if ((ticket as any).technician_id !== user.id && !privileged) {
+    if (ticket.technician_id !== user.id && !privileged) {
       return new Response(JSON.stringify({ error: "Only the ticket's technician, or an Admin or Coordinator, can send it for approval." }), {
         status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
@@ -118,7 +121,7 @@ Deno.serve(async (req) => {
     if (invErr || !invoiceData) throw new Error(invErr ?? "Ticket not found");
     // The job and the work date the email names, off the same read the
     // attached bill is printed from.
-    const job = invoiceData.job as any;
+    const job = invoiceData.job;
     const workDate = invoiceData.ticket.work_date;
     const lines = invoiceData.lines ?? [];
 
@@ -134,7 +137,7 @@ Deno.serve(async (req) => {
     // able to quote a client two different numbers. invoice.ts's own
     // lineCents, not a copy of it: a float product here once printed the
     // lines a cent under the subtotal three rows below them.
-    const lineTotal = (l: any) => lineCents(l) / 100;
+    const lineTotal = (l: InvoiceLine) => lineCents(l) / 100;
     // One formula, shared with the invoice and the approval page — a third
     // hand-rolled copy here was a third number free to disagree.
     const totals = invoiceTotals(invoiceData);

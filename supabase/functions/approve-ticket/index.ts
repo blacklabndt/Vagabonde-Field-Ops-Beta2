@@ -27,7 +27,7 @@
 // link — pinned by [functions.approve-ticket] in supabase/config.toml so a
 // deploy can't quietly turn verification back on and 401 every approval.
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { esc, sendMail, appSettings, wrapEmail } from "../_shared/mail.ts";
 import type { AppSettings } from "../_shared/mail.ts";
 import { renderInvoice, invoiceCss, invoiceTotals, moneyCents, edmontonStamp, gstPercentOf } from "../_shared/invoice.ts";
@@ -35,6 +35,20 @@ import type { InvoiceData } from "../_shared/invoice.ts";
 import { loadInvoice } from "../_shared/ticketInvoice.ts";
 import { hashToken, invoiceFingerprint } from "../_shared/approvalToken.ts";
 import { secretsMatch } from "../_shared/constantTime.ts";
+
+// The ticket as the token lookup reads it: the columns the checks and the
+// office notices need, and nothing of the bill, which loadInvoice reads.
+// supabase-js types an embed as a list without database types, so the row
+// is named here and the read is cast to it.
+interface JobEmbed {
+  job_number?: string | null; project?: string | null;
+  clients?: { name?: string | null } | null;
+}
+interface TokenRow {
+  id: string; status: string | null; approved_at: string | null;
+  approval_expires_at: string | null; approval_sent_by: string | null;
+  jobs: JobEmbed | null;
+}
 
 // A signature is a typed name and, optionally, a small PNG. Anything bigger
 // than this is not a form a person filled in, and formData() would buffer
@@ -158,8 +172,7 @@ async function readBounded(req: Request, max: number): Promise<Uint8Array | null
 // account that pressed "Email for approval" (approval_sent_by — its address
 // is the auth user's), plus the configured reply-to as the office copy.
 // Nothing to send to is not an error; it is an install with no addresses.
-// deno-lint-ignore no-explicit-any
-async function officeRecipients(admin: any, row: any, settingsRead: Promise<AppSettings>) {
+async function officeRecipients(admin: SupabaseClient, row: TokenRow, settingsRead: Promise<AppSettings>) {
   // The settings row was read once at the top of the request; the sender's
   // address is the one read left here — a rep on a phone is waiting on the
   // receipt page behind this.
@@ -176,8 +189,7 @@ async function officeRecipients(admin: any, row: any, settingsRead: Promise<AppS
 
 // The rep pressed "Query this ticket": the same people who hear about an
 // approval hear what was asked, with the way forward spelled out.
-// deno-lint-ignore no-explicit-any
-async function notifyQuery(admin: any, row: any, who: string, text: string, settingsRead: Promise<AppSettings>) {
+async function notifyQuery(admin: SupabaseClient, row: TokenRow, who: string, text: string, settingsRead: Promise<AppSettings>) {
   const { to, office, settings } = await officeRecipients(admin, row, settingsRead);
   if (!to && !office) return;
   const job = row?.jobs ?? {};
@@ -199,11 +211,10 @@ async function notifyQuery(admin: any, row: any, who: string, text: string, sett
   });
 }
 
-// deno-lint-ignore no-explicit-any
-async function notifyApproval(admin: any, row: any, d: InvoiceData, signer: string, approvedAt: string, settingsRead: Promise<AppSettings>) {
+async function notifyApproval(admin: SupabaseClient, row: TokenRow, d: InvoiceData, signer: string, approvedAt: string, settingsRead: Promise<AppSettings>) {
   const { to, office, settings } = await officeRecipients(admin, row, settingsRead);
   if (!to && !office) return;
-  const job = row?.jobs ?? {};
+  const job: JobEmbed = row.jobs ?? {};
   const totals = invoiceTotals(d);
   const when = edmontonStamp(approvedAt);
   const subject = `Ticket ${row.id} approved by ${signer}`;
@@ -253,10 +264,9 @@ async function handle(req: Request): Promise<Response> {
   settingsRead.catch(() => {});
   const invoiceSettingsRead = settingsRead.then(s => s.invoice, () => null);
 
-  // Cast because the select list is built at runtime: supabase-js can only
-  // infer a row type from a literal, and falls back to an error type when the
-  // string is concatenated. Only the token columns are read off this — the
-  // invoice itself is loaded through loadInvoice below.
+  // Cast to TokenRow, the shape this read has: supabase-js types the embed
+  // as a list, and only the token columns are read off this — the invoice
+  // itself is loaded through loadInvoice below.
   const { data: row, error: readErr } = await admin
     .from("tickets")
     // queried_at is deliberately NOT read here any more: the mail gate below
@@ -267,8 +277,7 @@ async function handle(req: Request): Promise<Response> {
     // here as well pulled every line of the ticket twice per page load.
     .select("id, status, approved_at, approval_expires_at, approval_sent_by, jobs(job_number, project, clients(name))")
     .eq("approval_token", await hashToken(token)).maybeSingle();
-  // deno-lint-ignore no-explicit-any
-  const ticket = row as any;
+  const ticket = row as unknown as TokenRow | null;
 
   // A failed lookup is not an unknown token, and telling a rep their link is
   // dead when the database merely hiccuped sends them chasing the wrong thing.
@@ -397,7 +406,7 @@ async function handle(req: Request): Promise<Response> {
         // telling was attempted, to buy a retry nobody has asked for. The
         // failure is on the error log below and the query is on the tracker
         // either way.
-        try { await notifyQuery(admin, row, who, text, settingsRead); }
+        try { await notifyQuery(admin, ticket, who, text, settingsRead); }
         catch (e) { await logError("approve-ticket", "Queried, but the office wasn't told: " + (e as Error).message, { ticket: ticket.id }); }
       }
       // The same receipt whether the office was mailed or the cooldown held
@@ -483,7 +492,7 @@ async function handle(req: Request): Promise<Response> {
     // the office address copied when one is configured. Best effort: a mail
     // failure is logged and never stands between the rep and their receipt.
     try {
-      await notifyApproval(admin, row, invoiceData!, name, signedRows[0].approved_at ?? approvedAt, settingsRead);
+      await notifyApproval(admin, ticket, invoiceData!, name, signedRows[0].approved_at ?? approvedAt, settingsRead);
     } catch (e) {
       await logError("approve-ticket", "Approved, but the office wasn't told: " + (e as Error).message, { ticket: ticket.id });
     }

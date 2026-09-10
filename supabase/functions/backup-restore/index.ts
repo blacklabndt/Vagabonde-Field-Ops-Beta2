@@ -24,7 +24,6 @@
 //   {action:"restore_jobs"} an Admin, with the job ids picked off the index
 //   {action:"advance"}      the internal secret, one slice
 
-// deno-lint-ignore-file no-explicit-any
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   LOAD_ORDER, WIPE_ORDER, TABLE_KEYS, PROFILE_REFS, LIVE_PARENT_REFS,

@@ -25,7 +25,6 @@
 // not the engine: it starts what is due, picks up what the chain dropped,
 // and reclaims a run whose heartbeat went quiet mid-slice.
 
-// deno-lint-ignore-file no-explicit-any
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   LOAD_ORDER, BUCKETS, CURSOR_COLUMN, TABLE_KEYS,
@@ -60,7 +59,15 @@ const APP_VERSION = "0.92-beta 2";
 
 const RUN_COLUMNS = "id, kind, status, phase, cursor, counts, folder_id, folder_name, created_at, started_at, heartbeat_at";
 
-type Run = Record<string, any>;
+// A backup_runs row as the tick and the slices read it. cursor and counts
+// are JSON the phases own (RunCursor, VerifyCursor), revived by their own
+// readers, so they stay unknown here.
+interface Run {
+  id: string; kind: string; status: string; phase: string | null;
+  cursor: unknown; counts: unknown; notes: unknown; error: string | null;
+  folder_id: string | null; folder_name: string | null;
+  created_at: string; started_at: string | null; heartbeat_at: string | null; finished_at: string | null;
+}
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -1140,7 +1147,7 @@ async function stepManifest(
   await withRetry("Uploading the file index", async () =>
     drive.upload(folderId, FILES_INDEX_NAME, await gzip(new TextEncoder().encode(JSON.stringify(index))), "application/gzip"));
   m = recordFileIndex(m, reconciled ? records.filter(r => r.sha256).length : 0, FILES_INDEX_NAME, c.spot);
-  m.jobs = jobsIndex(c.index as any);
+  m.jobs = jobsIndex(c.index as Parameters<typeof jobsIndex>[0]);
   m = finishManifest(m, new Date().toISOString());
 
   await withRetry("Uploading the manifest", () =>
@@ -1163,7 +1170,7 @@ async function restoreSources(db: SupabaseClient): Promise<string[]> {
   const { data, error } = await db.from("backup_runs").select("folder_name")
     .in("kind", RESTORE_KINDS).in("status", ["queued", "running"]);
   if (error) throw error;
-  return (data ?? []).map((r: Run) => String(r.folder_name ?? "")).filter(Boolean);
+  return (data ?? []).map((r: Pick<Run, "folder_name">) => String(r.folder_name ?? "")).filter(Boolean);
 }
 
 async function stepRetention(

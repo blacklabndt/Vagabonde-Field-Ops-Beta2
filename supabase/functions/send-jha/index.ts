@@ -9,6 +9,15 @@
 // checked first, so this can't be used as an open relay.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+// The assessment as the read below returns it. supabase-js types an embed
+// as a list without database types, so the row is named here and cast.
+interface JobEmbed { job_number?: string | null; project?: string | null; clients?: { name?: string | null } | null }
+interface JhaMailRow {
+  id: string; signed_by: string | null; pdf_key: string | null; template: string | null;
+  work_date: string | null; status: string | null; site_rep: string | null;
+  profiles: { name?: string | null } | null; jobs: JobEmbed | null;
+}
 import { sendMail, base64, corsHeaders, wrapEmail, esc, MAX_ATTACHMENT_BYTES,
          recipients, optionalRecipients, type Attachment } from "../_shared/mail.ts";
 
@@ -45,13 +54,14 @@ Deno.serve(async (req) => {
     // The assessment and the caller's role, two reads under the caller's own
     // RLS that need nothing from each other, go out together; the checks
     // keep their order.
-    const [{ data: jha, error: jErr }, { data: caller }] = await Promise.all([
+    const [{ data: jhaRead, error: jErr }, { data: caller }] = await Promise.all([
       asUser
         .from("jhas")
         .select("id, signed_by, pdf_key, template, work_date, status, site_rep, profiles(name), jobs(job_number, project, clients(name))")
         .eq("id", jhaId).single(),
       asUser.from("profiles").select("role").eq("id", user.id).single()
     ]);
+    const jha = jhaRead as unknown as JhaMailRow | null;
     if (jErr || !jha) throw new Error("Assessment not found, or you don't have access to it");
     if (!jha.pdf_key) throw new Error("This assessment has no PDF yet — render it first");
 
@@ -60,7 +70,7 @@ Deno.serve(async (req) => {
     // worker names, cert numbers, dosimetry and signatures, and the send
     // signs a 14-day URL with the service role. The tech who filed it may
     // send it; otherwise it takes a Technician, Coordinator or Admin.
-    const mayEmailJha = (jha as any).signed_by === user.id
+    const mayEmailJha = jha.signed_by === user.id
       || ["Admin", "Coordinator", "Technician"].includes(caller?.role ?? "");
     if (!mayEmailJha) {
       return new Response(JSON.stringify({ error: "Only the technician who filed this assessment, or a Technician, Coordinator or Admin, can email it." }), {
@@ -68,7 +78,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const job = jha.jobs as any;
+    const job: JobEmbed = jha.jobs ?? {};
     const filename = jha.pdf_key.split("/").pop() ?? "jha.pdf";
     const admin = createClient(
       Deno.env.get("SUPABASE_URL")!,
@@ -112,7 +122,7 @@ Deno.serve(async (req) => {
 
     const subject = `${job.job_number} · ${job.project} — hazard assessment${jha.work_date ? " (" + jha.work_date + ")" : ""}`;
     const note = (message || "").trim();
-    const signer = (jha.profiles as any)?.name ?? "";
+    const signer = jha.profiles?.name ?? "";
 
     const html = wrapEmail(`
       <div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#5980a6;margin-bottom:6px">Hazard assessment</div>

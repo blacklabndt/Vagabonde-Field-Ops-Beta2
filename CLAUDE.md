@@ -30,7 +30,19 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   means to run on an id rather than on each reload of the record, or once
   at mount, or on a screen whose props cannot change without a remount,
   carries a biome-ignore saying which; a new hook either lists what it
-  reads or says in its comment why not.
+  reads or says in its comment why not. `any` is refused in the functions
+  too: a row a function reads is named by a small interface beside the
+  read and the read is cast to it (supabase-js types an embed as a list
+  without database types, and a select built from a constant string as
+  nothing), `unknown` where the shape is JSON another module owns. Nothing
+  in `npm test` type-checks the functions (no Deno here; the deploy
+  bundler only strips types), but `npx --yes deno@2 check
+  supabase/functions/*/index.ts` does — chat-push needs
+  `--node-modules-dir=auto` run from outside the repo for its npm import —
+  and it reports 34 pre-existing errors (typed arrays into Blob and Request
+  under TypeScript 6, implicit-any parameters in backupSchedule.ts, a
+  FakeDrive without `copy`) that the deploy runtime does not. A type change
+  is judged against that baseline, not against zero.
 - Build: `npm --prefix vite-app run build`
 - Deploy: `npm run build && npx wrangler deploy` (from repo root)
 - Dev server: use the `.claude/launch.json` `beta2-dev` config, not Bash

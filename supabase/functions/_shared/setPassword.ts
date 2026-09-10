@@ -5,10 +5,10 @@
 // recovery link, so it lands on the app's set-password screen exactly as
 // "Forgot password" does, and it works once.
 
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendMail, appSettings, wrapEmail, esc } from "./mail.ts";
 
-// deno-lint-ignore no-explicit-any
-export async function sendSetPasswordLink(admin: any, email: string, name: string, reason: "invite" | "reset") {
+export async function sendSetPasswordLink(admin: SupabaseClient, email: string, name: string, reason: "invite" | "reset") {
   const settings = await appSettings();
   // Back to the app itself: the approval base URL is the app's own address
   // (the Worker), so its origin is where the link should land. Without one

@@ -15,6 +15,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { PDFDocument, StandardFonts, rgb } from "https://esm.sh/pdf-lib@1.17.1";
+import type { PDFFont, RGB } from "https://esm.sh/pdf-lib@1.17.1";
 
 // Inlined rather than imported from ../_shared: the dashboard's editor deploys
 // a single file, and a relative import fails to bundle there.
@@ -23,6 +24,43 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS"
 };
+
+// The assessment as the read below returns it, and the JSON the builder
+// (vite-app/src/components/jhaMobile.jsx: BLANK_SITE, BLANK_EQUIP, the
+// dosimetry rows, SEED_HAZARDS) writes into its three JSON columns. Every
+// field is optional: a row from before a field existed still draws.
+interface JobEmbed {
+  job_number?: string | null; project?: string | null; lsd?: string | null; afe?: string | null;
+  clients?: { name?: string | null } | null; contractors?: { name?: string | null } | null;
+}
+interface JhaSite {
+  weather?: string | null; temperature?: string | null; communication?: string | null;
+  commOther?: boolean | null; muster?: string | null; hospital?: string | null; firstAid?: string | null;
+}
+interface JhaEquipment {
+  ppe?: { hardHat?: boolean; glasses?: boolean; boots?: boolean; fr?: boolean; gloves?: boolean } | null;
+  h2sSerial?: string | null; h2sBumpTest?: boolean | null;
+  redSerial?: string | null; redSurveyMr?: string | number | null;
+  collimator?: boolean | null; emergencyKit?: boolean | null;
+}
+interface JhaDetails { site?: JhaSite | null; equipment?: JhaEquipment | null }
+interface JhaWorker {
+  slot?: number | null; name?: string | null; unit?: string | null; idCode?: string | null;
+  tld?: string | null; drd?: string | null; alarm?: string | null;
+  endReading?: number | string | null; doseMr?: number | string | null;
+}
+interface JhaHazard {
+  name?: string | null; control?: string | null;
+  rating?: { s?: number | null; p?: number | null; f?: number | null } | null;
+}
+interface JhaRow {
+  id: string; template: string | null; hazards: unknown; dosimetry: unknown; details: JhaDetails | null;
+  unit_number: string | null; site_rep: string | null; signed_at: string | null; work_date: string | null;
+  status: string | null; closed_at: string | null; pdf_key: string | null;
+  jobs: JobEmbed | null; profiles: { name?: string | null } | null;
+}
+// What a drawn line may be told besides its words and its place.
+interface TextOptions { size?: number; bold?: boolean; color?: RGB }
 
 const PAGE = { w: 612, h: 792 };
 const M = 26;                       // page margin
@@ -61,8 +99,11 @@ Deno.serve(async (req) => {
       .select("id, template, hazards, dosimetry, details, unit_number, site_rep, signed_at, work_date, status, closed_at, pdf_key, jobs(job_number, project, lsd, afe, clients(name), contractors(name)), profiles(name)")
       .eq("id", jhaId).single();
     if (error || !jha) throw new Error("That hazard assessment couldn't be found.");
+    // supabase-js types the embeds of that read as lists; this is the row's
+    // real shape.
+    const row = jha as unknown as JhaRow;
 
-    const bytes = await drawJha(jha as any);
+    const bytes = await drawJha(row);
 
     // Written with the service role: the bucket is private, and the caller
     // needs read access to the file, not write access to the bucket.
@@ -70,12 +111,12 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
-    const job = (jha as any).jobs ?? {};
+    const job: JobEmbed = row.jobs ?? {};
     // Job numbers are free text. Storage keys are not: # and ? truncate the
     // key, % breaks the request, non-ASCII is refused outright. Same
     // folding as storageKeySafe in vite-app/src/data.js.
     const safe = keySafe(job.job_number, "job");
-    const key = (jha as any).pdf_key || `${safe}/${safe}-JHA-${jhaId}.pdf`;
+    const key = row.pdf_key || `${safe}/${safe}-JHA-${jhaId}.pdf`;
 
     const { error: upErr } = await admin.storage.from("jhas")
       .upload(key, bytes, { contentType: "application/pdf", upsert: true });
@@ -86,7 +127,7 @@ Deno.serve(async (req) => {
     // JHA the app cannot open, cannot attach and will re-render to a fresh
     // key next time — and answering ok:true would hide all of that behind a
     // green tick.
-    if (key !== (jha as any).pdf_key) {
+    if (key !== row.pdf_key) {
       const { error: markErr } = await admin.from("jhas").update({ pdf_key: key }).eq("id", jhaId);
       if (markErr) {
         throw new Error(`The PDF was filed, but the assessment couldn't be pointed at it — it will still show as having no PDF. Try again. (${markErr.message})`);
@@ -111,14 +152,14 @@ async function logError(functionName: string, message: string, context: Record<s
   } catch { /* logging is best-effort; never let it mask the real error */ }
 }
 
-async function drawJha(jha: any): Promise<Uint8Array> {
+async function drawJha(jha: JhaRow): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   let page = doc.addPage([PAGE.w, PAGE.h]);
   let y = PAGE.h - M;
 
-  const job = jha.jobs ?? {};
+  const job: JobEmbed = jha.jobs ?? {};
   const client = job.clients?.name ?? "";
   const contractor = job.contractors?.name ?? "";
   // The day the assessment covers, which is what this document is dated. It
@@ -128,12 +169,12 @@ async function drawJha(jha: any): Promise<Uint8Array> {
   // Rows predating work_date fall back to the filing timestamp, which for
   // those is the same day.
   const assessmentDate = fmtDay(jha.work_date) || fmtDate(jha.signed_at);
-  const details = jha.details ?? {};
-  const site = details.site ?? {};
-  const eq = details.equipment ?? {};
-  const ppe = eq.ppe ?? {};
-  const workers: any[] = Array.isArray(jha.dosimetry) ? jha.dosimetry : [];
-  const hazards: any[] = Array.isArray(jha.hazards) ? jha.hazards : [];
+  const details: JhaDetails = jha.details ?? {};
+  const site: JhaSite = details.site ?? {};
+  const eq: JhaEquipment = details.equipment ?? {};
+  const ppe: NonNullable<JhaEquipment["ppe"]> = eq.ppe ?? {};
+  const workers: JhaWorker[] = Array.isArray(jha.dosimetry) ? jha.dosimetry : [];
+  const hazards: JhaHazard[] = Array.isArray(jha.hazards) ? jha.hazards : [];
 
   // ── drawing helpers ────────────────────────────────────────────────
   const W = PAGE.w - M * 2;
@@ -143,7 +184,7 @@ async function drawJha(jha: any): Promise<Uint8Array> {
   // next row of this hand-laid grid put there. Every caller that has text
   // wider than its column runs it through wrapLines first and draws the
   // lines itself, so the layout knows how tall it has become.
-  const text = (s: string, x: number, yy: number, o: any = {}) =>
+  const text = (s: string, x: number, yy: number, o: TextOptions = {}) =>
     page.drawText(foldAscii(s), {
       x, y: yy, size: o.size ?? 8, font: o.bold ? bold : font,
       color: o.color ?? INK
@@ -396,7 +437,7 @@ function foldAscii(s: string): string {
     .replace(/[^\x20-\xFF]/g, "");
 }
 
-function wrapLines(s: string, width: number, font: any, size: number): string[] {
+function wrapLines(s: string, width: number, font: PDFFont, size: number): string[] {
   if (!s) return [];
   const out: string[] = [];
   let line = "";
@@ -419,7 +460,7 @@ function wrapLines(s: string, width: number, font: any, size: number): string[] 
 // be put through Date parsing — "2026-08-12" parsed as UTC midnight renders as
 // the 11th anywhere west of Greenwich, which is where every crew is.
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const fmtDay = (day: string) => {
+const fmtDay = (day: string | null | undefined) => {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day ?? "");
   return m ? `${m[3]} ${MONTHS[Number(m[2]) - 1]} ${m[1]}` : "";
 };
@@ -432,14 +473,14 @@ const fmtDay = (day: string) => {
 // deploys as a single file (see the corsHeaders note at the top) and cannot
 // import it.
 const EDMONTON = "America/Edmonton";
-const fmtDate = (ts: string) => {
+const fmtDate = (ts: string | null | undefined) => {
   if (!ts) return "";
   const d = new Date(ts);
   return Number.isNaN(+d) ? "" : d.toLocaleDateString("en-CA", { timeZone: EDMONTON, day: "2-digit", month: "short", year: "numeric" });
 };
 // The year rides along: a hazard assessment is kept for years, and "02 Sep,
 // 18:30" on a filed record does not say which September.
-const fmtStamp = (ts: string) => {
+const fmtStamp = (ts: string | null | undefined) => {
   if (!ts) return "";
   const d = new Date(ts);
   return Number.isNaN(+d) ? "" : d.toLocaleString("en-CA", { timeZone: EDMONTON, day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
