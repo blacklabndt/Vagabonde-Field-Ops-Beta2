@@ -483,3 +483,10 @@ verify_jwt = false
 # on active Admin profiles, never one from the request.
 [functions.admin-digest]
 verify_jwt = false
+
+# The five-minute clock for scheduled sends (Ask's timers). The database's
+# cron job carries no user JWT, so the gateway check is off; the function
+# demands x-internal-secret before it reads a byte, and every send it makes
+# is gated again against the profile of the person who scheduled it.
+[functions.scheduled-sends]
+verify_jwt = false
