@@ -347,7 +347,7 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
 - App configuration lives in the app_settings table (one enforced row,
   Admin-only RLS), edited from the Admin screen (tab key "mail", label
   "Admin"): Resend key + sending addresses, the approval-link base URL,
-  the KLIPY key. Email rides Resend (shared module
+  the KLIPY key, the Anthropic key Ask calls Claude with. Email rides Resend (shared module
   supabase/functions/_shared/mail.ts). The old env secrets
   (RESEND_API_KEY, MAIL_FROM_*, KLIPY_API_KEY, APPROVAL_BASE_URL) are
   FALLBACKS only — a table value wins, so rotating a secret does nothing
@@ -366,6 +366,25 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   carries z-index 100 (above the bar, banner and drawer; below the egg
   overlay at 200 and the toast at 300) — one rendered ahead of main once
   sat under the jobs table and took no clicks.
+- Ask (the square button bottom-right on every screen, `askPanel.jsx`) is
+  the app-wide assistant, this slice over the tracker: the `ask` Edge
+  Function opens the door on the caller's JWT, reads the caller's tabs,
+  offers Claude (`ASK_MODEL` in `_shared/askLoop.ts`, Opus 5) only the
+  tools behind those tabs (`_shared/askTools.ts` — the tracker's three
+  RPCs) and runs every tool AS THE CALLER, so RLS and the price rule decide
+  what it sees; nothing it can reach writes. A write tool, when one comes,
+  proposes and the app's own form and save path do the writing after the
+  person confirms — never the function. The loop is pure and node-tested
+  against a scripted API (eight reads or 100 s a question, then it answers
+  from what it has; every tool result is wrapped as records the prompt
+  calls data and never an instruction — a client rep's query text is the
+  field an outsider writes). The key is `app_settings.anthropic_api_key`
+  (Admin screen, env fallback, in APP_SETTINGS_SECRETS); without one the
+  function refuses in plain words. The thread lives in memory
+  (`askThread.js`, forgotten at sign-out beside the chat drafts) and
+  nowhere else; job numbers in an answer link by membership like the chat.
+  It needs no tab, help entry or preset of its own. Spec:
+  `docs/superpowers/specs/2026-09-10-ask-assistant-design.md`.
 - The screen is in the address bar: `vite-app/src/route.js` (pure, node-
   tested) spells `#/board`, `#/chat`, `#/job/S-10113` and
   `#/job/S-10113/ticket`; App.jsx pushes one history entry per screen
@@ -755,7 +774,8 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   reads both files off disk, strips the types from the function's with
   Node's own stripper, folds the whitespace and compares them. Change one,
   change the other, in the same commit; an interface goes ABOVE the marker,
-  where the twin has nothing to match. Eight shared modules — `backupSchedule.ts`,
+  where the twin has nothing to match. Ten shared modules — `backupSchedule.ts`,
+  `askTools.ts`, `askLoop.ts`,
   `backupTables.ts`, `backupManifest.ts`, `backupRun.ts`, `backupOauth.ts`,
   `drive.ts`, `gzip.ts` and `constantTime.ts` — are erasable TypeScript with
   no imports of their own (`backupManifest.ts` may name `backupSchedule.ts`,

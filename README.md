@@ -577,6 +577,8 @@ vite-app/
     savingWords.js          "Saving…" against "Saved on this device" — what the
                             button says while a save is on its way
     chatDrafts.js           the chat composer held across screen changes, per account
+    askThread.js            Ask's thread, in memory for the session, and the job-number
+                            links in an answer (membership, like the chat)
     dosimetryPrompt.js      the serials offer's pure questions: which typed serial is
                             news, what keeping writes, and the once-a-session mark
     wipDrafts.js            the half-entered work Open tickets lists off the device
@@ -622,6 +624,7 @@ vite-app/
       queuePanel.jsx        The offline-queue badge and its what's-waiting panel
       helpTip.jsx           The screen's popup, one screen's entry from help.js
       featureRequest.jsx    The drawer's Feature request form
+      askPanel.jsx          Ask — the square launcher bottom-right and the card it opens
       flappy880.jsx         One of the two easter eggs
   e2e/                      Playwright against the live project — auth.setup.js signs
                             the accounts in once, then fieldOps, networkSync and
@@ -644,13 +647,17 @@ supabase/
                             chat-retention), the automatic backup (backup-oauth,
                             backup-run, backup-restore), the morning digest to the
                             Admins (admin-digest), the drawer's feature-request
-                            mail, gif-search and mail-test; plus
+                            mail, gif-search, mail-test and ask (the app-wide
+                            assistant: a question answered by Claude from the tools
+                            behind the caller's own tabs, every read as the caller); plus
                             `_shared/`, which is library code, not a function —
                             invoice/JHA rendering, mail, the approval token, and the
                             nine modules the backup is built from (drive.ts and its
                             three vendors, backupTables/Manifest/Schedule/Run/
-                            Restore/Oauth/Common, gzip), most of them erasable
-                            TypeScript the node suite imports directly
+                            Restore/Oauth/Common, gzip) and Ask's two (askTools, the
+                            tools and their tabs; askLoop, the Messages API loop),
+                            most of them erasable TypeScript the node suite imports
+                            directly
   handover/                 the handover runbooks — the two wipes, the probes a
                             migration was checked with, and any DB fix written but
                             not yet applied (nothing is waiting there now)
