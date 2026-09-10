@@ -535,6 +535,12 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
   }, [weldLines, otherLines, orphanLines, crew, workDate, delays, loadingTicket,
       ticketClientContact, ticketContractorContact, clientKey]);
 
+  // The Undo on a removed line or crew member only reaches this screen's
+  // state, and the toast outlives the screen — a save navigates away and it
+  // followed onto the job page, where the button did nothing and said so by
+  // vanishing. It goes with the screen.
+  useEffect(() => () => Toasts.clearAction(), []);
+
   const discardRecovered = () => {
     OfflineCache.remove(wipKey);
     setRecovered(null);
@@ -823,6 +829,10 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
       oddConfirmed.current = oddKey;
     }
 
+    // Past this point the lines and crew have been read into a payload — a
+    // queued save keeps this screen up, and an Undo pressed after it would
+    // change the form without changing what is going to be sent.
+    Toasts.clearAction();
     setSaving(true);
     setSavingSend(!!sendForApproval);
     setSaveError("");

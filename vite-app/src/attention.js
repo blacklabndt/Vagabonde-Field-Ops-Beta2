@@ -35,7 +35,8 @@ const KIND_WORDS = {
   backup: "backup",
   before_restore: "safety backup",
   restore_all: "restore",
-  restore_jobs: "job restore"
+  restore_jobs: "job restore",
+  verify: "file check"
 };
 
 // Plain distance in the past. Hours below a day because "0 days ago" is

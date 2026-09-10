@@ -70,6 +70,15 @@ test("a failed restore is not called a backup", () => {
   assert.equal(find(items, "failed-run").text, "Last restore failed 2 hours ago");
 });
 
+test("a failed file check is not called a backup either", () => {
+  const state = {
+    connected: true,
+    last_run: { kind: "verify", status: "failed", finished_at: agoMs(hours(2)) }
+  };
+  const items = attentionItems(state, [], NOW);
+  assert.equal(find(items, "failed-run").text, "Last file check failed 2 hours ago");
+});
+
 test("a run that finished is not news", () => {
   const state = {
     connected: true,

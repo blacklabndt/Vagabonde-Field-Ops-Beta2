@@ -124,3 +124,30 @@ test("tone defaults to ok", () => {
   off();
   assert.equal(seen[0].tone, "ok");
 });
+
+test("a toast carrying an action is never deduped: the same removal twice is two Undos", () => {
+  const seen = [];
+  const off = Toasts.subscribe(t => seen.push(t));
+  const m = unique();
+  const action = { label: "Undo", onClick() {} };
+  Toasts.show(m, "ok", false, action);
+  Toasts.show(m, "ok", false, action);
+  off();
+  assert.equal(seen.length, 2, "x, Undo, x again must offer the Undo again");
+  assert.equal(seen[1].action, action);
+});
+
+test("clearAction takes down an action toast and leaves a plain one alone", () => {
+  const seen = [];
+  const off = Toasts.subscribe(t => seen.push(t));
+  Toasts.show(unique(), "ok", false, { label: "Undo", onClick() {} });
+  Toasts.clearAction();
+  assert.equal(seen.length, 2);
+  assert.equal(seen[1], null, "an action toast is cleared with a null");
+  const plain = unique();
+  Toasts.show(plain);
+  Toasts.clearAction();
+  off();
+  assert.equal(seen.length, 3, "a plain confirmation is not cleared");
+  assert.equal(seen[2].text, plain);
+});

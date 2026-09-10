@@ -63,7 +63,7 @@ test("a record that is not the word yes leaves the help where it is", () => {
   assert.equal(tipDue(store, "abc", "board", tipRun()), true);
 });
 
-test("no account, no screen and no run each mean nothing is owed", () => {
+test("no account and no screen mean nothing is owed; a missing run does not", () => {
   const store = fakeStore();
   assert.equal(tipDue(store, null, "board", tipRun()), false);
   assert.equal(tipDue(store, "abc", "", tipRun()), false);

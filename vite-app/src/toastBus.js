@@ -16,6 +16,9 @@ const listeners = new Set();
 // identical message inside this window is dropped.
 const DEDUPE_MS = 1200;
 let last = { text: "", at: 0 };
+// What is on screen right now, so a screen on its way out can take down its
+// own Undo without silencing somebody else's confirmation.
+let showing = null;
 
 // Replaying the offline queue calls the same Db methods a person would, but
 // nobody pressed anything — the work was queued hours ago on a lease with no
@@ -38,9 +41,26 @@ export const Toasts = {
   show(text, tone = "ok", force = false, action = null) {
     if (!text || (muted && !force)) return;
     const now = Date.now();
-    if (text === last.text && now - last.at < DEDUPE_MS) return;
+    // A toast with an Undo on it is never noise: the same "Removed Bob"
+    // inside the window is a second removal — × , Undo, × again — and
+    // dropping it took the person's hours off with no way back.
+    if (!action && text === last.text && now - last.at < DEDUPE_MS) return;
     last = { text, at: now };
-    listeners.forEach(fn => fn({ text, tone, at: now, action }));
+    showing = { text, tone, at: now, action };
+    listeners.forEach(fn => fn(showing));
+  },
+
+  // Take down a toast that is carrying an action. An Undo means something
+  // only on the screen that raised it, and only until the removal has been
+  // written: left up, it followed a saved ticket onto the job page, where
+  // pressing it set state on a component that had gone — the button vanished
+  // and nothing came back. A plain confirmation is left alone, so "Ticket
+  // saved" still gets its moment.
+  clearAction() {
+    if (!showing || !showing.action) return;
+    showing = null;
+    last = { text: "", at: 0 };
+    listeners.forEach(fn => fn(null));
   },
 
   // Counted rather than boolean, so overlapping replays can't unmute early.
