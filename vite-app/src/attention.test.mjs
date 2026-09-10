@@ -5,9 +5,11 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
-  attentionItems, agoPhrase, ERRORS_WINDOW_MS, OVERDUE_GRACE_MS,
-  attentionSignature, attentionDismissedKey, attentionSuppressed, dismissAttention
+  attentionItems, agoPhrase, ERRORS_WINDOW_MS, OVERDUE_GRACE_MS, KIND_WORDS,
+  attentionSignature, attentionDismissedKey, attentionSuppressed, dismissAttention,
+  clearDismissedAttention
 } from "./attention.js";
 
 const NOW = Date.parse("2026-09-06T18:00:00Z");
@@ -231,4 +233,34 @@ test("nothing to say is never suppressed, and nothing is written for a non-signa
   dismissAttention(store, "", "sig");
   dismissAttention(store, "admin3", "");
   assert.deepEqual(Object.keys(store.rows), [attentionDismissedKey("admin1")]);
+});
+
+test("a failed file check does not send the office to a button that is not there", () => {
+  const state = {
+    connected: true,
+    last_run: { kind: "verify", status: "failed", finished_at: agoMs(hours(2)) }
+  };
+  const it = find(attentionItems(state, [], NOW), "failed-run");
+  assert.match(it.where, /fortnight/);
+  assert.doesNotMatch(it.where, /start another/);
+  const backup = { connected: true, last_run: { kind: "backup", status: "failed", finished_at: agoMs(hours(2)) } };
+  assert.match(find(attentionItems(backup, [], NOW), "failed-run").where, /start another/);
+});
+
+test("clearing a dismissal forgets the signature, so the same trouble returning is news again", () => {
+  const store = fakeStore();
+  dismissAttention(store, "admin1", "sig");
+  assert.equal(store.load(attentionDismissedKey("admin1"), ""), "sig");
+  clearDismissedAttention(store, "admin1");
+  assert.equal(store.load(attentionDismissedKey("admin1"), "x"), "", "an empty signature matches nothing");
+  // No account, nothing written.
+  clearDismissedAttention(store, "");
+  assert.deepEqual(Object.keys(store.rows), [attentionDismissedKey("admin1")]);
+});
+
+test("the digest's kind words are the strip's, read back from the function", () => {
+  const src = fs.readFileSync(new URL("../../supabase/functions/admin-digest/index.ts", import.meta.url), "utf8");
+  const block = src.match(/const KIND_WORDS[^=]*=\s*\{([\s\S]*?)\};/)[1].replace(/\/\/.*$/gm, "");
+  const pairs = Object.fromEntries([...block.matchAll(/(\w+):\s*"([^"]*)"/g)].map(m => [m[1], m[2]]));
+  assert.deepEqual(pairs, KIND_WORDS);
 });

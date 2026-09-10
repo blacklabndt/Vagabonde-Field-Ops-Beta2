@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { primaryContact, contactsForOrg, seesPrices as pricesFor, Store } from "../data.js";
-import { attentionItems, attentionSignature, attentionDismissedKey, dismissAttention } from "../attention.js";
+import { attentionItems, attentionSignature, attentionDismissedKey, dismissAttention, clearDismissedAttention } from "../attention.js";
 import { Db } from "../db.js";
 import { OfflineQueue } from "../offlineQueue.js";
 import { tabList, Blueprint, Btn, TableScroll, TagX, Field, Dialog, ErrorBox, StatusTag, useMissingFields, RowsPerPage, useRowsPerPage, SearchSelect, RequiredLeft } from "./common.jsx";
@@ -98,9 +98,13 @@ export function HomeScreen({ onCreateJob, onOpenJob, onStartTicket, currentUser,
   // it. The daily digest email says the same things when nobody is
   // looking at all.
   const [attention, setAttention] = useState([]);
+  // Whether both reads answered. Until they have — and when one refused or
+  // the tablet was out of range — an empty strip means "nothing could be
+  // read", not "all clear", and the dismissal below must not be lifted on it.
+  const [attentionRead, setAttentionRead] = useState(false);
   const isAdmin = !!currentUser && currentUser.role === "Admin";
   useEffect(() => {
-    if (!isAdmin) { setAttention([]); return; }
+    if (!isAdmin) { setAttention([]); setAttentionRead(false); return; }
     let live = true;
     (async () => {
       const [state, errors] = await Promise.allSettled([
@@ -112,6 +116,7 @@ export function HomeScreen({ onCreateJob, onOpenJob, onStartTicket, currentUser,
         errors.status === "fulfilled" ? errors.value : null,
         Date.now()
       ));
+      setAttentionRead(state.status === "fulfilled" && errors.status === "fulfilled");
     })();
     return () => { live = false; };
   }, [isAdmin]);
@@ -128,6 +133,17 @@ export function HomeScreen({ onCreateJob, onOpenJob, onStartTicket, currentUser,
   const [dismissedSig, setDismissedSig] = useState("");
   useEffect(() => { setDismissedSig(uid ? Store.load(attentionDismissedKey(uid), "") : ""); }, [uid]);
   const showAttention = signature !== "" && signature !== dismissedSig;
+  // A dismissal belongs to the trouble that was showing, so it goes when that
+  // trouble does — once the reads have answered (attentionRead). Without
+  // this the one refusal whose words never change — the drive's
+  // "invalid_grant" — signed identically the day it came back and stayed
+  // waved away for ever, with backups not running and Home silent.
+  useEffect(() => {
+    if (attentionRead && signature === "" && uid && dismissedSig) {
+      clearDismissedAttention(Store, uid);
+      setDismissedSig("");
+    }
+  }, [attentionRead, signature, uid, dismissedSig]);
   const dismissAttentionStrip = () => {
     dismissAttention(Store, uid, signature);
     setDismissedSig(signature);

@@ -929,6 +929,14 @@ async function stepFilesBack(
   // Read once per slice; a folder from before the index existed has none,
   // and its files go back unchecked, as they always did.
   const index = await readFileIndex(drive, c.folderId);
+  // Said once, as the phase starts. Without it a restore that could check
+  // nothing still reports "damaged: 0", which reads as a clean bill of health
+  // for files nobody has looked at. A first slice that died before its cursor
+  // was written starts here again, so the note is not repeated.
+  if (!index.size && c.fileOffset === 0) {
+    const unchecked = `${c.folderName || "That backup"} has no file index — it is from before files were hashed — so none of its files could be checked against one on the way back.`;
+    if (!c.notes.includes(unchecked)) addRestoreNote(c.notes, unchecked);
+  }
 
   for (let i = c.fileOffset; i < entries.length; i++) {
     if (outOfBudget(deadline, Date.now())) { c.fileOffset = i; return c; }
@@ -1393,6 +1401,11 @@ async function stepJobFiles(
   // The same check the restore-all makes: a file whose bytes do not hash
   // to the backup's own record is named and left out.
   const index = await readFileIndex(drive, c.folderId);
+  // And the same admission when there is no record to check against.
+  if (!index.size && c.fileOffset === 0) {
+    const unchecked = `${c.folderName || "That backup"} has no file index — it is from before files were hashed — so none of its PDFs could be checked against one on the way back.`;
+    if (!c.skipped.includes(unchecked)) addRestoreNote(c.skipped, unchecked);
+  }
   for (let i = c.fileOffset; i < list.length; i++) {
     if (outOfBudget(deadline, Date.now())) { c.fileOffset = i; return; }
     const item = list[i];

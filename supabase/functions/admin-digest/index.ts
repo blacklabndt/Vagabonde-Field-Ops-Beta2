@@ -48,7 +48,11 @@ const KIND_WORDS: Record<string, string> = {
   backup: "backup",
   before_restore: "safety backup",
   restore_all: "restore",
-  restore_jobs: "job restore"
+  restore_jobs: "job restore",
+  // The fortnightly file check. attention.js holds the same five words and
+  // the two must move together — the strip and this email read one row;
+  // attention.test.mjs reads this block back and fails on drift.
+  verify: "file check"
 };
 
 interface Item { key: string; text: string; where: string }
@@ -108,7 +112,11 @@ function attentionItems(
     items.push({
       key: "failed-run",
       text: `Last ${word} failed${ago}${why ? ` — ${why}` : ""}`,
-      where: "Open the Admin screen, Automatic backup, to read what it says and start another."
+      // A file check has no button: the tick is its only door, and the clock
+      // moved a fortnight on when this run started.
+      where: String(last.kind ?? "") === "verify"
+        ? "Open the Admin screen, Recent background errors, to see what went wrong. The next file check is a fortnight off; tonight's backup does not repeat it."
+        : "Open the Admin screen, Automatic backup, to read what it says and start another."
     });
   }
 

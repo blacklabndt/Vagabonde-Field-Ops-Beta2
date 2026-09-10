@@ -31,7 +31,7 @@ export const OVERDUE_GRACE_MS = 6 * 60 * 60 * 1000;
 // backup_runs holds restores as well as backups, and "Last backup failed"
 // is the wrong sentence for a restore that died. Same kinds the panel
 // names, same words.
-const KIND_WORDS = {
+export const KIND_WORDS = {
   backup: "backup",
   before_restore: "safety backup",
   restore_all: "restore",
@@ -106,7 +106,13 @@ export function attentionItems(backupState, errors, now) {
       // sending request … connection reset" across the top of Home reads as
       // the app itself breaking, and it cannot be dismissed or acted on there.
       text: `Last ${word} failed${ago}`,
-      where: "Open the Admin screen, Recent background errors, to see what went wrong. Automatic backup can start another."
+      // A file check has no button of its own — the tick is the only door,
+      // and nextVerifyAt moved the clock a fortnight on the moment this run
+      // started. "Start another" would send Kyle to something that is not
+      // there, and Back up now queues a backup, not a check.
+      where: last.kind === "verify"
+        ? "Open the Admin screen, Recent background errors, to see what went wrong. The next file check is a fortnight off; tonight's backup does not repeat it."
+        : "Open the Admin screen, Recent background errors, to see what went wrong. Automatic backup can start another."
     });
   }
 
@@ -184,4 +190,16 @@ export function attentionSuppressed(store, userId, signature) {
 export function dismissAttention(store, userId, signature) {
   if (!userId || !signature) return;
   store.save(attentionDismissedKey(userId), signature);
+}
+
+// Forget the dismissal: the trouble it was for has cleared, and the next
+// trouble is news whatever it says. The one refusal whose words never change
+// — the drive's "invalid_grant" — signs identically the day it comes back,
+// and a dismissal that outlived the clearing kept it hidden for ever, with
+// backups not running and Home silent. Home calls this only once its reads
+// have answered: before then, and when a read failed, an empty signature
+// means "nothing could be read", not "all clear".
+export function clearDismissedAttention(store, userId) {
+  if (!userId) return;
+  store.save(attentionDismissedKey(userId), "");
 }

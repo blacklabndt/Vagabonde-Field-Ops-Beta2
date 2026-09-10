@@ -383,8 +383,11 @@ test("a file check reads as one sentence, and says when there was nothing to rep
     "23 of 25 files matched their record, 2 repaired from the app");
   assert.equal(verifySentence({ verified: 20, repaired: 3, unrepairable: 2 }),
     "20 of 25 files matched their record, 3 repaired from the app, 2 could not be repaired");
-  // A run that died in its first slice has counts of {} — a sentence, not NaN.
-  assert.equal(verifySentence({}), "0 of 0 files matched their record, nothing to repair");
+  // Nothing checked is not "nothing to repair": no backup to check, no index
+  // to check it against, or a run that died in its first slice.
+  assert.equal(verifySentence({}), "no files were checked");
+  assert.equal(verifySentence({ notes: ["There is no complete backup to check yet."] }),
+    "no files were checked — There is no complete backup to check yet");
   assert.deepEqual(verifyNotes({ notes: ["a", 2] }), ["a", "2"]);
   assert.deepEqual(verifyNotes(null), []);
 });

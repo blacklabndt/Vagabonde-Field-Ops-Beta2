@@ -353,7 +353,7 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   an Undo on the toast (`Toasts.show(text, tone, force, action)`), and the
   toast lives in App, outside `<main>`, so it survives a screen swap. The
   Undo therefore goes with its screen: `Toasts.clearAction()` on the
-  editor's unmount and at the top of its save — a save's payload is read
+  editor's unmount and in its save, past the confirms — the payload is read
   from the form at that moment, and an Undo after it changed the form and
   not what was sent; left up after a save it followed the ticket onto the
   job page and set state on a component that had gone. A toast that
@@ -378,7 +378,13 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   GST per ticket from the client's rate). Open tickets' half-entered strip
   reads the device's recovery copies through `wipDrafts.js`, and its bulk
   cancel runs through `approvalRun.js`. Home's Needs attention strip asks
-  `attention.js`'s four questions. Keep logic out of the screens and in
+  `attention.js`'s four questions; its `KIND_WORDS` lives twice (attention.js
+  and the admin-digest function, one row read by both) and attention.test.mjs
+  reads the function back and fails on drift. A dismissed strip is forgotten
+  (`clearDismissedAttention`) only once both of Home's reads have answered
+  with nothing to say — a blank before they answer, or after one failed, is
+  "nothing could be read", and clearing on it wiped every dismissal at
+  launch. Keep logic out of the screens and in
   those files, where `npm test` reaches it.
 - The backup panel's list of earlier runs is `EARLIER_RUNS` (12) deep, each
   row showing records, files and size from `runRows/runFiles/runBytes` in

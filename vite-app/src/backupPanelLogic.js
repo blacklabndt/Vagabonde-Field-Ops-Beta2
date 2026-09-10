@@ -118,6 +118,14 @@ export const verifySentence = counts => {
   const verified = Number(c.verified) || 0;
   const repaired = Number(c.repaired) || 0;
   const bad = Number(c.unrepairable) || 0;
+  // Nothing checked is not a clean bill of health, and the earlier-runs list
+  // prints this sentence with no notes beside it: a check that found no
+  // backup, no index or no files folder — and a run that died in its first
+  // slice — must not read as "nothing to repair". The first note is the why.
+  if (!verified && !repaired && !bad) {
+    const why = verifyNotes(c)[0];
+    return why ? `no files were checked — ${why.replace(/\.$/, "")}` : "no files were checked";
+  }
   const parts = [`${verified} of ${verified + repaired + bad} files matched their record`];
   if (repaired) parts.push(`${repaired} repaired from the app`);
   if (bad) parts.push(`${bad} could not be repaired`);

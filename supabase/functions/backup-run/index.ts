@@ -946,11 +946,17 @@ async function spotCheck(
   const reusedRows = records.filter(r => r.reused && r.drive_id && r.sha256);
   if (!reusedRows.length) return "nothing carried over to check";
   const pick = reusedRows[Math.floor(Date.now() / 86400000) % reusedRows.length];
+  // Whether the drive's copy was read and agreed with its record. Past a
+  // disagreement "not checked" is no longer true of it: it WAS checked and
+  // it is wrong, and the index this run is about to write names a hash its
+  // own file does not have — a restore refuses that file outright.
+  let matched = true;
   try {
     const bytes = await withRetry(`Spot-checking ${pick.name}`, () => drive.download(pick.drive_id!));
     if (await hashBytes(bytes) === pick.sha256) return `ok: ${pick.name}`;
+    matched = false;
     const filesFolder = (await drive.listFolders(folderId)).find(f => f.name === FILES_FOLDER);
-    if (!filesFolder) return `not checked: ${pick.name} did not hash to its record and there is no files folder to re-store it in`;
+    if (!filesFolder) throw new Error("there is no files folder to re-store it in");
     const blob = await withRetry(`Re-reading ${pick.bucket}/${pick.key}`, async () => {
       const { data, error } = await db.storage.from(pick.bucket).download(pick.key);
       if (error) throw error;
@@ -967,6 +973,14 @@ async function spotCheck(
     pick.sha256 = sha; pick.reused = false; pick.drive_id = id; pick.size = payload.byteLength;
     return `re-stored: ${pick.name} did not hash to its record`;
   } catch (e) {
+    if (!matched) {
+      // The one answer no screen draws: `spot` goes to the manifest and the
+      // run's counts and nowhere else, so a file this backup is known to hold
+      // wrong goes in the error log, where the office's digest reads it.
+      const words = `${pick.bucket}/${pick.key} is damaged in this backup — the drive's copy does not hash to its record — and could not be re-stored: ${(e as Error).message}`;
+      await logError("backup-run", words, { runId, file: pick.name });
+      return `damaged: ${words}`;
+    }
     return `not checked: ${(e as Error).message}`;
   }
 }
