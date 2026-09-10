@@ -43,6 +43,13 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
   Nothing is waiting there now. The latest is
+  `20260910023039_the_file_checks_clock_starts_on_its_own.sql` —
+  `app_settings.backup_verify_next_at` defaults to 01:00 Grande Prairie
+  tomorrow: 20260908151245 seeded it with an UPDATE of the one row, and a
+  fresh replay has no row (the panel's first Save or a restore's upsert
+  makes it, and neither names the column), so a rebuilt project never
+  queued a file check and the panel hid the line that would have said so.
+  Probe beside it, on a temp clone of the table. Before it,
   `20260908152626_a_run_may_be_a_file_check.sql` — `backup_runs.kind`'s
   check list gains `verify`; the first file check moved the clock and then
   met the constraint, because 20260908151245 taught the tick a fifth kind
@@ -342,6 +349,16 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   total or "N required left" and the primary button; the pages pad their
   bottom for it. The dose export on Timesheets is every role's, scoped to
   the signed-in person for a non-admin.
+- A removal in the ticket editor (an off-card line, a crew member) offers
+  an Undo on the toast (`Toasts.show(text, tone, force, action)`), and the
+  toast lives in App, outside `<main>`, so it survives a screen swap. The
+  Undo therefore goes with its screen: `Toasts.clearAction()` on the
+  editor's unmount and at the top of its save — a save's payload is read
+  from the form at that moment, and an Undo after it changed the form and
+  not what was sent; left up after a save it followed the ticket onto the
+  job page and set state on a component that had gone. A toast that
+  carries an action is never deduped: ×, Undo, × again inside the 1.2 s
+  window is a second removal that must offer its own Undo.
 - Open tickets cancels drafts in bulk through the same `Db.deleteTicket` the
   editor's Cancel uses, one after another (`runInOrder`), naming failures
   and leaving them ticked; App passes `onReload` so the drawer badge moves
@@ -501,7 +518,11 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   folder, hashes it against the index, re-stores from the bucket whatever
   is missing or does not match (a re-rendered assessment comes back as
   today's copy and the record takes the new hash; a source that has gone
-  is `unrepairable`) and rewrites files.json.gz if a record changed. Its
+  is `unrepairable`) and rewrites files.json.gz at the end of any slice in
+  which a record changed — not only at the end of the walk, because a run
+  failed halfway would leave the drive's index naming the old hash for a
+  file it had already replaced, and a restore then refuses that good file
+  as `damaged`. Its
   cursor is `VerifyCursor` in backupRun.ts, its counts `verifyCounts`
   (files, verified, repaired, unrepairable, notes), the panel's words
   `verifySentence`; `verifySlice` in backup-run runs inside the same claim

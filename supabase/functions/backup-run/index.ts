@@ -645,13 +645,21 @@ async function verifySlice(
     if (units % 25 === 0 && !(await persist())) return { ok: true, runId, superseded: true };
   }
 
+  // A record that changed makes the folder's index stale the moment it
+  // changes, and a restore in between reads the old hash off the drive and
+  // calls the repaired file damaged — a good file left out and blamed on
+  // damage. So it is rewritten at the end of the slice that changed it, not
+  // only at the end of the walk: a run that fails halfway must never leave
+  // one behind. The flag comes off with it, and the cursor write below (or
+  // finish's) is what remembers that.
+  if (c.indexDirty) {
+    const rows = await listFileRows(db, c.backupRunId!);
+    const fresh = rows.map(r => ({ name: r.name, bucket: r.bucket, key: r.key, size: r.size, sha256: r.sha256, reused: r.reused }));
+    await withRetry("Rewriting the file index", async () =>
+      conn.drive.upload(c.folderId!, FILES_INDEX_NAME, await gzip(new TextEncoder().encode(JSON.stringify(fresh))), "application/gzip"));
+    c.indexDirty = false;
+  }
   if (c.offset >= names.length) {
-    if (c.indexDirty) {
-      const rows = await listFileRows(db, c.backupRunId!);
-      const fresh = rows.map(r => ({ name: r.name, bucket: r.bucket, key: r.key, size: r.size, sha256: r.sha256, reused: r.reused }));
-      await withRetry("Rewriting the file index", async () =>
-        conn.drive.upload(c.folderId!, FILES_INDEX_NAME, await gzip(new TextEncoder().encode(JSON.stringify(fresh))), "application/gzip"));
-    }
     return await finish();
   }
   if (!(await persist())) return { ok: true, runId, superseded: true };
