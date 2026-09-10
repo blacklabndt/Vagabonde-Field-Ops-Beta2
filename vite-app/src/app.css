@@ -859,3 +859,4 @@ label.field-label-missing {
 .ask-mic-on { background: var(--color-accent); color: var(--color-bg); border-color: var(--color-accent); }
 .ask-error { padding: 0 12px 8px; color: #c9542f; font-size: 0.85rem; }
 .ask-proposal { margin-top: 8px; padding: 10px; border: 1px solid var(--color-accent); }
+.ask-proposal-to { margin-top: 4px; font-size: 12px; opacity: 0.8; word-break: break-all; }

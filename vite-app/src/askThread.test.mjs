@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { askTurns, pushTurn, threadForSend, forgetAskThread, dropAction, jobLinks, mergeDictation, foldTranscripts, ASK_KEEP } from "./askThread.js";
+import { askTurns, pushTurn, threadForSend, forgetAskThread, dropAction, isSendAction, jobLinks, mergeDictation, foldTranscripts, ASK_KEEP } from "./askThread.js";
+
+test("a send action is told from a draft by its kind", () => {
+  assert.equal(isSendAction({ kind: "send_jha" }), true);
+  assert.equal(isSendAction({ kind: "send_ticket_approval" }), true);
+  assert.equal(isSendAction({ kind: "draft_jha" }), false);
+  assert.equal(isSendAction(null), false);
+  assert.equal(isSendAction({}), false);
+});
 
 test("an action rides the answer turn for the card, never the send, and Not now drops it", () => {
   forgetAskThread();

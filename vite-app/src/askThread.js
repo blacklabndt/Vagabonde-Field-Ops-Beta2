@@ -30,6 +30,12 @@ export function dropAction(index) {
   });
 }
 
+// A send proposal (the card asks before the app sends) as against a draft
+// (the card opens a form).
+export function isSendAction(action) {
+  return !!action && typeof action.kind === "string" && action.kind.startsWith("send_");
+}
+
 export function threadForSend() { return turns.map(t => ({ role: t.role, text: t.text })); }
 
 export function forgetAskThread() { turns = []; }

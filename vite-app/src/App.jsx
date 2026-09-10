@@ -1383,13 +1383,29 @@ export function App() {
     }
   };
 
-  // What Ask proposed: the app's own form, filled in. Nothing is written
-  // until that form saves. A job draft opens the dialog mounted below; a
-  // ticket or JHA draft reads the job by number first, the way the tracker
-  // and the chat open one, so a job this account may not see stops here.
+  // What Ask proposed: the app's own form, filled in, or a send the person
+  // has just confirmed. Nothing is written until a form saves. A job draft
+  // opens the dialog mounted below; a ticket or JHA draft reads the job by
+  // number first, the way the tracker and the chat open one, so a job this
+  // account may not see stops here. A send calls the same Db method Job
+  // detail's button calls — the function behind it re-checks the session,
+  // the record and the addresses — and answers the sentence the card
+  // shows; a refusal is thrown to the card in the function's own words.
+  // The job's list is dropped from the device cache so the next read of
+  // Job detail shows the sent stamp and not the remembered copy.
   const runAskAction = async action => {
     if (!action) return;
     if (action.kind === "draft_job") { setJobSeed({ ...action.seed, next: action.next || null, nonce: Date.now() }); return; }
+    if (action.kind === "send_jha") {
+      await Db.sendJhaEmail({ jhaId: action.jha.id, to: action.to.join(", "), cc: "", message: action.message || "" });
+      await OfflineCache.remove(`jhas.${action.job.id}`);
+      return action.done;
+    }
+    if (action.kind === "send_ticket_approval") {
+      await Db.sendTicketApproval({ ticketId: action.ticket.id, to: action.to[0] });
+      await OfflineCache.remove(`tickets.${action.job.id}`);
+      return action.done;
+    }
     try {
       const job = await Db.getJobByNumber(action.job.job_number);
       if (action.kind === "draft_ticket") await startTicketForJob(job, action.seed);
