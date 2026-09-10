@@ -668,7 +668,9 @@ supabase/
                             scheduledSends, the fire-time gate and the clock of a
                             send that waits), the three send bodies (mailJha,
                             mailReport, mailApproval — one email each, called by the
-                            live function and by the scheduled-sends tick),
+                            live function and by the scheduled-sends tick), webPush
+                            (the one Web Push loop: the chat's and a scheduled send's
+                            result to the person who set it),
                             most of them erasable TypeScript the node suite imports
                             directly
   handover/                 the handover runbooks — the two wipes, the probes a

@@ -490,6 +490,38 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   device cache; `describeScheduled` in `scheduledSends.js` words it;
   Cancel / Dismiss through the same Db method). Spec:
   `docs/superpowers/specs/2026-09-10-ask-timers-design.md`.
+  Two follow-ups (spec
+  `docs/superpowers/specs/2026-09-10-ask-timers-followups-design.md`;
+  cc and recurring schedules were dropped by Kyle — each send is
+  scheduled on its own). The tick tells the SCHEDULER'S OWN DEVICES the
+  result, sent or failed: after the row's final status is written,
+  `tellScheduler` reads `push_subscriptions` for `set_by` (active
+  profile) and sends the `resultPushWords` payload (`kind:
+  "scheduled_send"`, title "Sent: …" / "Not sent: …", the addresses and
+  time or the row's error, `url` the job's own `/#/job/…` address, a
+  tag of the row's own) through `_shared/webPush.ts` — chat-push's
+  loop, moved, so VAPID, the send and the 404/410 prune exist once; it
+  talks to supabase-js and web-push and is outside the import-free
+  guard. Best effort both ways: no subscription, no VAPID or a push
+  service down never fails a row, and a push that could not go is not
+  logged (the failed row already is). `push-sw.js` routes by `kind`:
+  a result with the app on screen is posted to the page as
+  `scheduled-send` and App raises one forced toast (ok/error) with an
+  Open action and bumps `filedNonce` so an open Job detail re-reads its
+  strip; out of sight it is its own notification (never the chat's tag,
+  never the app badge, which is the chat's unread count) whose tap
+  navigates to the job. And a send can be MOVED: `reschedule_send(id,
+  run_at?, recipients?)` reads the row as the caller, re-gates the
+  record through the same helper `schedule_send` uses (recipients
+  `null` there means keep the row's addresses, nothing resolved), takes
+  a new time and/or new addresses (never for a ticket approval, which
+  goes to the rep), refuses nothing-changed, and proposes
+  (`rescheduleWords`); the card's fifth confirm kind reads Reschedule
+  and App does it as cancel THEN insert — a cancel that finds nothing
+  stops it, an insert that then fails leaves nothing queued and is
+  named ("The old send was cancelled but the new one was not
+  scheduled: … Schedule it again."), because two rows would be two
+  emails. Job detail keeps Cancel and Dismiss only.
 - The screen is in the address bar: `vite-app/src/route.js` (pure, node-
   tested) spells `#/board`, `#/chat`, `#/job/S-10113` and
   `#/job/S-10113/ticket`; App.jsx pushes one history entry per screen
@@ -645,8 +677,11 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   the migration back and fails on drift.
 - Chat push: an insert trigger fires the chat-push function via pg_net;
   it sends Web Push (VAPID_* secrets) to push_subscriptions minus the
-  sender and prunes endpoints answering 404/410. The handlers live in
-  public/push-sw.js, importScripts'd by the generated sw.js. A push
+  sender and prunes endpoints answering 404/410 — the loop itself is
+  `_shared/webPush.ts` (`sendPush`), which the scheduled-sends tick
+  uses too for the scheduler's own result push. The handlers live in
+  public/push-sw.js, importScripts'd by the generated sw.js, and tell
+  the two payloads apart by `kind` (no kind is the chat's). A push
   endpoint belongs to the DEVICE: claim_push_subscription (definer RPC)
   is how the next tech on a shared tablet takes it over.
 - Chat extras: chat_reads + the chat_unread_count RPC power the drawer
