@@ -9,6 +9,7 @@ import { forgetAskThread } from "./askThread.js";
 import { forgetDosimetryAsked } from "./dosimetryPrompt.js";
 import { QueueBadge, QueueDialog } from "./components/queuePanel.jsx";
 import { FeatureRequestDialog } from "./components/featureRequest.jsx";
+import { AskLauncher } from "./components/askPanel.jsx";
 import { HelpTip } from "./components/helpTip.jsx";
 import { helpFor } from "./help.js";
 import { tipDue, noteTipSeen, stopTips, tipRun } from "./helpTips.js";
@@ -1674,6 +1675,10 @@ export function App() {
       {showFeature && (
         <FeatureRequestDialog onClose={() => setShowFeature(false)} />
       )}
+      {/* Ask, on every screen while signed in. It needs no tab of its own:
+          the function decides what it can reach from the tabs this account
+          holds. Here after main for the same reason the dialogs are. */}
+      {currentUser && <AskLauncher onOpenJob={openJobByNumber} />}
       {/* The screen's own introduction, the first time this account opens
           it. Gated on the screen the tip was raised for still being the
           screen underneath: one that changes out from under it — an account
