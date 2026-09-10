@@ -1,6 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { askTurns, pushTurn, threadForSend, forgetAskThread, jobLinks, mergeDictation, ASK_KEEP } from "./askThread.js";
+import { askTurns, pushTurn, threadForSend, forgetAskThread, jobLinks, mergeDictation, foldTranscripts, ASK_KEEP } from "./askThread.js";
+
+test("foldTranscripts takes segments in order and cumulative repeats once", () => {
+  assert.equal(foldTranscripts(["which tickets", "are over sixty"]), "which tickets are over sixty");
+  assert.equal(foldTranscripts(["which", "which tickets", "which tickets are"]), "which tickets are");
+  assert.equal(foldTranscripts(["which", "which", "Which tickets"]), "Which tickets");
+  assert.equal(foldTranscripts(["which tickets are", "which"]), "which tickets are");
+  assert.equal(foldTranscripts(["  only ", "", null, "Pembina"]), "only Pembina");
+  assert.equal(foldTranscripts([]), "");
+  assert.equal(foldTranscripts(undefined), "");
+});
 
 test("dictation rebuilds the box from what was typed plus what was said", () => {
   assert.equal(mergeDictation("", "which tickets ", "are over sixty days"), "which tickets are over sixty days");

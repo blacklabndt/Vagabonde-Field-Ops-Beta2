@@ -21,10 +21,32 @@ export function threadForSend() { return turns.map(t => ({ role: t.role, text: t
 
 export function forgetAskThread() { turns = []; }
 
+// The recogniser's results for one utterance, folded into one line. Chrome
+// hands them over in two shapes and says which nowhere: segments that
+// follow one another ("which tickets", "are over sixty") and, on Android
+// and some desktop builds, a growing list where each entry repeats the
+// whole utterance so far ("which", "which tickets", "which tickets are").
+// Concatenating the second shape printed the first word over and over
+// (Kyle heard it, 10 Sept). So an entry that extends what is already
+// folded — or is contained in it — replaces it; only a new segment
+// appends. Compared without case, since the first word arrives
+// capitalised once it is final.
+export function foldTranscripts(transcripts) {
+  let acc = "";
+  for (const raw of transcripts || []) {
+    const t = String(raw || "").replace(/\s+/g, " ").trim();
+    if (!t) continue;
+    const a = acc.toLowerCase();
+    const b = t.toLowerCase();
+    if (!acc || b.startsWith(a)) acc = t;
+    else if (!a.startsWith(b)) acc = `${acc} ${t}`;
+  }
+  return acc;
+}
+
 // What the box shows while the person is dictating: whatever was typed
-// before the mic was pressed, then the words the browser has settled on,
-// then the ones it is still guessing at — the recogniser hands over the
-// whole session each time, so this is a rebuild, never an append.
+// before the mic was pressed, then the utterances already finished, then
+// the one being spoken — a rebuild each time, never an append.
 export function mergeDictation(base, finals, interim) {
   const spoken = `${finals || ""}${interim || ""}`.replace(/\s+/g, " ").trim();
   const typed = String(base || "").replace(/\s+$/, "");

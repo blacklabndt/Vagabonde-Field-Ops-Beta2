@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Db } from "../db.js";
 import { Btn } from "./common.jsx";
-import { askTurns, pushTurn, threadForSend, jobLinks, mergeDictation } from "../askThread.js";
+import { askTurns, pushTurn, threadForSend, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
 
 // Ask: a square launcher at the bottom right of every screen (it says
 // "AI", per Kyle) and the card it opens. Not a dialog — no backdrop, the
@@ -36,44 +36,80 @@ const Recognition = typeof window !== "undefined" ? (window.SpeechRecognition ||
 // Dictation into a draft. `setDraft` takes the rebuilt text; `onFail` a
 // sentence for the person when the microphone is refused or the browser
 // gives up. start() remembers the draft at that moment as the base.
+//
+// One utterance per recogniser session, not continuous mode: continuous
+// is where Chrome re-sends earlier results and the first word came out
+// several times over. The session ends itself at a pause; while the mic
+// is still wanted a fresh one starts, the finished utterance moves into
+// `finals`, and the box is rebuilt from base + finals + the utterance in
+// progress. Each utterance's results go through foldTranscripts, which
+// takes the cumulative shape and the segmented shape alike.
 function useDictation(getDraft, setDraft, onFail) {
   const [listening, setListening] = useState(false);
   const recRef = useRef(null);
+  const wantRef = useRef(false);
   const baseRef = useRef("");
+  const finalsRef = useRef("");
+  const utteranceRef = useRef("");
 
   const stop = () => {
+    wantRef.current = false;
     const rec = recRef.current;
     recRef.current = null;
     if (rec) { try { rec.stop(); } catch { /* already stopped */ } }
     setListening(false);
   };
 
-  const start = () => {
-    if (!Recognition || recRef.current) return;
+  const show = () => setDraft(mergeDictation(baseRef.current, finalsRef.current, utteranceRef.current));
+
+  const session = () => {
     const rec = new Recognition();
     rec.lang = "en-CA";
     rec.interimResults = true;
-    rec.continuous = true;
-    baseRef.current = getDraft();
+    rec.continuous = false;
+    utteranceRef.current = "";
     rec.onresult = e => {
-      let finals = "";
-      let interim = "";
-      for (let i = 0; i < e.results.length; i++) {
-        const r = e.results[i];
-        if (r.isFinal) finals += r[0].transcript;
-        else interim += r[0].transcript;
-      }
-      setDraft(mergeDictation(baseRef.current, finals, interim));
+      const heard = [];
+      for (let i = 0; i < e.results.length; i++) heard.push(e.results[i][0].transcript);
+      utteranceRef.current = foldTranscripts(heard);
+      show();
     };
     rec.onerror = e => {
-      if (e.error === "not-allowed" || e.error === "service-not-allowed") onFail("The microphone was refused — allow it for this site to dictate.");
-      else if (e.error !== "aborted" && e.error !== "no-speech") onFail("Dictation stopped: the browser couldn't hear you.");
-      stop();
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        onFail("The microphone was refused — allow it for this site to dictate.");
+        stop();
+      } else if (e.error !== "aborted" && e.error !== "no-speech") {
+        onFail("Dictation stopped: the browser couldn't hear you.");
+        stop();
+      }
+      // no-speech and aborted: onend follows and decides whether to go on.
     };
-    rec.onend = () => { if (recRef.current === rec) stop(); };
+    rec.onend = () => {
+      if (recRef.current !== rec) return;
+      if (utteranceRef.current) {
+        finalsRef.current = finalsRef.current ? `${finalsRef.current} ${utteranceRef.current}` : utteranceRef.current;
+        utteranceRef.current = "";
+        show();
+      }
+      recRef.current = null;
+      if (wantRef.current) {
+        try { session(); } catch { stop(); }
+      } else {
+        setListening(false);
+      }
+    };
     recRef.current = rec;
+    rec.start();
+  };
+
+  const start = () => {
+    if (!Recognition || recRef.current) return;
+    baseRef.current = getDraft();
+    finalsRef.current = "";
+    utteranceRef.current = "";
+    wantRef.current = true;
     setListening(true);
-    try { rec.start(); } catch { stop(); }
+    try { session(); } catch { stop(); }
   };
 
   // Closing the card, or leaving the app, stops the microphone.
