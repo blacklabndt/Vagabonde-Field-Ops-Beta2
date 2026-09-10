@@ -1042,6 +1042,26 @@ export function App() {
     };
   }, [currentUser]);
 
+  // A scheduled send's result, pushed to this person's own devices while
+  // the app is on screen: push-sw.js hands it to the page instead of
+  // showing a notification, so it lands as a toast — forced, because it is
+  // the one word of a send made with nobody watching — with the job a tap
+  // away; the open job page re-reads its strip, where the row has moved on.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one listener for the life of the app; openLandingJob is a per-render function over the same Db
+  useEffect(() => {
+    const sw = navigator.serviceWorker;
+    if (!sw) return undefined;
+    const onResult = e => {
+      const d = e.data;
+      if (!d || d.type !== "scheduled-send") return;
+      setFiledNonce(n => n + 1);
+      Toasts.show(`${d.title || "Scheduled send"}${d.body ? ` — ${d.body}` : ""}`, d.ok ? "ok" : "error", true,
+        d.job_number ? { label: "Open", onClick: () => openLandingJob(d.job_number) } : null);
+    };
+    sw.addEventListener("message", onResult);
+    return () => sw.removeEventListener("message", onResult);
+  }, []);
+
   // The count on the installed app's own icon, where the OS shows it.
   // Set alongside the drawer badge, cleared with it; browsers without
   // the Badging API just never see this.
@@ -1434,6 +1454,24 @@ export function App() {
     }
     if (action.kind === "cancel_scheduled") {
       await Db.cancelScheduledSend(action.id);
+      setFiledNonce(n => n + 1);
+      return action.done;
+    }
+    // Moving a send is the old row cancelled and a new one inserted, in
+    // that order: a cancel that finds nothing ("it already went") stops
+    // here, and an insert that then fails leaves nothing queued rather
+    // than two rows and two emails — the card says so, naming the fix.
+    if (action.kind === "reschedule_send") {
+      await Db.cancelScheduledSend(action.id);
+      try {
+        await Db.scheduleSend({
+          kind: action.send_kind, recordId: action.record_id, jobId: action.job.id, label: action.label,
+          to: action.to.join(","), message: action.message || "", runAt: action.run_at
+        });
+      } catch (e) {
+        setFiledNonce(n => n + 1);
+        throw new Error(`The old send was cancelled but the new one was not scheduled: ${e.message || "try again"}. Schedule it again.`);
+      }
       setFiledNonce(n => n + 1);
       return action.done;
     }

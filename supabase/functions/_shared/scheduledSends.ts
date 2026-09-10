@@ -125,6 +125,47 @@ export function scheduleWords(kind: Kind, label: string, job: { job_number: stri
   };
 }
 
+// A to_list as the row stores it ("a@x,b@y") back into addresses.
+export function splitList(list: string | null | undefined): string[] {
+  return String(list ?? "").split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+}
+
+// What moving a send says: the time, the addresses, or both.
+export function rescheduleWords(kind: Kind, label: string, job: { job_number: string }, to: string[], oldRunAtMs: number, newRunAtMs: number, toChanged: boolean): SendWords {
+  const what = kind === "ticket_approval" ? `${label} on ${job.job_number} for approval` : `${label} on ${job.job_number}`;
+  const list = to.join(", ");
+  const was = whenWords(oldRunAtMs);
+  const now = whenWords(newRunAtMs);
+  const timeChanged = newRunAtMs !== oldRunAtMs;
+  const summary = timeChanged && toChanged ? `Send ${what} to ${list} instead, at ${now} (was ${was})?`
+    : timeChanged ? `Move the send of ${what} to ${now} (was ${was})?`
+    : `Send ${what} to ${list} instead, at ${now}?`;
+  return {
+    summary,
+    done: `Rescheduled: ${what} goes to ${list} at ${now}. It sends whether or not the app is open; Job detail lists it.`
+  };
+}
+
+// The push the person's own devices get when their scheduled send went or
+// failed — the payload push-sw.js tells from a chat push by `kind` and App
+// turns into a toast when the app is on screen. The url is the job's own
+// address, which the app honours at boot; the tag is the row's own, so two
+// results never collapse into one and never into the chat's.
+export interface ResultPush {
+  kind: "scheduled_send"; id: string; ok: boolean; title: string; body: string; job_number: string; url: string; tag: string;
+}
+export function resultPushWords(row: { id: string; label: string; to_list: string; run_at: string }, jobNumber: string, error: string | null): ResultPush {
+  const failed = !!error;
+  return {
+    kind: "scheduled_send", id: row.id, ok: !failed,
+    title: `${failed ? "Not sent" : "Sent"}: ${row.label} on ${jobNumber}`,
+    body: error ? error : `To ${splitList(row.to_list).join(", ")} · ${whenWords(Date.parse(row.run_at))}`,
+    job_number: jobNumber,
+    url: `/#/job/${encodeURIComponent(jobNumber)}`,
+    tag: `scheduled-send-${row.id}`
+  };
+}
+
 export function cancelWords(label: string, runAtMs: number): SendWords {
   const when = whenWords(runAtMs);
   return {

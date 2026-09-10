@@ -16,10 +16,16 @@ self.addEventListener("push", event => {
     // same origin, and a visible one of those used to swallow the buzz.
     const isApp = c => { try { const p = new URL(c.url).pathname; return p === "/" || p === "/index.html"; } catch (_) { return false; } };
     const visible = wins.filter(c => c.visibilityState === "visible" && isApp(c));
+    // Two payloads come this way: the chat's, and a scheduled send's
+    // result for the person who scheduled it (scheduled-sends, `kind`).
+    // The page gets the result whole, to show as a toast.
+    const result = data.kind === "scheduled_send";
     if (visible.length) {
-      visible.forEach(c => { try { c.postMessage({ type: "chat-push" }); } catch (_) { /* older page */ } });
+      const msg = result ? Object.assign({ type: "scheduled-send" }, data) : { type: "chat-push" };
+      visible.forEach(c => { try { c.postMessage(msg); } catch (_) { /* older page */ } });
       return;
     }
+    if (result) { await showResultNotification(data); return; }
     // A dot on the app's icon until the room is read — the app itself
     // replaces it with the real count (or clears it) when opened.
     if ("setAppBadge" in self.navigator) await self.navigator.setAppBadge().catch(() => {});
@@ -44,6 +50,19 @@ function showChatNotification(data) {
     // the crew — who depend on push — feel only the first message's buzz and
     // miss the rest.
     renotify: true,
+    data: { url: data.url || "/" }
+  });
+}
+
+// A scheduled send's result: its own tag, so two results never collapse
+// into one and never into the chat's; no app badge, which is the chat's
+// unread count and nothing else's. The tap lands on the job's address.
+function showResultNotification(data) {
+  return self.registration.showNotification(data.title || "Scheduled send", {
+    body: data.body || "",
+    icon: "/icons/icon-192.png",
+    badge: "/icons/badge-96.png",
+    tag: data.tag || "scheduled-send",
     data: { url: data.url || "/" }
   });
 }

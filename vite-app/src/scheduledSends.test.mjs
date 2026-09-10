@@ -8,6 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   localToUtc, checkRunAt, whenWords, fireGate, isStuck, labelFor, scheduleWords, cancelWords, isKind,
+  rescheduleWords, resultPushWords, splitList,
   STUCK_MS, MAX_AHEAD_MS, MAX_PAST_MS, KINDS
 } from "../../supabase/functions/_shared/scheduledSends.ts";
 
@@ -101,4 +102,39 @@ test("the words name the record, the job, every address and the time", () => {
   const c = cancelWords("Ticket T-10231", at);
   assert.equal(c.summary, "Cancel the send of Ticket T-10231 set for Fri, Sep 11, 07:00?");
   assert.equal(c.done, "Cancelled: Ticket T-10231 will not be sent at Fri, Sep 11, 07:00.");
+});
+
+test("moving a send says what moves — the time, the addresses, or both", () => {
+  const was = Date.UTC(2026, 8, 11, 13, 0);
+  const now = Date.UTC(2026, 8, 11, 15, 0);
+  const job = { job_number: "S-10113" };
+  const time = rescheduleWords("jha", "JHA RT-Shop.pdf (2026-09-08)", job, ["dave@pembina.com"], was, now, false);
+  assert.equal(time.summary, "Move the send of JHA RT-Shop.pdf (2026-09-08) on S-10113 to Fri, Sep 11, 09:00 (was Fri, Sep 11, 07:00)?");
+  assert.match(time.done, /^Rescheduled: JHA RT-Shop\.pdf \(2026-09-08\) on S-10113 goes to dave@pembina\.com at Fri, Sep 11, 09:00\./);
+  const who = rescheduleWords("report", "Report tie-in.pdf", job, ["a@x.com", "b@y.com"], was, was, true);
+  assert.equal(who.summary, "Send Report tie-in.pdf on S-10113 to a@x.com, b@y.com instead, at Fri, Sep 11, 07:00?");
+  const both = rescheduleWords("jha", "JHA RT-Shop.pdf (2026-09-08)", job, ["a@x.com"], was, now, true);
+  assert.equal(both.summary, "Send JHA RT-Shop.pdf (2026-09-08) on S-10113 to a@x.com instead, at Fri, Sep 11, 09:00 (was Fri, Sep 11, 07:00)?");
+  const t = rescheduleWords("ticket_approval", "Ticket T-10231", job, ["t@p.com"], was, now, false);
+  assert.equal(t.summary, "Move the send of Ticket T-10231 on S-10113 for approval to Fri, Sep 11, 09:00 (was Fri, Sep 11, 07:00)?");
+  assert.deepEqual(splitList("a@x.com,b@y.com, c@z.com"), ["a@x.com", "b@y.com", "c@z.com"]);
+  assert.deepEqual(splitList(null), []);
+});
+
+test("the push the scheduler's devices get names the result, the record and the job, and points at the job", () => {
+  const row = { id: "abc", label: "JHA RT-Shop.pdf (2026-09-08)", to_list: "dave@pembina.com,ann@c.ca", run_at: new Date(Date.UTC(2026, 8, 11, 13, 0)).toISOString() };
+  const ok = resultPushWords(row, "S-10113", null);
+  assert.equal(ok.kind, "scheduled_send");
+  assert.equal(ok.ok, true);
+  assert.equal(ok.id, "abc");
+  assert.equal(ok.title, "Sent: JHA RT-Shop.pdf (2026-09-08) on S-10113");
+  assert.equal(ok.body, "To dave@pembina.com, ann@c.ca · Fri, Sep 11, 07:00");
+  assert.equal(ok.job_number, "S-10113");
+  assert.equal(ok.url, "/#/job/S-10113");
+  assert.equal(ok.tag, "scheduled-send-abc");
+  const bad = resultPushWords(row, "S-10113", "The ticket has been signed meanwhile.");
+  assert.equal(bad.ok, false);
+  assert.equal(bad.title, "Not sent: JHA RT-Shop.pdf (2026-09-08) on S-10113");
+  assert.equal(bad.body, "The ticket has been signed meanwhile.");
+  assert.equal(bad.tag, "scheduled-send-abc");
 });

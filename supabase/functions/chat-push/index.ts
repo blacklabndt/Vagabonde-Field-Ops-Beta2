@@ -16,7 +16,7 @@
 // a replay — re-buzzing the crew for old news — and is refused.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import webpush from "npm:web-push@3.6.7";
+import { sendPush, type PushSub } from "../_shared/webPush.ts";
 import { secretsMatch } from "../_shared/constantTime.ts";
 
 const corsHeaders = {
@@ -90,33 +90,10 @@ Deno.serve(async (req) => {
     if (sErr) throw sErr;
     if (!subs || subs.length === 0) return json({ ok: true, sent: 0 });
 
-    webpush.setVapidDetails(
-      Deno.env.get("VAPID_SUBJECT") ?? "mailto:blacklabndt@gmail.com",
-      Deno.env.get("VAPID_PUBLIC_KEY")!,
-      Deno.env.get("VAPID_PRIVATE_KEY")!
-    );
-
-    const payload = JSON.stringify({ title: `${name} — Team chat`, body, url: "/?goto=chat" });
-    let sent = 0;
-    const dead: string[] = [];
-    await Promise.all(subs.map(async (s) => {
-      try {
-        await webpush.sendNotification(
-          { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-          payload,
-          { TTL: 3600 }
-        );
-        sent++;
-      } catch (e) {
-        const code = (e as { statusCode?: number } | null)?.statusCode;
-        // 404/410: the browser threw the subscription away. Anything
-        // else is one phone missing one buzz — not worth failing the rest.
-        if (code === 404 || code === 410) dead.push(s.id);
-      }
-    }));
-    if (dead.length) await admin.from("push_subscriptions").delete().in("id", dead);
-
-    return json({ ok: true, sent, pruned: dead.length });
+    // The loop itself — VAPID, the send, the 404/410 prune — is
+    // _shared/webPush.ts, which scheduled-sends uses too.
+    const { sent, pruned } = await sendPush(admin, subs as unknown as PushSub[], { title: `${name} — Team chat`, body, url: "/?goto=chat" });
+    return json({ ok: true, sent, pruned });
   } catch (e) {
     await logError("chat-push", (e as Error).message);
     return json({ error: (e as Error).message }, 400);

@@ -30,7 +30,7 @@ import { appSettings, corsHeaders } from "../_shared/mail.ts";
 import { toolsFor, toolDefinitions, traceLine, searchArgs, JHA_TEMPLATES, HAZARD_NAMES, PRICE_ROLES } from "../_shared/askTools.ts";
 import { shapeJobDraft, shapeTicketDraft, shapeJhaDraft } from "../_shared/askDrafts.ts";
 import { resolveRecipients, jhaSendGate, ticketSendGate, ticketApprovalAddress, jhaFileName, sendJhaWords, sendTicketWords, JHA_MESSAGE, REPORT_MESSAGE } from "../_shared/askSends.ts";
-import { isKind, localToUtc, checkRunAt, whenWords, labelFor, scheduleWords, cancelWords, REPORT_SEND_ROLES } from "../_shared/scheduledSends.ts";
+import { isKind, localToUtc, checkRunAt, whenWords, labelFor, scheduleWords, cancelWords, rescheduleWords, splitList, REPORT_SEND_ROLES } from "../_shared/scheduledSends.ts";
 import { askLoop, systemPrompt, windowTurns } from "../_shared/askLoop.ts";
 
 const json = (body: unknown, status = 200) =>
@@ -77,6 +77,10 @@ interface ReportSendRow {
 interface ScheduledRow {
   id: string; kind: string; label: string; to_list: string; run_at: string; status: string; error: string | null;
   job_id: string; jobs: { job_number: string } | null;
+}
+interface RescheduleRow {
+  id: string; kind: string; record_id: string; label: string; to_list: string; message: string; run_at: string; status: string;
+  jobs: { id: string; job_number: string } | null;
 }
 
 Deno.serve(async (req) => {
@@ -167,6 +171,8 @@ Deno.serve(async (req) => {
 
     // A record read as the caller, gated as the screen's function gates it,
     // with its recipients resolved — for a send now and for a scheduled one.
+    // Recipients null: the caller keeps addresses it already holds (a
+    // reschedule that moves only the time), and nothing is resolved.
     const jhaForSend = async (jhaId: string, recipients: unknown) => {
       const { data, error } = await asUser.from("jhas")
         .select("id, job_id, signed_by, pdf_key, template, work_date, sent_at, jobs(id, job_number, client_id, contractor_id)")
@@ -175,8 +181,7 @@ Deno.serve(async (req) => {
       const row = data as unknown as JhaSendRow | null;
       if (!row || !row.jobs) throw new Error("No assessment with that id — use list_jhas to find it.");
       jhaSendGate(row, who);
-      const people = await contactsFor([row.jobs.client_id, row.jobs.contractor_id]);
-      const to = resolveRecipients(recipients, people, saidByPerson());
+      const to = recipients === null ? [] : resolveRecipients(recipients, await contactsFor([row.jobs.client_id, row.jobs.contractor_id]), saidByPerson());
       return { row, job: { id: row.jobs.id, job_number: row.jobs.job_number }, to };
     };
     const reportForSend = async (reportId: string, recipients: unknown) => {
@@ -189,8 +194,7 @@ Deno.serve(async (req) => {
       // send-report's gate.
       if (!row.pdf_key) throw new Error("This report has no PDF on file — upload it first.");
       if (!REPORT_SEND_ROLES.includes(who.role)) throw new Error("Only a Technician, Coordinator or Admin can email a report.");
-      const people = await contactsFor([row.jobs.client_id, row.jobs.contractor_id]);
-      const to = resolveRecipients(recipients, people, saidByPerson());
+      const to = recipients === null ? [] : resolveRecipients(recipients, await contactsFor([row.jobs.client_id, row.jobs.contractor_id]), saidByPerson());
       return { row, job: { id: row.jobs.id, job_number: row.jobs.job_number }, to };
     };
     const ticketForSend = async (ticketId: string) => {
@@ -359,6 +363,43 @@ Deno.serve(async (req) => {
         const words = cancelWords(row.label, Date.parse(row.run_at));
         action = { kind: "cancel_scheduled", summary: words.summary, done: words.done, id: row.id };
         out = { ready: true, summary: words.summary };
+      } else if (name === "reschedule_send") {
+        // The row as the caller may read it (own, or the office), then the
+        // record again through the helper schedule_send uses — the screen's
+        // gate applied again — and the parts that change. One confirm on
+        // the card cancels the old row and inserts the new one, in App.
+        const { data, error } = await asUser.from("scheduled_sends")
+          .select("id, kind, record_id, label, to_list, message, run_at, status, jobs(id, job_number)")
+          .eq("id", String(input.id ?? "").trim()).maybeSingle();
+        if (error) throw new Error(error.message);
+        const row = data as unknown as RescheduleRow | null;
+        if (!row || !row.jobs) throw new Error("No scheduled send with that id — use list_scheduled to find it.");
+        if (row.status !== "queued" && row.status !== "failed") throw new Error(`That send is already ${row.status}; there is nothing to move.`);
+        if (!isKind(row.kind)) throw new Error(`Nothing sends a "${row.kind}".`);
+        const wantsTime = String(input.run_at ?? "").trim() !== "";
+        const wantsTo = Array.isArray(input.recipients) && input.recipients.length > 0;
+        if (!wantsTime && !wantsTo) throw new Error("Give a new time, new recipients, or both — nothing was changed.");
+        if (wantsTo && row.kind === "ticket_approval") throw new Error("A ticket approval goes to the ticket's client rep; only its time can be moved.");
+        const oldRunAt = Date.parse(row.run_at);
+        const runAt = wantsTime ? localToUtc(input.run_at) : oldRunAt;
+        if (wantsTime) checkRunAt(runAt, Date.now());
+        let to: string[];
+        if (row.kind === "jha") to = (await jhaForSend(row.record_id, wantsTo ? input.recipients : null)).to;
+        else if (row.kind === "report") to = (await reportForSend(row.record_id, wantsTo ? input.recipients : null)).to;
+        else {
+          if (!seesMoney) throw new Error("Only an Admin or a Technician can send a ticket for approval from here.");
+          await ticketForSend(row.record_id);
+          to = [];
+        }
+        if (!wantsTo) to = splitList(row.to_list);
+        if (!wantsTo && runAt === oldRunAt) throw new Error(`That send is already set for ${whenWords(oldRunAt)} — nothing was changed.`);
+        const job = { id: row.jobs.id, job_number: row.jobs.job_number };
+        const words = rescheduleWords(row.kind, row.label, job, to, oldRunAt, runAt, wantsTo);
+        action = {
+          kind: "reschedule_send", summary: words.summary, done: words.done, id: row.id, to, send_kind: row.kind,
+          record_id: row.record_id, label: row.label, message: row.message, run_at: new Date(runAt).toISOString(), job
+        };
+        out = { ready: true, summary: words.summary, to, run_at: new Date(runAt).toISOString() };
       } else {
         throw new Error(`no tool named ${name}`);
       }

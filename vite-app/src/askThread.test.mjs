@@ -7,6 +7,7 @@ test("a proposal the card confirms in place is told from a draft by its kind, an
   assert.equal(isConfirmAction({ kind: "send_ticket_approval" }), true);
   assert.equal(isConfirmAction({ kind: "schedule_send" }), true);
   assert.equal(isConfirmAction({ kind: "cancel_scheduled" }), true);
+  assert.equal(isConfirmAction({ kind: "reschedule_send" }), true);
   assert.equal(isConfirmAction({ kind: "draft_jha" }), false);
   assert.equal(isConfirmAction(null), false);
   assert.equal(isConfirmAction({}), false);
@@ -14,6 +15,7 @@ test("a proposal the card confirms in place is told from a draft by its kind, an
   assert.equal(confirmLabel({ kind: "send_ticket_approval" }), "Send");
   assert.equal(confirmLabel({ kind: "schedule_send" }), "Schedule");
   assert.equal(confirmLabel({ kind: "cancel_scheduled" }), "Cancel it");
+  assert.equal(confirmLabel({ kind: "reschedule_send" }), "Reschedule");
   assert.equal(confirmLabel(null), "");
 });
 

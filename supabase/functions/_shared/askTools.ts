@@ -205,6 +205,19 @@ export const ASK_TOOLS: AskTool[] = [
     name: "cancel_scheduled", tab: "job",
     description: "Propose cancelling a scheduled send that is still queued, or dismissing one that failed, by the id list_scheduled gave: the card asks the person to confirm. Nothing changes until they do.",
     input_schema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false }
+  },
+  {
+    name: "reschedule_send", tab: "job",
+    description: "Propose moving a scheduled send that is still queued (or one that failed) to another time, other recipients, or both, by the id list_scheduled gave: the card asks the person to confirm, and one confirm cancels the old send and schedules the new one. Give run_at (YYYY-MM-DD HH:MM, Grande Prairie's clock) and/or recipients (as for schedule_send; not for a ticket approval, which goes to the ticket's client rep). Nothing changes until they confirm.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        run_at: { type: "string", description: "YYYY-MM-DD HH:MM, Grande Prairie's clock" },
+        recipients: { type: "array", items: { type: "string" }, description: "contact names on file, or addresses the person typed" }
+      },
+      required: ["id"], additionalProperties: false
+    }
   }
 ];
 
@@ -268,5 +281,6 @@ export function traceLine(name: string, input: Record<string, unknown>): string 
   if (name === "schedule_send") return `proposed a send at ${str(input.run_at)}`;
   if (name === "list_scheduled") return str(input.job_number) ? `listed the scheduled sends on ${str(input.job_number)}` : "listed the scheduled sends";
   if (name === "cancel_scheduled") return "proposed cancelling a scheduled send";
+  if (name === "reschedule_send") return "proposed moving a scheduled send";
   return `read ${name}`;
 }

@@ -30,7 +30,8 @@ import { secretsMatch } from "../_shared/constantTime.ts";
 import { mailJha, JHA_MAIL_SELECT, type JhaMailRow } from "../_shared/mailJha.ts";
 import { mailReport, REPORT_MAIL_SELECT, type ReportMailRow } from "../_shared/mailReport.ts";
 import { mailApproval } from "../_shared/mailApproval.ts";
-import { fireGate, isKind, STUCK_MS, STUCK_WORDS, type Person } from "../_shared/scheduledSends.ts";
+import { fireGate, isKind, resultPushWords, STUCK_MS, STUCK_WORDS, type Person } from "../_shared/scheduledSends.ts";
+import { sendPush, type PushSub } from "../_shared/webPush.ts";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -40,7 +41,7 @@ const BATCH = 20;
 
 interface Row {
   id: string; kind: string; record_id: string; job_id: string; label: string; to_list: string; message: string;
-  run_at: string; set_by: string; status: string; fired_at: string | null;
+  run_at: string; set_by: string; status: string; fired_at: string | null; jobs: { job_number: string } | null;
 }
 interface TicketRow { id: string; status: string | null; total: number | string | null; technician_id: string | null }
 
@@ -74,7 +75,7 @@ Deno.serve(async (req) => {
 
     // 2. Rows that are due, oldest first.
     const { data: due, error: dueErr } = await admin.from("scheduled_sends")
-      .select("id, kind, record_id, job_id, label, to_list, message, run_at, set_by, status, fired_at")
+      .select("id, kind, record_id, job_id, label, to_list, message, run_at, set_by, status, fired_at, jobs(job_number)")
       .eq("status", "queued").lte("run_at", new Date(now).toISOString())
       .order("run_at").limit(BATCH);
     if (dueErr) throw new Error(dueErr.message);
@@ -85,7 +86,7 @@ Deno.serve(async (req) => {
     let settings: AppSettings | null = null;
     const settingsOnce = async () => { settings ??= await appSettings(); return settings; };
 
-    for (const row of (due ?? []) as Row[]) {
+    for (const row of (due ?? []) as unknown as Row[]) {
       // The claim: a tick that reads a row another tick has just taken gets
       // zero rows back and leaves it alone.
       const { data: claimed, error: cErr } = await admin.from("scheduled_sends")
@@ -97,12 +98,14 @@ Deno.serve(async (req) => {
         await fire(admin, row, settingsOnce);
         await admin.from("scheduled_sends").update({ status: "sent" }).eq("id", row.id);
         fired++;
+        await tellScheduler(admin, row, null);
       } catch (e) {
         const message = (e as Error).message;
         await admin.from("scheduled_sends").update({ status: "failed", error: message }).eq("id", row.id);
         await logError("scheduled-sends", `${row.label} was not sent: ${message}`,
           { id: row.id, kind: row.kind, record_id: row.record_id, job_id: row.job_id, set_by: row.set_by });
         failed++;
+        await tellScheduler(admin, row, message);
       }
     }
     return json({ ok: true, fired, failed, stuck: stuckRows?.length ?? 0 });
@@ -151,6 +154,23 @@ async function fire(admin: SupabaseClient, row: Row, settingsOnce: () => Promise
     // turns a delivered email into a failed row.
     if (resend) await admin.from("tickets").update({ chased_at: new Date().toISOString() }).eq("id", ticket.id);
   }
+}
+
+// The person's own devices hear the result — sent or not — through the
+// push the chat uses, after the row's final status is written. Best
+// effort in every direction: no subscription, no VAPID or a push service
+// down never turns a delivered email into a failed row, and a push that
+// could not go is not an error of its own — a failed row already is one.
+// Only the scheduler's devices, and only while the account is active.
+async function tellScheduler(admin: SupabaseClient, row: Row, error: string | null): Promise<void> {
+  try {
+    const { data } = await admin.from("push_subscriptions")
+      .select("id, endpoint, p256dh, auth, profiles!inner(deactivated_at)")
+      .eq("profile_id", row.set_by).is("profiles.deactivated_at", null);
+    const subs = (data ?? []) as unknown as PushSub[];
+    if (!subs.length) return;
+    await sendPush(admin, subs, resultPushWords(row, row.jobs?.job_number ?? "", error));
+  } catch { /* best effort: the row's status is the record */ }
 }
 
 async function logError(functionName: string, message: string, context: Record<string, unknown> = {}) {
