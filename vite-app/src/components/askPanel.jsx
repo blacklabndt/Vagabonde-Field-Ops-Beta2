@@ -130,17 +130,21 @@ function Answer({ text, jobNums, onOpenJob }) {
 // The card's own words, in one place. Edit these; nothing else reads them.
 export const CARD_WORDS = {
   // Shown before the first question.
-  empty: "Ask about the billing tracker — what needs attention, which tickets are over 60 days, how much a client owes. Answers come from what your account can see.",
+  empty: "Ask me anything, i can create a new job, ticket, send jhas, i can even set a scheduled time to send out reports and billing",
   // Added to the above when the browser has a microphone.
-  mic: " Tap the microphone to say it instead of typing.",
+  mic: " Tap the microphone to talk to me",
   // Under the thread while an answer is on its way.
-  busy: "Reading the tracker…",
+  busy: "Thinking...",
   // The box, when it is empty.
-  placeholder: "Ask about the tracker…"
+  placeholder: "Type here"
 };
 
-function AskCard({ onClose, onOpenJob, onAction }) {
+function AskCard({ onClose, onOpenJob, onAction, closing }) {
   const [turns, setTurns] = useState(askTurns);
+  // Turns from this index on arrived while the card was open and rise
+  // into place; the ones before it were there when it opened and mount
+  // still (the chat's rule — a thread animating on open is a screensaver).
+  const arrivedFrom = useRef(askTurns().length);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   // A proposed send going out — the card stays open for the answer.
@@ -228,7 +232,7 @@ function AskCard({ onClose, onOpenJob, onAction }) {
   };
 
   return (
-    <div className="ask-card" role="dialog" aria-label="AI">
+    <div className={`ask-card${closing ? " closing" : ""}`} role="dialog" aria-label="AI">
       <div className="ask-card-head">
         <h3>AI</h3>
         <button type="button" className="btn btn-secondary" style={{ padding: "4px 10px" }}
@@ -242,9 +246,9 @@ function AskCard({ onClose, onOpenJob, onAction }) {
           </div>
         )}
         {turns.map((t, i) => t.role === "user"
-          ? <div key={i} className="ask-turn-user">{t.text}</div>
+          ? <div key={i} className={`ask-turn-user${i >= arrivedFrom.current ? " ask-turn-in" : ""}`}>{t.text}</div>
           : (
-            <div key={i} className="ask-turn-answer">
+            <div key={i} className={`ask-turn-answer${i >= arrivedFrom.current ? " ask-turn-in" : ""}`}>
               <Answer text={t.text} jobNums={jobNums} onOpenJob={onOpenJob} />
               {t.trace && t.trace.length > 0 && <div className="ask-trace">{t.trace.join(" · ")}</div>}
               {/* A proposal, on the latest answer only — an older one may
@@ -268,7 +272,7 @@ function AskCard({ onClose, onOpenJob, onAction }) {
               )}
             </div>
           ))}
-        {busy && <div className="ask-turn-answer" style={{ opacity: 0.7 }}>{CARD_WORDS.busy}</div>}
+        {busy && <div className="ask-turn-answer ask-busy">{CARD_WORDS.busy}</div>}
       </div>
       {error && <div className="ask-error">{error}</div>}
       <div className="ask-foot">
@@ -291,8 +295,19 @@ function AskCard({ onClose, onOpenJob, onAction }) {
 export function AskLauncher({ onOpenJob, onAction }) {
   const online = useOnline();
   const [open, setOpen] = useState(false);
+  // Closing plays the card's exit first; the unmount follows on a timer a
+  // little longer than the animation, so a shortened animation (the
+  // Animations switch) still ends in a closed card.
+  const [closing, setClosing] = useState(false);
+  const closeTimer = useRef(null);
+  useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current); }, []);
+  const close = () => {
+    if (closing) return;
+    setClosing(true);
+    closeTimer.current = setTimeout(() => { closeTimer.current = null; setOpen(false); setClosing(false); }, 220);
+  };
 
-  if (open) return <AskCard onClose={() => setOpen(false)} onOpenJob={onOpenJob} onAction={onAction} />;
+  if (open) return <AskCard onClose={close} onOpenJob={onOpenJob} onAction={onAction} closing={closing} />;
   return (
     <button type="button" className="btn btn-primary ask-launcher" disabled={!online}
       title={online ? "Ask the app a question" : "AI needs a connection"} onClick={() => setOpen(true)}>

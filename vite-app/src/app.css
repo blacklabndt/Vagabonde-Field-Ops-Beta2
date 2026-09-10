@@ -860,3 +860,44 @@ label.field-label-missing {
 .ask-error { padding: 0 12px 8px; color: #c9542f; font-size: 0.85rem; }
 .ask-proposal { margin-top: 8px; padding: 10px; border: 1px solid var(--color-accent); }
 .ask-proposal-to { margin-top: 4px; font-size: 12px; opacity: 0.8; word-break: break-all; }
+
+/* — Ask's motion — the same vocabulary as the rest of the app, and the
+   same switch: the blanket data-motion rule above flattens all of it.
+   The button arrives with a short fade; `backwards`, not `both`, because a
+   held end frame would outrank the hover and focus opacity below it. */
+.ask-launcher { animation: ask-launcher-in .26s var(--ease-enter) backwards; }
+@keyframes ask-launcher-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: .7; transform: none; }
+}
+/* The card takes the dialog's entrance — 95% with a touch of rise — but
+   grows out of its own corner, where the button was. Closing is the
+   reverse on the exit easing, the drawer's shape: the panel adds
+   `closing` and unmounts the card on a timer, not on animationend, so a
+   motion setting that shortens the animation to nothing still closes it. */
+.ask-card { transform-origin: 100% 100%; animation: ask-card-in .26s var(--ease-enter) both; }
+.ask-card.closing { animation: ask-card-out .2s var(--ease-exit) both; pointer-events: none; }
+@keyframes ask-card-in {
+  from { opacity: 0; transform: scale(.95) translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ask-card-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: scale(.95) translateY(10px); }
+}
+/* A turn that arrives while you watch rises into place, the chat's
+   entrance without the overshoot; turns already in the thread mount still
+   when the card reopens. Opacity starts at .3 for the same reason the
+   chat's does: a hidden tab holds an animation on its first frame. */
+.ask-turn-in { animation: ask-turn-in .3s var(--ease-enter) both; }
+@keyframes ask-turn-in {
+  from { opacity: .3; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+/* Waiting for an answer: the line breathes in place, the loading bar's
+   rhythm, so a card that is thinking does not look like one that hung. */
+.ask-busy { animation: ask-breathe 2s ease-in-out infinite; }
+@keyframes ask-breathe {
+  0%, 100% { opacity: .45; }
+  50% { opacity: .85; }
+}
