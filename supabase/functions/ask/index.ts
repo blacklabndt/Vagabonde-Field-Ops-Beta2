@@ -1,29 +1,47 @@
-// Ask: a question in words, answered from what THIS caller may read.
+// Ask: a question in words, answered from what THIS caller may read — and,
+// since the second slice, a draft: the app's own form proposed, filled in,
+// for the person to save or not.
 //
 // The door is the caller's JWT (render-invoice's shape) and then the
-// caller's own profile row for the tabs they hold; the model is offered
-// only the tools behind those tabs (askTools.ts), and every tool runs
-// through the caller's client, so RLS and the price rule decide what comes
-// back — a Coordinator's question meets the same null money the
+// caller's own profile row for the tabs they hold and their role; the
+// model is offered only the tools behind those (askTools.ts), and every
+// tool runs through the caller's client, so RLS and the price rule decide
+// what comes back — a Coordinator's question meets the same null money the
 // Coordinator's tracker does. The service role is used for one read: the
 // Anthropic key from app_settings (appSettings(), env fallback).
 //
-// Nothing here writes. A later slice that drafts a job or a JHA proposes,
-// and the app's own form and save path do the writing after the person
-// confirms.
+// Nothing here writes. A draft tool resolves the client or the job as the
+// caller, shapes a seed (askDrafts.ts, pure) and puts an `action` on the
+// response beside the answer; the card offers it, App opens the form, and
+// the form's own save path — validation, idempotency key, offline queue —
+// does what it always does. One action per answer: a later draft call
+// replaces an earlier one.
 //
 // The loop itself is _shared/askLoop.ts, pure and node-tested; this file
 // is the door, the runners and the log line.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { appSettings, corsHeaders } from "../_shared/mail.ts";
-import { toolsFor, toolDefinitions, traceLine, searchArgs } from "../_shared/askTools.ts";
+import { toolsFor, toolDefinitions, traceLine, searchArgs, JHA_TEMPLATES, HAZARD_NAMES } from "../_shared/askTools.ts";
+import { shapeJobDraft, shapeTicketDraft, shapeJhaDraft } from "../_shared/askDrafts.ts";
 import { askLoop, systemPrompt } from "../_shared/askLoop.ts";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
 interface Me { name: string | null; role: string | null; tab_access: string[] | null; deactivated_at: string | null }
+interface OrgHit { org_id: string; name: string; contact_count: number }
+interface JobRow {
+  id: string; job_number: string; project: string | null; client_name: string | null; contractor_name: string | null;
+  lsd: string | null; afe: string | null; status: string | null;
+}
+interface JobRecordRow {
+  id: string; job_number: string; project: string | null; lsd: string | null; afe: string | null; status: string | null;
+  client_id: string | null; contractor_id: string | null; client_contact_id: string | null; contractor_contact_id: string | null;
+  clients: { name: string } | null; contractors: { name: string } | null;
+}
+interface ContactRow { id: string; org_type: string; org_id: string; name: string; email: string | null; phone: string | null; is_primary: boolean }
+interface ActiveJob { id: string; job_number: string; project: string | null; status: string | null; clients: { name: string } | null }
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -42,7 +60,7 @@ Deno.serve(async (req) => {
     const me = profile as Me | null;
     if (!me || me.deactivated_at) return json({ error: "This account is locked" }, 403);
 
-    const tools = toolsFor(me.tab_access);
+    const tools = toolsFor(me.tab_access, me.role);
     if (!tools.length) return json({ answer: "Ask can't reach anything on the tabs you hold yet.", trace: [] });
 
     const body = (await req.json().catch(() => null)) as { thread?: unknown } | null;
@@ -52,25 +70,111 @@ Deno.serve(async (req) => {
     const key = (await appSettings()).anthropicApiKey;
     if (!key) return json({ error: "Ask isn't set up yet — an Admin can add the Anthropic key on the Admin screen." }, 400);
 
-    // Every runner reads through asUser: the caller's own permissions, and
-    // the RPCs' own price rule, decide what the model is shown.
+    // ── Reads, all as the caller ─────────────────────────────────────────
+    const findClients = async (q: string): Promise<OrgHit[]> => {
+      const { data, error } = await asUser.rpc("search_org_directory", { q, scope: "Clients", page_num: 0, page_size: 10 });
+      if (error) throw new Error(error.message);
+      return (data ?? []) as OrgHit[];
+    };
+    // A draft needs one client: an exact name first, else the one hit, else
+    // the model is told what to ask.
+    const resolveClient = async (name: string) => {
+      if (!name) throw new Error("Which client? Ask the person.");
+      const hits = (await findClients(name)).map(r => ({ id: r.org_id, name: r.name }));
+      const exact = hits.filter(h => h.name.toLowerCase() === name.toLowerCase());
+      if (exact.length === 1) return exact[0];
+      if (hits.length === 1) return hits[0];
+      if (!hits.length) throw new Error(`No client called "${name}" is in the directory. Ask the person which client it is; a new client is added on Home's New job form.`);
+      throw new Error(`More than one client matches "${name}": ${hits.map(h => h.name).join(", ")}. Ask the person which.`);
+    };
+    const activeJob = async (number: string) => {
+      if (!number) throw new Error("Which job? Ask the person for the job number.");
+      const { data, error } = await asUser.from("jobs").select("id, job_number, project, status, clients(name)").eq("job_number", number).maybeSingle();
+      if (error) throw new Error(error.message);
+      const j = data as unknown as ActiveJob | null;
+      if (!j) throw new Error(`No job numbered ${number}. Use find_job to look it up.`);
+      if (j.status === "Complete") throw new Error(`Job ${number} is complete; nothing new can be raised on it.`);
+      return { id: j.id, job_number: j.job_number, project: j.project, client_name: j.clients?.name ?? null, status: j.status };
+    };
+    const jobRecord = async (number: string) => {
+      if (!number) throw new Error("Which job? Ask the person for the job number.");
+      const { data, error } = await asUser.from("jobs")
+        .select("id, job_number, project, lsd, afe, status, client_id, contractor_id, client_contact_id, contractor_contact_id, clients(name), contractors(name)")
+        .eq("job_number", number).maybeSingle();
+      if (error) throw new Error(error.message);
+      const j = data as unknown as JobRecordRow | null;
+      if (!j) throw new Error(`No job numbered ${number}.`);
+      const orgs = [j.client_id, j.contractor_id].filter((x): x is string => !!x);
+      let list: ContactRow[] = [];
+      if (orgs.length) {
+        const { data: people, error: cErr } = await asUser.from("contacts")
+          .select("id, org_type, org_id, name, email, phone, is_primary").in("org_id", orgs)
+          .order("is_primary", { ascending: false }).order("name");
+        if (cErr) throw new Error(cErr.message);
+        list = (people ?? []) as ContactRow[];
+      }
+      const named = (id: string | null) => list.find(c => c.id === id) ?? null;
+      return {
+        job: {
+          id: j.id, job_number: j.job_number, project: j.project, lsd: j.lsd, afe: j.afe, status: j.status,
+          client: j.clients?.name ?? null, contractor: j.contractors?.name ?? null
+        },
+        client_rep: named(j.client_contact_id) ?? list.find(c => c.org_type === "client" && c.is_primary) ?? null,
+        contractor_rep: named(j.contractor_contact_id) ?? list.find(c => c.org_type === "contractor" && c.is_primary) ?? null,
+        contacts: { client: list.filter(c => c.org_type === "client"), contractor: list.filter(c => c.org_type === "contractor") }
+      };
+    };
+
+    // The form a draft proposes, if one did; the last draft call wins.
+    let action: Record<string, unknown> | null = null;
+
     const runTool = async (name: string, input: Record<string, unknown>): Promise<unknown> => {
       tool = name;
-      const call = name === "tracker_stats" ? asUser.rpc("ticket_tracker_stats")
-        : name === "ticket_aging" ? asUser.rpc("ticket_aging")
-        : name === "search_tickets" ? asUser.rpc("search_tickets", searchArgs(input))
-        : null;
-      if (!call) throw new Error(`no tool named ${name}`);
-      const { data, error } = await call;
-      if (error) throw new Error(error.message);
+      let out: unknown;
+      if (name === "tracker_stats" || name === "ticket_aging" || name === "search_tickets") {
+        const call = name === "tracker_stats" ? asUser.rpc("ticket_tracker_stats")
+          : name === "ticket_aging" ? asUser.rpc("ticket_aging")
+          : asUser.rpc("search_tickets", searchArgs(input));
+        const { data, error } = await call;
+        if (error) throw new Error(error.message);
+        out = data;
+      } else if (name === "find_client") {
+        out = (await findClients(String(input.q ?? ""))).map(r => ({ id: r.org_id, name: r.name, contact_count: r.contact_count }));
+      } else if (name === "find_job") {
+        const { data, error } = await asUser.rpc("search_jobs", { q: String(input.q ?? ""), status_filter: "All", search_field: "any", page_num: 0, page_size: 10 });
+        if (error) throw new Error(error.message);
+        out = ((data ?? []) as JobRow[]).map(j => ({
+          id: j.id, job_number: j.job_number, project: j.project, client_name: j.client_name, contractor_name: j.contractor_name,
+          lsd: j.lsd, afe: j.afe, status: j.status
+        }));
+      } else if (name === "job_record") {
+        out = await jobRecord(String(input.job_number ?? ""));
+      } else if (name === "draft_job") {
+        const client = await resolveClient(String(input.client_name ?? ""));
+        const d = shapeJobDraft(input, client);
+        const thenIn = input.then_jha && typeof input.then_jha === "object" ? input.then_jha as Record<string, unknown> : null;
+        const then = thenIn ? shapeJhaDraft(thenIn, { id: "", job_number: "the new job" }, JHA_TEMPLATES, HAZARD_NAMES) : null;
+        action = {
+          kind: "draft_job", summary: d.summary, seed: d.seed,
+          ...(then ? { next: { kind: "draft_jha", summary: then.summary, seed: then.seed } } : {})
+        };
+        out = { ready: true, summary: d.summary, next: then ? then.summary : null };
+      } else if (name === "draft_ticket" || name === "draft_jha") {
+        const job = await activeJob(String(input.job_number ?? ""));
+        const d = name === "draft_ticket" ? shapeTicketDraft(input, job) : shapeJhaDraft(input, job, JHA_TEMPLATES, HAZARD_NAMES);
+        action = { kind: name, summary: d.summary, seed: d.seed, job: { id: job.id, job_number: job.job_number } };
+        out = { ready: true, summary: d.summary };
+      } else {
+        throw new Error(`no tool named ${name}`);
+      }
       tool = "";
-      return data;
+      return out;
     };
 
     const result = await askLoop(thread, toolDefinitions(tools),
       systemPrompt({ name: me.name ?? "", role: me.role ?? "" }, Date.now()), key,
       { fetch: (url, init) => fetch(url, init), runTool, trace: traceLine, now: Date.now });
-    return json(result);
+    return json(action ? { ...result, action } : result);
   } catch (e) {
     const message = (e as Error).message;
     await logError("ask", message, { user: userId, tool });
