@@ -43,6 +43,11 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
   Nothing is waiting there now. The latest is
+  `20260910130301_a_jha_is_open_or_closed.sql` — `jhas.status` gains the
+  check list (`Open`, `Closed`) the other four status columns had from the
+  start; it was NOT NULL with a default since the baseline, but nothing
+  refused a third word, and an assessment filed under one would have been
+  neither open nor closed on any screen. Probe beside it. Before it,
   `20260910023039_the_file_checks_clock_starts_on_its_own.sql` —
   `app_settings.backup_verify_next_at` defaults to 01:00 Grande Prairie
   tomorrow: 20260908151245 seeded it with an UPDATE of the one row, and a
