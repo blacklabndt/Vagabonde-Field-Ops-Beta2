@@ -130,8 +130,9 @@ export const HELP = {
   }
 };
 
-// The screen's entry, or null. Null is a real answer — it is what hides the
-// "?" rather than opening an empty dialog.
+// The screen's entry, or null. Null is a real answer — it is what keeps a
+// screen with nothing to say quiet rather than raising an empty tip: App.jsx
+// asks this before it raises one, and HelpTip asks again.
 export function helpFor(screenKey) {
   return HELP[screenKey] || null;
 }

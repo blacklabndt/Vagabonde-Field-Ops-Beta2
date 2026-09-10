@@ -362,7 +362,11 @@ async function queueRunOrUnmove(
   try {
     return await queueRun(db, kind, null);
   } catch (e) {
-    await db.from("app_settings").update({ [column]: was }).eq("id", true).eq(column, moved);
+    // A reply the radio lost may sit on a row that did land. The next tick
+    // takes a queued run before it reads the clock, so when one of this
+    // kind is there the clock stays moved and nothing is run twice.
+    const landed = await openRun(db, "queued", [kind]).catch(() => null);
+    if (!landed) await db.from("app_settings").update({ [column]: was }).eq("id", true).eq(column, moved);
     throw e;
   }
 }
@@ -567,9 +571,10 @@ async function advance(db: SupabaseClient, run: Run, secret: string): Promise<Re
 // bucket it came from and re-stored under the same name, its row updated;
 // for reports and chat pictures that is the same bytes, for a re-rendered
 // assessment or timesheet it is today's, and the note says which. A file
-// whose source has gone is counted unrepairable and named. Once the walk is
-// done, a repair that changed any record has the folder's files.json.gz
-// rewritten from the rows, so a restore reads what is there now.
+// whose source has gone is counted unrepairable and named. The folder's
+// files.json.gz is rewritten from the rows at the end of ANY slice in which
+// a repair changed a record — not only at the end of the walk, so a run that
+// fails halfway never leaves the index naming a hash the file no longer has.
 async function verifySlice(
   db: SupabaseClient, conn: Connection, run: Run, runId: string, secret: string, deadline: number
 ): Promise<Record<string, unknown>> {
@@ -1030,7 +1035,8 @@ async function reconcileFileRows(
   db: SupabaseClient, drive: DriveClient, folderId: string, runId: string, records: FileRow[]
 ): Promise<void> {
   if (!records.length) return;
-  const filesFolder = (await drive.listFolders(folderId)).find(f => f.name === FILES_FOLDER);
+  const filesFolder = (await withRetry("Opening the backup's files folder", () => drive.listFolders(folderId)))
+    .find(f => f.name === FILES_FOLDER);
   if (!filesFolder) return;
   const live = new Map<string, string>();
   for (const e of await withRetry("Listing the files folder", () => drive.listFiles(filesFolder.id))) live.set(e.name, e.id);
@@ -1070,7 +1076,13 @@ async function stepManifest(
   // hashed to when it was stored. The spot check goes first, so a file it
   // re-stores is in the index under its new hash.
   const records = await listFileRows(db, runId);
-  await reconcileFileRows(db, drive, folderId, runId, records);
+  // Never the run's failure. An index that was not reconciled is the state
+  // this phase was in before reconcileFileRows existed — a restore may call
+  // one good file damaged, and the next file check repairs it — while a
+  // refusal thrown from here throws away a night of tables and files that
+  // are already whole in the folder, manifest and all.
+  try { await reconcileFileRows(db, drive, folderId, runId, records); }
+  catch (e) { console.warn(`The file records could not be reconciled with the folder: ${(e as Error).message}`); }
   c.spot = await spotCheck(db, drive, folderId, runId, records);
   const index = records.map(r => ({ name: r.name, bucket: r.bucket, key: r.key, size: r.size, sha256: r.sha256, reused: r.reused }));
   await withRetry("Uploading the file index", async () =>

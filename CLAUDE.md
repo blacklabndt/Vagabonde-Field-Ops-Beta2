@@ -389,10 +389,11 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
 - The backup panel's list of earlier runs is `EARLIER_RUNS` (12) deep, each
   row showing records, files and size from `runRows/runFiles/runBytes` in
   `backupPanelLogic.js` — the same helpers the last-run sentence uses, so
-  the two cannot drift — with `sizeTrend` drawing complete backup and
-  before_restore runs scaled from zero and flagging `halved` when the latest
-  is under half the one before. Five points on a daily schedule was too
-  short to read as a trend.
+  the two cannot drift — except a `verify` row, which shows `verifySentence`
+  in their place, again the helper the last-run sentence uses for that kind.
+  `sizeTrend` draws complete backup and before_restore runs scaled from zero
+  and flags `halved` when the latest is under half the one before. Five
+  points on a daily schedule was too short to read as a trend.
 - In-app help is `vite-app/src/help.js`, pure data keyed by screen key with
   a test that every TABS key has an entry under 200 words. Keep it true when
   a screen changes. There is no help button: the words arrive as a popup
@@ -515,7 +516,10 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   of that name was written over by another slice of the same run — two
   slices alive at once after a reclaim can each upload one name, in either
   order — and its file is hashed again from what is there; one listing a
-  night, a download only for the rare loser), then folds them into
+  night, a download only for the rare loser; best-effort and never the
+  run's failure — a listing refused is a warning in the function log, an
+  unreconciled index is the state the phase was in before, and the next
+  file check repairs it), then folds them into
   `files.json.gz` beside manifest.json and `manifest.files` says `hashed`,
   `index` and `spot`. An upload that lands after the manifest is the
   residual: named `damaged` by a restore in between, repaired by the next
@@ -578,7 +582,12 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   Gateway</title>") tries once more after two seconds, and what reaches
   function_errors is `gatewayRefusal`'s plain sentence, never the HTML —
   the digest mailed a page of it to the office once over a five-minute
-  blink. A real refusal keeps its own words (backupRun.ts, node-tested). A run whose `heartbeat_at` has
+  blink. A real refusal keeps its own words (backupRun.ts, node-tested). A
+  SLICE that meets one of those blips does not fail the run either:
+  `failOrLeave` leaves it running with an ageing heartbeat for the next tick
+  to reclaim and resume from the cursor, and only a real error — or a run
+  older than `RUN_RETRY_WINDOW_MS` (six hours), so a sustained outage cannot
+  wedge the schedule — is failed for good. A run whose `heartbeat_at` has
   been quiet for `SLICE_ALIVE_MS` — three minutes — died mid-slice and is
   reclaimed; every write a slice makes is conditional on the status it
   believes it holds, so a superseded slice writes nothing, not even its own
