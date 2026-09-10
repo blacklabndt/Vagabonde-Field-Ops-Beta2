@@ -5,6 +5,7 @@ import { Db, forgetChatMediaUrls } from "./db.js";
 import { tabList, Blueprint, Btn, ErrorBox, ErrorBoundary, TagX, Toast, Loading, Switch } from "./components/common.jsx";
 import { Toasts } from "./toastBus.js";
 import { forgetHeldDrafts } from "./chatDrafts.js";
+import { forgetAskThread } from "./askThread.js";
 import { forgetDosimetryAsked } from "./dosimetryPrompt.js";
 import { QueueBadge, QueueDialog } from "./components/queuePanel.jsx";
 import { FeatureRequestDialog } from "./components/featureRequest.jsx";
@@ -645,6 +646,7 @@ export function App() {
     setTicketSeed(null);
     setContextScreen("");
     forgetHeldDrafts();
+    forgetAskThread();
     forgetDosimetryAsked();
     forgetChatMediaUrls();
     setCurrentUser(null);
