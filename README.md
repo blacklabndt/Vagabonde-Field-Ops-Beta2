@@ -658,9 +658,10 @@ supabase/
                             invoice/JHA rendering, mail, the approval token, and the
                             nine modules the backup is built from (drive.ts and its
                             three vendors, backupTables/Manifest/Schedule/Run/
-                            Restore/Oauth/Common, gzip) and Ask's three (askTools, the
+                            Restore/Oauth/Common, gzip) and Ask's four (askTools, the
                             tools and their tabs; askLoop, the Messages API loop;
-                            askDrafts, the seed a draft opens a form with),
+                            askDrafts, the seed a draft opens a form with; askSends,
+                            who a send may go to and the gates the screens apply),
                             most of them erasable TypeScript the node suite imports
                             directly
   handover/                 the handover runbooks — the two wipes, the probes a

@@ -414,6 +414,33 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   `JHA_TEMPLATES` and the hazard names live in askTools.ts as well as
   data.js, and askTools.test.mjs fails on drift. Spec:
   `docs/superpowers/specs/2026-09-10-ask-drafts-design.md`.
+  The third slice sends — and the function still sends and writes
+  NOTHING: `list_jhas` and `list_tickets` (tab job; a ticket's total
+  null unless a price role) find the record, `send_jha` (tab job) and
+  `send_ticket_approval` (tab ticket AND a price role, the viewer's
+  `seesPrices` gate) read it as the caller, apply the screen function's
+  own gate before proposing (`_shared/askSends.ts`, pure: a PDF and
+  the signer or Admin/Coordinator/Technician; unsigned, a total above
+  zero, own or Admin/Coordinator) and resolve recipients under a rule
+  STRICTER than Job detail's dialog — a name must be one contact on file
+  for the job's client or contractor with an email, and a bare address
+  is allowed only if it appears verbatim in the person's own turns
+  (`windowTurns`' user side, joined); an address the model read off a
+  record, a query text or a guess is refused. A ticket approval goes
+  where the viewer's does — the ticket's client contact address, else
+  the job's client rep — and the person is not asked where. The action
+  (`send_jha` / `send_ticket_approval`: summary, done, `to` as
+  addresses only, the record, the job) shows on the card as Send / Not
+  now with every address named; Send stays in the card, App's
+  `runAskAction` calls `Db.sendJhaEmail` / `Db.sendTicketApproval` —
+  the functions the screens use, which re-check the session, the record
+  and the recipients — drops the job's `jhas.<id>`/`tickets.<id>` cache
+  entry so Job detail reads the sent stamp, and answers the `done`
+  sentence, which the card pushes as an answer turn (`isSendAction` in
+  askThread.js tells the two proposal shapes apart). A refusal stays on
+  the card's error line in the function's own words. No cc, no reports,
+  no chase marking, no timers (next slice). Spec:
+  `docs/superpowers/specs/2026-09-10-ask-sending-design.md`.
 - The screen is in the address bar: `vite-app/src/route.js` (pure, node-
   tested) spells `#/board`, `#/chat`, `#/job/S-10113` and
   `#/job/S-10113/ticket`; App.jsx pushes one history entry per screen
@@ -803,8 +830,8 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   reads both files off disk, strips the types from the function's with
   Node's own stripper, folds the whitespace and compares them. Change one,
   change the other, in the same commit; an interface goes ABOVE the marker,
-  where the twin has nothing to match. Eleven shared modules — `backupSchedule.ts`,
-  `askTools.ts`, `askLoop.ts`, `askDrafts.ts`,
+  where the twin has nothing to match. Twelve shared modules — `backupSchedule.ts`,
+  `askTools.ts`, `askLoop.ts`, `askDrafts.ts`, `askSends.ts`,
   `backupTables.ts`, `backupManifest.ts`, `backupRun.ts`, `backupOauth.ts`,
   `drive.ts`, `gzip.ts` and `constantTime.ts` — are erasable TypeScript with
   no imports of their own (`backupManifest.ts` may name `backupSchedule.ts`,
