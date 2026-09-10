@@ -199,6 +199,7 @@ export function HomeScreen({ onCreateJob, onOpenJob, onStartTicket, currentUser,
   const unsearchable = searchField === "any" && query.trim() !== "" && searchableText(query) === "";
 
   const last = useRef({ key: null, text: "" });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: fetchPage and unsearchable read only values this list already carries
   useEffect(() => {
     const key = [filter, searchField, query].join("\u0001");
     const isNewQuery = last.current.key !== null && last.current.key !== key;
@@ -451,6 +452,7 @@ function NewTicketDialog({ onClose, onChosen }) {
   // it says so and can't be tapped twice on a slow link.
   const [opening, setOpening] = useState(false);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the client's id, which is all the jobs read needs
   useEffect(() => {
     if (!client) { setJobs([]); setJobId(""); return; }
     let live = true;

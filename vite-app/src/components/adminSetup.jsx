@@ -351,6 +351,7 @@ function RecentErrorsPanel() {
       .catch(e => { if (mine === loadSeq.current) setErr(e.message || "Couldn't load recent errors."); })
       .finally(() => { if (mine === loadSeq.current) setLoading(false); });
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the first page is read once at mount; the filter and Refresh call load themselves
   useEffect(() => { load(fn, true); }, []);
 
   const loadMore = async () => {

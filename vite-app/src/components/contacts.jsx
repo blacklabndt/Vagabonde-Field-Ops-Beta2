@@ -91,6 +91,7 @@ export function ContactsScreen({ currentUser }) {
     }
     if (seq === loadSeq.current) setContactsLoading(false);
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the organisation; the load it calls reads that same organisation
   useEffect(() => { loadContacts(); setPage(0); setFilter(""); }, [org ? org.key : null]);
 
   // Primary first, then alphabetical — the list answers "who do I call?"

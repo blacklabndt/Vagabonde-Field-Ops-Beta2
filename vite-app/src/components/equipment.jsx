@@ -73,10 +73,12 @@ export function EquipmentScreen({ currentUser }) {
   // The roster once, for the assign-to dropdown: an equipment write cannot
   // change who is on it, and re-reading it after every save was a paged
   // walk of profiles per edit.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the roster and the calibration counts are read once when the screen opens
   useEffect(() => { refreshStats(); Db.listActiveProfiles().then(setPeople).catch(() => {}); }, []);
   // Filter and page in one effect: as two, arriving on this screen (and every
   // filter tap that was already on page 1) fetched the same page twice.
   const lastFilter = useRef(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the page, filter and search are passed in, and the page size is already watched
   useEffect(() => {
     // A filter or search change lands on page 1; the search waits for a
     // pause in typing so each keystroke isn't a request.

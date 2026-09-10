@@ -191,6 +191,7 @@ export function JhaBuilderScreen({ job, jobRecord, currentUser, onSubmitted, onC
     }).catch(() => { /* first assessment on this job, or no signal and nothing cached */ });
   };
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the job; the prefill it calls reads the same job and the live form refs
   useEffect(() => {
     if (!wipKey) return;
     let live = true;
@@ -231,6 +232,7 @@ export function JhaBuilderScreen({ job, jobRecord, currentUser, onSubmitted, onC
     || !sameAs({ ...equip, redSerial: "" }, { ...baseline.current.equip, redSerial: "" })
     || !!siteRepOther.trim()
     || w1Touched.current || w2Touched.current;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: every value it writes is listed; the rest move only when one of those does
   useEffect(() => {
     if (!wipKey || !wipReady.current) return;
     if (!entered) { dropWip(); return; }

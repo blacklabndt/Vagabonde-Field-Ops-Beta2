@@ -771,6 +771,7 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
 
   // Reading the room settles the drawer badge: note where the person had
   // read up to (the divider's anchor), then move their bookmark to now.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs once on arrival, and the signed-in account cannot change while the room is open
   useEffect(() => {
     let live = true;
     Db.getChatLastRead(currentUser.id)
@@ -809,6 +810,7 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
     });
   };
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the feed is built once; its helpers read refs, and the account cannot change here
   useEffect(() => {
     let live = true;
 
@@ -1059,6 +1061,7 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
   // place after a prepend, follow the bottom if they were there — and if
   // they were up reading history when something new landed at the tail,
   // offer the way down instead of yanking them there.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scrollBottom reads the list ref and the motion setting at the moment it runs
   useLayoutEffect(() => {
     const el = listRef.current;
     if (!el) return;
@@ -1419,6 +1422,7 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
 
   // The elapsed readout, and the two-minute ceiling — which stops the
   // microphone and holds what it has.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: stopRecording reads the recorder through a ref, so an older copy behaves the same
   useEffect(() => {
     if (!recording) return;
     const t = setInterval(() => {

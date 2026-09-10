@@ -387,6 +387,7 @@ export function SearchSelect({
   }, [open]);
 
   // Debounced so a fast typist makes one request, not one per letter.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: search is re-made every render; searchKey is how a caller says the results changed
   useEffect(() => {
     if (!open) return;
     let live = true;

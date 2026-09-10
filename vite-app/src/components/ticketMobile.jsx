@@ -219,6 +219,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
   // and the moment someone closes out their billing is when they're thinking
   // about the day ending. Reminder only — it never blocks the ticket.
   const [openJha, setOpenJha] = useState(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the job's id — a reloaded job row is the same job and the same open JHA
   useEffect(() => {
     if (!job || !job.dbId) return;
     Db.openJhaForJob(job.dbId).then(setOpenJha).catch(() => setOpenJha(null));
@@ -259,6 +260,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
   // organisation, which needed signal in the one screen used without it.
   const [editingTo, setEditingTo] = useState(false);
   const [clientContacts, setClientContacts] = useState([]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the client's id; a reloaded job row names the same client's contacts
   useEffect(() => {
     if (!editingTo || !job || !job.clientId) return;
     let live = true;
@@ -282,6 +284,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
   // on a work-date edit. WIP recovery and reopening a draft both set
   // workDate after mount; when this was one effect keyed on workDate too,
   // each of those needlessly re-pulled the whole rate card and profile list.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the client; the ticket and who is signed in cannot change on this screen
   useEffect(() => {
     if (!job) return;
     if (!mayPrice) return;
@@ -331,6 +334,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
   // database at save time, which keeps a ticket built offline this morning
   // from colliding with one raised in the meantime. Its own effect so a
   // work-date edit reprices the number without re-pulling rates or crew.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the day and the draft; who is signed in cannot change on this screen
   useEffect(() => {
     if (!job || ticket || !mayPrice) return;
     Db.nextTicketNumber(initialsOf(currentUser.name), workDate)
@@ -390,6 +394,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
       setLoadError(e.message || "Couldn't open that ticket.");
     }
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs once, when the rates land, and the read it calls reads those same rates
   useEffect(() => {
     if (!ticket || !rates || draftLoaded.current) return;
     draftLoaded.current = true;
@@ -401,6 +406,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
   // shape nobody asked for.
   const [lastTicket, setLastTicket] = useState(null);
   const [copiedFrom, setCopiedFrom] = useState("");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the job's id — a reloaded job row has the same last ticket
   useEffect(() => {
     if (!job || !job.dbId) return;
     let live = true;
@@ -457,6 +463,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
     OfflineCache.remove(overwroteKey(ticket));
   };
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the job and the draft; reading the copy again would undo what was typed
   useEffect(() => {
     if (!job || loadingTicket) return;
     let live = true;
@@ -506,6 +513,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
     return () => { live = false; };
   }, [job ? job.dbId : null, ticket, loadingTicket]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the job — and so the name the copy is kept under — cannot change on this screen
   useEffect(() => {
     // "Start empty" on a reopened draft reloads the stored ticket, and that
     // reload lands here as a change like any other — so the copy that was

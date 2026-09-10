@@ -50,6 +50,7 @@ export function TimesheetsScreen({ currentUser }) {
   const [doseLoading, setDoseLoading] = useState(false);
   const [doseExporting, setDoseExporting] = useState(false);
   const doseSeq = useRef(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the dose read wants the start and end dates alone, and both are listed here
   useEffect(() => {
     if (view !== "dose") return;
     const mine = ++doseSeq.current;
@@ -188,6 +189,7 @@ export function TimesheetsScreen({ currentUser }) {
     }
     if (mine === loadSeq.current) setLoading(false);
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the period's start, which names one period; load reads nothing else that moves
   useEffect(() => { load(period); }, [period.start]);
 
   // Admins only: reviewing somebody else's hours is not a technician's job,

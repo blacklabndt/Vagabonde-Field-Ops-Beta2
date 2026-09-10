@@ -81,6 +81,7 @@ function initialsOf(name) {
 // not a Dialog — it slides, it has no title, and it stays mounted through its
 // own exit animation.
 function useModalPanel(open, ref) {
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the ref is the same object every render; what it points at is read when it runs
   useEffect(() => {
     if (!open) return undefined;
     const opener = document.activeElement;
@@ -577,6 +578,7 @@ export function App() {
   // further down, and the flush must call the current one, not the one
   // this effect closed over at sign-in.
   const onSyncedRef = useRef(() => {});
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-attached per account: the id is in the list, the record itself is not needed
   useEffect(() => {
     OfflineQueue.setOwner(currentUser ? currentUser.id : null);
     if (!currentUser) return undefined;
@@ -653,6 +655,7 @@ export function App() {
   // saying so beats leaving someone looking signed in while every save fails.
   // Nothing queued is lost by this: the queue is separate from the identity
   // and survives until it syncs.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one listener for the app's life; it only calls setters, which never change
   useEffect(() => {
     const recheck = async () => {
       if (!restoredOffline.current) return;
@@ -869,6 +872,7 @@ export function App() {
     }
     setCheckingSession(false);
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: restoring the session is a once-a-load job; it only uses refs and state setters
   useEffect(() => {
     if (Recovery.pending()) { setCheckingSession(false); return; }
     bootSession();
@@ -926,6 +930,7 @@ export function App() {
   // (landingRoute): those screens are half-entered work living in the editor,
   // and the address never said which draft. Going back out of a ticket lands
   // on its job, which is where the ticket is opened from anyway.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the job opener is re-made each render but only reads the server and sets state
   useEffect(() => {
     if (!currentUser) return undefined;
     const onPop = () => {
@@ -983,6 +988,7 @@ export function App() {
     }
   };
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the reference lists are read per signed-in account; the loader holds nothing else
   useEffect(() => {
     if (!currentUser) return;
     loadReferenceData();
@@ -1070,9 +1076,11 @@ export function App() {
   // has been opened… The list is emptied first: it is the previous person's
   // until the read lands, and if the read fails (no signal is the ordinary
   // condition) it stayed theirs — their drafts, on the next person's screen.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the draft list is read per signed-in account; the loader reads that same account
   useEffect(() => { setMyTickets([]); setMyOpenJhas([]); if (currentUser) loadMyTickets(); }, [currentUser]);
   // …and again on arriving at the screen. Keyed on `screen` alone: keyed on
   // both, signing in ran this a second time for the same list.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: arriving at the screen is what re-reads it; signing in has its own read above
   useEffect(() => { if (currentUser && screen === "mytickets") loadMyTickets(); }, [screen]);
   onSyncedRef.current = () => { if (currentUser) loadMyTickets(); };
   // …and whenever the outbox drains: a queued draft that just synced is a

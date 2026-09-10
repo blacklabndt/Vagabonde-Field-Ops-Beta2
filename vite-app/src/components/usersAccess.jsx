@@ -25,6 +25,7 @@ export function UsersAccessScreen({ currentUser }) {
     catch (e) { setError(e.message || "Couldn't load accounts."); }
     setLoading(false);
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reads the account list once when the screen opens; it takes nothing from the render
   useEffect(() => { load(); }, []);
 
   const account = users.find(u => u.id === selected) || users[0];

@@ -68,8 +68,11 @@
         // Only missing captures are reported: the screens list
         // `job ? job.dbId : null` where they mean to re-run on the id and
         // not on every reload of the record, and that is not a mistake.
+        // Every existing site was read once (Sept 2026) and carries a
+        // suppression comment naming why it leaves something out; a new
+        // one lists what it reads or says why not.
         "useExhaustiveDependencies": {
-          "level": "info",
+          "level": "error",
           "options": { "reportUnnecessaryDependencies": false }
         }
       },

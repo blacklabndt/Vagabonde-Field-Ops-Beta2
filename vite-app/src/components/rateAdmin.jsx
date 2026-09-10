@@ -58,6 +58,7 @@ export function RateAdminScreen() {
     catch (e) { console.error("Couldn't load who follows the house card:", e.message); }
   };
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the three reference reads happen once at open and take nothing from the render
   useEffect(() => { loadClients(); loadOverrides(); loadFollow(); }, []);
 
   // The `live` flag on the effect below only stops a *later* load starting —
@@ -98,6 +99,7 @@ export function RateAdminScreen() {
   // first. Each pending write is keyed by rate-line id so it lands on the
   // right schedule either way, but flushing here means the grid that loads
   // next can't show a stale figure for a rate just typed.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the chosen client changes; the flush is fixed and the load reads that client
   useEffect(() => {
     let live = true;
     (async () => {

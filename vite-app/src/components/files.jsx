@@ -69,6 +69,7 @@ export function FilesScreen({ currentUser }) {
   // own writes do, and nothing else clears it for the life of the tab. Not
   // per folder click: that was the walk moving this out of load() saved.
   useEffect(() => { Db.forgetFileTree(); }, []);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the folder is passed in, and load itself only touches refs and state setters
   useEffect(() => { load(prefix); }, [prefix]);
 
   const crumbs = prefix ? prefix.split("/") : [];

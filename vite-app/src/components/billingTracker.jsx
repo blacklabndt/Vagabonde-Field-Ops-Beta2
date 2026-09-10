@@ -154,6 +154,7 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
       });
 
   const loadTiles = () => { loadStats(); loadAging(); };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the tiles count every ticket, so the two reads take nothing from this render
   useEffect(() => { loadTiles(); }, [filter]);
 
   // A request token, so a slow earlier page cannot land after a newer one.
@@ -195,6 +196,7 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
   // same page twice. A changed filter or search lands on page 1; typing
   // waits for a pause so each keystroke isn't a request.
   const lastQuery = useRef(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: every value the fetch reads, the page size included, is already in the list
   useEffect(() => {
     const key = [filter, q, from, to].join("\u0000");
     if (lastQuery.current !== null && lastQuery.current !== key && page !== 0) {
@@ -219,6 +221,7 @@ export function BillingTrackerScreen({ onOpenTicket, currentUser }) {
     setContacts(Object.fromEntries(list.map(t => [t.id, emailIn(t.contactLabel)])));
     return list;
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the lookup takes nothing from the render, and the ref beside it makes it once
   useEffect(() => {
     if (!priced || contactsAsked.current) return;
     if (!rows.some(r => r.status === "Awaiting approval")) return;

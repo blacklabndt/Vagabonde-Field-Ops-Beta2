@@ -219,6 +219,7 @@ export function AutomaticBackupPanel() {
   // are filled from the server once, and after that only a Save resets them.
   // Refreshing them on every read would rewrite what the Admin is halfway
   // through typing.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: showRun only writes a ref and calls a state setter, so any copy of it is the same
   const load = useCallback((seed = false) => {
     setLoadState(s => (s === "ready" ? s : "loading"));
     Db.backupState()
@@ -250,6 +251,7 @@ export function AutomaticBackupPanel() {
 
   useEffect(() => { load(true); }, [load]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: showRun only writes a ref and calls a state setter, so any copy of it is the same
   useEffect(() => {
     let alive = true;
     let timer = null;

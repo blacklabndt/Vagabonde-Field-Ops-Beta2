@@ -214,10 +214,12 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
     if (bad) setFiledError(`Couldn't read what's filed against ${job.id}: ${(bad.reason && bad.reason.message) || "the read failed."} The cards below are incomplete — reload before deleting anything.`);
     setLoading(false);
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the cards are read once per job; App remounts this screen when another job opens
   useEffect(() => { if (job && job.dbId) { setTicketPage(0); refresh(); } }, [job ? job.dbId : null]);
 
   // The record is derived from the job row and the contact directory, so it
   // reloads whenever you open a different job instead of showing the last one.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the record is read once per job, and a different job remounts the whole screen
   useEffect(() => {
     if (!job || !job.dbId) return;
     let live = true;
@@ -1237,6 +1239,7 @@ function JhaCloseOutDialog({ jha, currentUser, onClose, onDone }) {
   const [offer, setOffer] = useState(null);   // { row, onFile }
   const [keeping, setKeeping] = useState(false);
   const [keepMsg, setKeepMsg] = useState("");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: asked once as the dialog opens; typing a reading changes no serial it reads
   useEffect(() => {
     if (dosimetryAskedFor(currentUser.id)) return undefined;
     const mine = rows.find(r => r.profileId === currentUser.id);
@@ -1715,6 +1718,7 @@ function CreateTicketDialog({ job, jobRecord, contacts, currentUser, onClose, on
   // filed for the day. This reminds rather than blocks — the JHA may have been
   // filed on paper, or by the other tech on the crew.
   const [jhaMissing, setJhaMissing] = useState(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only the job's id is read here, and that id is what this already watches
   useEffect(() => {
     if (!job || !job.dbId) return;
     Db.jhaFiledToday(job.dbId).then(ok => setJhaMissing(!ok)).catch(() => setJhaMissing(false));
@@ -1745,6 +1749,7 @@ function CreateTicketDialog({ job, jobRecord, contacts, currentUser, onClose, on
   const longDate = d.toLocaleDateString("en-CA", { weekday: "short", day: "2-digit", month: "long", year: "numeric" });
   const seq = preview ? preview.slice(preview.lastIndexOf("-") + 1) : "";
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the date checked is built from the work date this already watches
   useEffect(() => {
     if (Number.isNaN(d.getTime())) return;
     let live = true;

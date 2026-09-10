@@ -24,7 +24,13 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   formatter and the import sorter are off, and every rule turned off in the
   config says why. A finding the code is right about gets
   `// biome-ignore lint/<group>/<rule>: <reason>` on the line above it,
-  never a loosened rule.
+  never a loosened rule. The hook rule (`useExhaustiveDependencies`,
+  missing captures only — the `job ? job.dbId : null` half of each pair is
+  not reported) is an error: every hook site was read once, and one that
+  means to run on an id rather than on each reload of the record, or once
+  at mount, or on a screen whose props cannot change without a remount,
+  carries a biome-ignore saying which; a new hook either lists what it
+  reads or says in its comment why not.
 - Build: `npm --prefix vite-app run build`
 - Deploy: `npm run build && npx wrangler deploy` (from repo root)
 - Dev server: use the `.claude/launch.json` `beta2-dev` config, not Bash
