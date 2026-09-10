@@ -39,9 +39,12 @@ hash, size and drive id.
 - A file whose source has gone cannot be repaired; it is counted
   `unrepairable` and named.
 
-Once the walk is done, if any record changed, the folder's `files.json.gz`
-is rewritten from the rows, so the next carry-over and a restore read what
-is there now.
+The folder's `files.json.gz` is rewritten from the rows at the end of any
+slice in which a record changed — not only once the walk is done — so the
+next carry-over and a restore read what is there now. A run that failed
+halfway would otherwise leave the index naming the old hash for a file it
+had already replaced, and a restore in between would refuse that good file
+as `damaged`.
 
 ## What the panel shows
 

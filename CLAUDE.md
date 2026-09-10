@@ -514,9 +514,13 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   `manifest.files` says `hashed`, `index` and `spot`. A carry-over needs
   the base index to hold the file's hash (else it is read through once),
   the copy keeps that hash, one carried-over file a night is downloaded
-  and hashed against its record (`spot`: ok / re-stored / not checked —
-  never a failure), and a restore refuses to put back a file whose bytes
-  do not hash to the index (`damaged`, named in the notes). Spec:
+  and hashed against its record (`spot`: ok / re-stored / not checked /
+  damaged — never a failure of the RUN, but a `damaged` answer, where the
+  drive's copy disagreed with its record and could not be re-stored, also
+  goes to function_errors, because `spot` reaches no screen and the digest
+  and Home's strip are where the office reads it), and a restore refuses
+  to put back a file whose bytes do not hash to the index (`damaged`,
+  named in the notes). Spec:
   `docs/superpowers/specs/2026-09-08-backup-hashes-every-file-design.md`.
   Every `backup_verify_every_days` (14) the tick queues a `verify` run —
   after the backups, only when none is due, the clock moved at START by

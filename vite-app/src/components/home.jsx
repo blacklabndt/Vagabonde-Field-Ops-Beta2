@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { primaryContact, contactsForOrg, seesPrices as pricesFor, Store } from "../data.js";
-import { attentionItems, attentionSignature, attentionDismissedKey, dismissAttention, clearDismissedAttention } from "../attention.js";
+import { attentionItems, attentionSignature, attentionDismissedKey, attentionSuppressed, dismissAttention, clearDismissedAttention } from "../attention.js";
 import { Db } from "../db.js";
 import { OfflineQueue } from "../offlineQueue.js";
 import { tabList, Blueprint, Btn, TableScroll, TagX, Field, Dialog, ErrorBox, StatusTag, useMissingFields, RowsPerPage, useRowsPerPage, SearchSelect, RequiredLeft } from "./common.jsx";
@@ -132,7 +132,11 @@ export function HomeScreen({ onCreateJob, onOpenJob, onStartTicket, currentUser,
   const signature = useMemo(() => attentionSignature(attention), [attention]);
   const [dismissedSig, setDismissedSig] = useState("");
   useEffect(() => { setDismissedSig(uid ? Store.load(attentionDismissedKey(uid), "") : ""); }, [uid]);
-  const showAttention = signature !== "" && signature !== dismissedSig;
+  // Whether this account has already waved this trouble away is attention.js's
+  // answer and not a second copy of it here — dismissedSig is state so that a
+  // dismissal re-renders, and attentionSuppressed is what decides, which is the
+  // one npm test pins. The empty test stays: nothing to say is not a strip.
+  const showAttention = signature !== "" && !attentionSuppressed(Store, uid, signature);
   // A dismissal belongs to the trouble that was showing, so it goes when that
   // trouble does — once the reads have answered (attentionRead). Without
   // this the one refusal whose words never change — the drive's

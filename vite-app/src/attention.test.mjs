@@ -208,6 +208,20 @@ test("a new error, or one more of them, moves the signature", () => {
   // A fresh error appearing, and then a second one, each change the signature.
   assert.notEqual(withOne, bare);
   assert.notEqual(withTwo, withOne);
+  // And one error replacing another — yesterday's aged out of the window as
+  // today's came in — is news too, though the count never moved. The stamp in
+  // the signature is the only thing that says so.
+  const later = attentionSignature(attentionItems(failing, [
+    { function_name: "chat-push", created_at: agoMs(hours(1) / 2) }
+  ], NOW));
+  assert.notEqual(later, withOne, "a later error under an unchanged count is still new trouble");
+  // The failed run signs by its own stamp for the same reason: tonight's bad
+  // night must not hide behind last night's dismissal, though both read
+  // "Last backup failed".
+  const tonight = attentionSignature(attentionItems({
+    ...failing, last_run: { kind: "backup", status: "failed", finished_at: agoMs(hours(1)) }
+  }, [], NOW));
+  assert.notEqual(tonight, bare, "a fresh failure is a fresh signature");
 });
 
 test("a dismissed strip stays down until its signature changes", () => {
@@ -226,9 +240,15 @@ test("a dismissed strip stays down until its signature changes", () => {
 test("nothing to say is never suppressed, and nothing is written for a non-signature", () => {
   const store = fakeStore();
   // An empty signature must never match a stored dismissal — else a calm
-  // morning after a dismissed night would read as "still dismissed".
+  // morning after a dismissed night would read as "still dismissed". The store
+  // has to be holding the empty string for that to be tested at all: it is what
+  // clearDismissedAttention writes, and what an account that has never
+  // dismissed anything reads back.
   dismissAttention(store, "admin1", "sig");
   assert.equal(attentionSuppressed(store, "admin1", ""), false);
+  clearDismissedAttention(store, "admin1");
+  assert.equal(attentionSuppressed(store, "admin1", ""), false, "a cleared dismissal is not a match for nothing");
+  assert.equal(attentionSuppressed(store, "admin4", ""), false, "nor is the fallback an account that never dismissed one reads");
   // No account, no signature: nothing is stored.
   dismissAttention(store, "", "sig");
   dismissAttention(store, "admin3", "");

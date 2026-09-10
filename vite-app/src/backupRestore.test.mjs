@@ -1300,3 +1300,18 @@ test("a damaged file is counted on both cursors and reaches the panel's counts",
   assert.equal(job.damaged, 1);
   assert.equal(jobRestoreCounts(job).damaged, 1);
 });
+
+test("a damaged file is left out rather than written over a good one", () => {
+  // The cursor half is above; this is the half that ships. Both file loops hash
+  // what came off the drive against the folder's own index and skip what does
+  // not match — a damaged PDF put back over a good one is worse than a missing
+  // one, which is the whole reason the index exists.
+  const source = read("supabase/functions/backup-restore/index.ts");
+  const checks = [...source.matchAll(/rec && rec\.sha256 && await hashBytes\(bytes\) !== rec\.sha256\) \{([\s\S]*?)\n {4}\}/g)].map(m => m[1]);
+  assert.equal(checks.length, 2, "restore-all's files phase and the per-job restore each check");
+  for (const body of checks) {
+    assert.match(body, /c\.damaged \+= 1;/, "a file that failed the check is counted");
+    assert.match(body, /addRestoreNote\(/, "and named, or nobody knows which one was left out");
+    assert.match(body, /\n\s*continue;/, "and skipped: the upload below must not run for it");
+  }
+});

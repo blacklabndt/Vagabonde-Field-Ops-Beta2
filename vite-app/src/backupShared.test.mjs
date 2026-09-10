@@ -938,7 +938,12 @@ test("the shared modules read nothing from the world around them", () => {
   for (const f of ["backupTables.ts", "backupManifest.ts", "drive.ts", "backupOauth.ts",
     "backupRun.ts", "backupSchedule.ts", "gzip.ts"]) {
     const src = read(`supabase/functions/_shared/${f}`);
-    const imports = [...src.matchAll(/^import .*?from ["'](.+?)["']/gm)].map(m => m[1]);
+    // Every import statement, however it is wrapped: the specifier is the
+    // first quoted string after "from", or straight after "import" for a
+    // side-effect import. A regex that wanted "from" on the same line as
+    // "import" could not see the multi-line shape every other file in this
+    // repository uses, and a stray import walked straight past it.
+    const imports = [...src.matchAll(/^import\b\s*(?:[^;]*?\bfrom\s*)?["']([^"']+)["']/gm)].map(m => m[1]);
     const allowed = f === "backupManifest.ts" ? ["./backupSchedule.ts"] : [];
     assert.deepEqual(imports, allowed, `${f} must import only ${allowed.join(", ") || "nothing"}`);
     assert.ok(!/Deno\.env|process\.env/.test(src), `${f} must not read the environment`);

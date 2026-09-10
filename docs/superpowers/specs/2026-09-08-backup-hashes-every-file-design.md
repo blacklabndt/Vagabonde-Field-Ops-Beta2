@@ -43,7 +43,10 @@ fails at restore time; a damaged PDF went back over a good one in silence.
    re-stored under the same name, and its record updated before the index
    is written. The outcome is a sentence on the manifest and on the run's
    counts (`spot`): "ok: …", "re-stored: …", "nothing carried over to
-   check", or "not checked: …". It never fails the run.
+   check", "not checked: …", or — when the drive's copy is wrong and the
+   re-store failed too — "damaged: …", which also goes to `function_errors`
+   so the office's daily digest carries it, because `spot` itself is drawn
+   on no screen. It never fails the run.
 5. **A restore verifies every file it puts back** against the folder's
    index. A file whose bytes do not hash to its record is not written back
    — a damaged PDF over a good one is worse than a missing one — and is
