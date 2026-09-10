@@ -228,15 +228,13 @@ async function tick(db: SupabaseClient, secret: string): Promise<Record<string, 
     // claim on it.
     if (s.backup_verify_next_at && Date.parse(String(s.backup_verify_next_at)) <= Date.now()) {
       const movedV = nextVerifyAt(Date.now(), Number(s.backup_verify_every_days ?? 14));
-      // Asked before the move, so a refusal here moves nothing.
-      const servedV = await servedSince(db, VERIFY_KIND, s.backup_verify_next_at);
       const { data: wonV, error: vErr } = await db.from("app_settings")
         .update({ backup_verify_next_at: movedV })
         .eq("id", true).eq("backup_verify_next_at", s.backup_verify_next_at).select("id");
       if (vErr) throw vErr;
       if (!stillHoldsRun(wonV)) return { ok: true, idle: true };
-      if (servedV) return { ok: true, idle: true, served: true, next: movedV };
       const verify = await queueRunOrUnmove(db, VERIFY_KIND, "backup_verify_next_at", s.backup_verify_next_at, movedV);
+      if (!verify) return { ok: true, idle: true, served: true, next: movedV };
       return await advance(db, verify, secret);
     }
     return { ok: true, idle: true, next: s.backup_next_run_at };
@@ -255,15 +253,13 @@ async function tick(db: SupabaseClient, secret: string): Promise<Record<string, 
     weekday: Number(s.backup_weekday ?? 0),
     hour: Number(s.backup_hour ?? 2)
   }, Date.now());
-  // Asked before the move, so a refusal here moves nothing.
-  const served = await servedSince(db, "backup", s.backup_next_run_at);
   const { data: won, error: nErr } = await db.from("app_settings").update({ backup_next_run_at: moved })
     .eq("id", true).eq("backup_next_run_at", s.backup_next_run_at).select("id");
   if (nErr) throw nErr;
   if (!stillHoldsRun(won)) return { ok: true, idle: true };
-  if (served) return { ok: true, idle: true, served: true, next: moved };
 
   const created = await queueRunOrUnmove(db, "backup", "backup_next_run_at", s.backup_next_run_at, moved);
+  if (!created) return { ok: true, idle: true, served: true, next: moved };
   return await advance(db, created, secret);
 }
 
@@ -386,10 +382,19 @@ async function advanceById(
 // the table had not been taught) and would cost the backup a night, and the
 // tick's own gateway-page retry could not get either back: it re-read a
 // clock already moved and went idle.
+// The due time's run may already be there (servedSince), and that is asked
+// only once the move is won, never before it: the row that landed under an
+// earlier claim was there before that claim put the clock back, so the
+// claim that wins the clock afterwards sees it. Asked ahead of the move, a
+// tick could read "nothing yet", lose the race to that whole sequence, win
+// the move over the clock it had put back, and queue the night twice after
+// all. Null says the due time is served: the clock stays moved and nothing
+// is queued.
 async function queueRunOrUnmove(
   db: SupabaseClient, kind: string, column: string, was: unknown, moved: unknown
-): Promise<Run> {
+): Promise<Run | null> {
   try {
+    if (await servedSince(db, kind, was)) return null;
     return await queueRun(db, kind, null);
   } catch (e) {
     // A reply the radio lost may sit on a row that did land. The next tick

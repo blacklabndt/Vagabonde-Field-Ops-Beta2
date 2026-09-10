@@ -615,9 +615,12 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   moved and goes idle. When the reply was lost on a row that DID land and
   the read after it is refused too, the clock still goes back — the choice
   that never costs a night — and `servedSince` keeps that from costing a
-  second folder: the tick queues nothing for a due time that already has a
-  run of that kind created since it, bar a failed one (a minute of slack,
-  the row's clock being the database's), and moves the clock on past it.
+  second folder: a due time that already has a run of that kind created
+  since it, bar a failed one (a minute of slack, the row's clock being the
+  database's), is left with the clock moved on and nothing queued. It is
+  asked inside the claim, once the move is won and never before it, so the
+  row that landed under an earlier claim — there before that claim put the
+  clock back — is seen by the claim that wins the clock afterwards.
 - Restoring everything is gated four times — the caller's own Admin profile,
   a backup from a newer schema refused outright (`backup_schema_version()`),
   the Admin typing the backup's folder name (held against the name the drive gives preflight, never the request's own copy), and a complete safety backup of

@@ -1574,18 +1574,28 @@ test("a due time that already has its run is not queued a second one, for both c
   // The refused read still puts the clock back: the guard is what makes that
   // safe, so the two must stay together.
   assert.match(source, /const landed = await openRun\(db, "queued", \[kind\]\)\.catch\(\(\) => null\);\s*\n\s*if \(!landed\) await db\.from\("app_settings"\)\.update\(\{ \[column\]: was \}\)/);
-  for (const [kind, column, movedName, servedName] of [
-    ["\"backup\"", "backup_next_run_at", "moved", "served"],
-    ["VERIFY_KIND", "backup_verify_next_at", "movedV", "servedV"]
+  // Asked inside the claim, once the move is won and never before it: the
+  // row that landed under an earlier claim was there before that claim put
+  // the clock back, so the claim that wins the clock afterwards sees it.
+  // Asked ahead of the move, a tick could read "nothing yet", lose the race
+  // to that whole sequence, win the move over the clock it had put back and
+  // queue the night twice after all.
+  const claim = source.slice(source.indexOf("async function queueRunOrUnmove("), source.indexOf("async function queueRun("));
+  const askedAt = claim.indexOf("if (await servedSince(db, kind, was)) return null;");
+  const insertAt = claim.indexOf("return await queueRun(db, kind, null);");
+  const catchAt = claim.indexOf("} catch (e) {");
+  assert.ok(askedAt > 0, "the claim asks whether the due time has its run");
+  assert.ok(insertAt > askedAt && catchAt > insertAt, "asked before the insert, inside the try whose catch puts the clock back");
+  assert.doesNotMatch(source, /await servedSince\(db, (VERIFY_KIND|"backup")/, "the tick never asks ahead of the move");
+  for (const [kind, column, movedName, runName] of [
+    ["\"backup\"", "backup_next_run_at", "moved", "created"],
+    ["VERIFY_KIND", "backup_verify_next_at", "movedV", "verify"]
   ]) {
-    const askedAt = source.indexOf(`const ${servedName} = await servedSince(db, ${kind}, s.${column});`);
     const wonAt = source.indexOf(`.eq("id", true).eq("${column}", s.${column}).select("id");`);
-    const skipAt = source.indexOf(`if (${servedName}) return { ok: true, idle: true, served: true, next: ${movedName} };`);
-    const queueAt = source.indexOf(`queueRunOrUnmove(db, ${kind}, "${column}", s.${column}, ${movedName})`);
-    assert.ok(askedAt > 0, `${column}: the due time is asked about`);
-    assert.ok(wonAt > askedAt, `${column}: asked before the move, so a refusal moves nothing`);
-    assert.ok(skipAt > wonAt, `${column}: the clock moves on past a served due time`);
-    assert.ok(queueAt > skipAt, `${column}: and only an unserved one is queued`);
+    const queueAt = source.indexOf(`const ${runName} = await queueRunOrUnmove(db, ${kind}, "${column}", s.${column}, ${movedName});`);
+    const skipAt = source.indexOf(`if (!${runName}) return { ok: true, idle: true, served: true, next: ${movedName} };`);
+    assert.ok(wonAt > 0 && queueAt > wonAt, `${column}: the move is won first`);
+    assert.ok(skipAt > queueAt, `${column}: a served due time keeps the clock moved and queues nothing`);
   }
 });
 
