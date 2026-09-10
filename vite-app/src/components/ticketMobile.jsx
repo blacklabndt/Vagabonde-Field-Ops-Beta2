@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { money, todayLocal, localDate, dayMonth, initialsOf, crewRoleFor, hours, lineTotal, gstOn, gstLabel, gstRateOf, seesPrices, saneQuantityCeiling, SANE_CREW_HOURS, contactsForOrg } from "../data.js";
 import { Db } from "../db.js";
 import { Blueprint, Btn, TagX, Field, ErrorBox, emailIn, NoJobSelected, QueuedPanel, NumField, Loading, useScreenFoot, SearchSelect } from "./common.jsx";
@@ -887,7 +887,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
           // is ambiguous — a save that never left this device is not one.
           sendAttempted: stage === "email"
         });
-      } catch (queueErr) {
+      } catch {
         // The outbox is IndexedDB, and it can refuse — private browsing, a
         // full disk, a wedged database. Unguarded, that threw straight out
         // of save: the button stayed on "Saving…" for ever and nobody was

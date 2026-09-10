@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Db } from "../db.js";
 import { Blueprint, Btn, TableScroll, ErrorBox , Loading, openMinted } from "./common.jsx";
 

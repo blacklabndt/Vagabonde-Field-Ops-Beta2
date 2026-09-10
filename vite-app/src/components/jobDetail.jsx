@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { money, todayLocal, localDate, dayMonth, initialsOf, ticketDateStamp, lastNumbers, JOB_FIELDS, EMPTY_JOB_RECORD, seesPrices as pricesFor, fileSize, reportFileRefusal, MAX_REPORT_LABEL, decimalString, contactsForOrg } from "../data.js";
 import { acceptsNumberText } from "../numberInput.js";
 import { serialsOnProfile, newSerials, mergedSerials, isMissingSetOwnDosimetry, dosimetryAskedFor, markDosimetryAsked } from "../dosimetryPrompt.js";
@@ -1283,7 +1283,7 @@ function JhaCloseOutDialog({ jha, currentUser, onClose, onDone }) {
     }
     const bad = rows.filter(r => {
       const n = Number(decimalString(r.endReading));
-      return isNaN(n) || n < 0;
+      return Number.isNaN(n) || n < 0;
     });
     if (bad.length) {
       setErr(`“${bad[0].endReading}” isn't a reading in mR — use digits and one decimal point.`);
@@ -1632,7 +1632,7 @@ function UploadReportDialog({ job, jobRecord, currentUser, onClose, onSubmit }) 
             jobDbId: job.dbId, jobNumber: job.id, file, welds: welds.trim(), interpretedBy: currentUser.name,
             recipient: sent ? to.trim() : "", clientKey: uploadKey.current
           });
-        } catch (queueErr) {
+        } catch {
           setSaving(false);
           setError("No connection, and this report couldn't be saved to the outbox on this device — the tablet may be out of storage.");
           return;
@@ -1746,7 +1746,7 @@ function CreateTicketDialog({ job, jobRecord, contacts, currentUser, onClose, on
   const seq = preview ? preview.slice(preview.lastIndexOf("-") + 1) : "";
 
   useEffect(() => {
-    if (isNaN(d)) return;
+    if (Number.isNaN(d.getTime())) return;
     let live = true;
     Db.nextTicketNumber(initials, workDate)
       .then(n => { if (live) setPreview(n); })
@@ -1756,7 +1756,7 @@ function CreateTicketDialog({ job, jobRecord, contacts, currentUser, onClose, on
 
   const submit = async () => {
     if (busy) return;
-    if (isNaN(d)) { miss.flag("workDate"); setError("Pick a valid work date."); return; }
+    if (Number.isNaN(d.getTime())) { miss.flag("workDate"); setError("Pick a valid work date."); return; }
     miss.clear();
     setError("");
     // Nothing is inserted here. This dialog used to create an empty draft

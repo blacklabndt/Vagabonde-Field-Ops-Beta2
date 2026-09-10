@@ -13,7 +13,7 @@
 // person, written on crash and never through the offline queue. A score is
 // not work; it does not get to compete with a ticket for a sync slot.
 
-import React, { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 import { Btn } from "./common.jsx";
 import { Store } from "../data.js";
 import { Db } from "../db.js";
@@ -51,7 +51,6 @@ function drawDevice(g, x, y, tilt) {
 
   const W = DEVICE_W, H = DEVICE_H;
   const YEL = "#efb01d", YEL_LO = "#c2870f";
-  const STEEL = "#c2cbd1", STEEL_LO = "#8a959c";
   const INK = "#34393c";
 
   g.lineJoin = "round";
@@ -210,7 +209,7 @@ function makeGradients(g) {
 export function Flappy880({ onClose, me }) {
   const canvasRef = useRef(null);
   const [best, setBest] = useState(() => Number(Store.load(BEST_KEY, 0)) || 0);
-  const [score, setScore] = useState(0);
+  const [, setScore] = useState(0);
   const [state, setState] = useState("ready");     // ready | flying | crashed
   const [board, setBoard] = useState(null);        // null until the first crash
   const [boardNote, setBoardNote] = useState("");

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { primaryContact, contactsForOrg, seesPrices as pricesFor, Store } from "../data.js";
 import { attentionItems, attentionSignature, attentionDismissedKey, attentionSuppressed, dismissAttention, clearDismissedAttention } from "../attention.js";
 import { Db } from "../db.js";
@@ -52,7 +52,7 @@ const ERROR_SCAN = 100;
 // the literal words "Invalid Date" next to the client's name.
 function lastUsedChip(contact) {
   const at = contact.last_used_at ? new Date(contact.last_used_at) : null;
-  if (!at || isNaN(at)) return "On file";
+  if (!at || Number.isNaN(at.getTime())) return "On file";
   return "On file — last used " + at.toLocaleDateString("en-CA", { day: "2-digit", month: "short" });
 }
 
@@ -725,7 +725,7 @@ function NewJobDialog({ currentUser, clients, contractors, contacts, onClose, on
         setError(`Job ${id} already exists — job numbers have to be unique. Give this one a different number.`);
         return;
       }
-    } catch (e) { /* offline; the queue reports the collision when it syncs */ }
+    } catch { /* offline; the queue reports the collision when it syncs */ }
     miss.clear();
     setSaving(true);
     setError("");

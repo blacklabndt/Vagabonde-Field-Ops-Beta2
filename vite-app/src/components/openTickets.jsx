@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Blueprint, Btn, TableScroll, StatusTag, RowsPerPage, useRowsPerPage, Dialog } from "./common.jsx";
 import { money, seesPrices } from "../data.js";
 import { Db } from "../db.js";
@@ -83,7 +83,7 @@ export function OpenTicketsScreen({ tickets, loading, loadError = null, onOpenTi
     if (onReload) { onReload(); return; }
     try {
       setReloaded(await Db.listMyTickets(currentUser ? currentUser.id : null));
-    } catch (e) {
+    } catch {
       // No signal for the re-read, and the tickets are gone all the same —
       // drop them by hand rather than leave the tiles counting work that no
       // longer exists.
@@ -184,7 +184,7 @@ export function OpenTicketsScreen({ tickets, loading, loadError = null, onOpenTi
           const job = await Db.getJob(dbId);
           if (!live) return;
           if (job) setWipJobs(prev => (prev[dbId] ? prev : { ...prev, [dbId]: job }));
-        } catch (e) { /* no signal and never cached, or the job is gone */ }
+        } catch { /* no signal and never cached, or the job is gone */ }
       }
     })();
     return () => { live = false; };

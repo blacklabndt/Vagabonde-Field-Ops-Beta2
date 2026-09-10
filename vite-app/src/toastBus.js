@@ -47,7 +47,7 @@ export const Toasts = {
     if (!action && text === last.text && now - last.at < DEDUPE_MS) return;
     last = { text, at: now };
     showing = { text, tone, at: now, action };
-    listeners.forEach(fn => fn(showing));
+    listeners.forEach(fn => { fn(showing); });
   },
 
   // Take down a toast that is carrying an action. An Undo means something
@@ -60,7 +60,7 @@ export const Toasts = {
     if (!showing || !showing.action) return;
     showing = null;
     last = { text: "", at: 0 };
-    listeners.forEach(fn => fn(null));
+    listeners.forEach(fn => { fn(null); });
   },
 
   // Counted rather than boolean, so overlapping replays can't unmute early.

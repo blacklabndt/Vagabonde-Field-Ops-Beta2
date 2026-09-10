@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Db } from "../db.js";
 import { Toasts } from "../toastBus.js";
 import { Dialog, Field, Btn, ErrorBox } from "./common.jsx";

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { Db } from "../db.js";
 import { Blueprint, Btn, TagX, ErrorBox, emailIn, NoJobSelected, ConnectionBar, QueuedPanel } from "./common.jsx";
 import { fileSize, reportFileRefusal, MAX_REPORT_LABEL } from "../data.js";
@@ -152,7 +152,7 @@ export function UploadMobileScreen({ job, jobRecord, currentUser, onSent }) {
               jobDbId: job.dbId, jobNumber: job.id, file: it.file,
               welds: it.welds.join(", "), interpretedBy: currentUser.name, recipient, clientKey: it.clientKey
             });
-          } catch (queueErr) {
+          } catch {
             // A whole PDF goes into the outbox, so this is the enqueue most
             // likely to be refused for space. Unguarded, the raw IndexedDB
             // complaint was what the tech read. This file (and everything

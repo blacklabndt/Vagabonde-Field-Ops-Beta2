@@ -8,7 +8,7 @@
 // backupRun.ts, gzip.ts) are imported straight into the node test suite and
 // must stay import-free, so nothing here may ever move into them.
 
-import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { makeDrive, refreshAccessToken } from "./drive.ts";
 import type { DriveClient } from "./drive.ts";
 import { BACKUP_ROOT_NAME, MANIFEST_NAME } from "./backupManifest.ts";

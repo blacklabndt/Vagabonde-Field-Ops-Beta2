@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { JHA_TEMPLATES, SEED_HAZARDS, todayLocal, localDate, dayMonth, storageKeySafe } from "../data.js";
 import { Db } from "../db.js";
 import { acceptsNumberText } from "../numberInput.js";
@@ -475,7 +475,7 @@ export function JhaBuilderScreen({ job, jobRecord, currentUser, onSubmitted, onC
     const queueThisJha = async () => {
       try {
         await OfflineQueue.enqueue("jha", jhaPayload);
-      } catch (queueErr) {
+      } catch {
         // The outbox is IndexedDB, and it can refuse — private browsing, a
         // full disk, a wedged database. Unguarded, that threw straight out
         // of submit: the button stayed on "Filing…" for ever and nobody was

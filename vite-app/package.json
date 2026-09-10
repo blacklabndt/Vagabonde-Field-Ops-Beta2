@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "node scripts/check-render.cjs src",
-    "test": "node scripts/check-render.cjs src && node --test src/*.test.mjs",
+    "lint": "cd .. && biome lint --error-on-warnings",
+    "test": "node scripts/check-render.cjs src && npm run lint && node --test src/*.test.mjs",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -17,6 +18,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.13",
     "@playwright/test": "^1.62.1",
     "@vitejs/plugin-react": "^4.3.1",
     "fake-indexeddb": "6.2.5",

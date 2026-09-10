@@ -65,7 +65,7 @@ const linkError = readLinkError();
 sbClient.auth.onAuthStateChange(event => {
   if (event === "PASSWORD_RECOVERY" && !pending) {
     pending = true;
-    listeners.forEach(fn => fn(true));
+    listeners.forEach(fn => { fn(true); });
   }
 });
 

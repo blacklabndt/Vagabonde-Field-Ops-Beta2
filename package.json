@@ -5,6 +5,7 @@
   "scripts": {
     "//": "Cloudflare Workers Builds runs from the repo root with no root-directory setting, so the build reaches down into the app. `npm ci` rather than `install` so the lockfile is honoured exactly and a CI build can't quietly pick up a different dependency version than the one tested here.",
     "build": "npm --prefix vite-app ci && npm --prefix vite-app run build",
+    "lint": "npm --prefix vite-app run lint",
     "test": "npm --prefix vite-app test"
   }
 }

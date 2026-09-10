@@ -18,6 +18,13 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   any `useSomething(` (a named list once approved the hook nobody had added
   to it), the scan sees the brace-and-newline return shape and components
   wrapped in memo or forwardRef, which it did not until 8 Sept.
+- Lint: `npm run lint` (Biome, `biome.jsonc` at the repo root, the binary
+  the app's dev dependency). `npm test` runs it between the render scan and
+  the suite, and a warning fails it. It is for bugs, not style: the
+  formatter and the import sorter are off, and every rule turned off in the
+  config says why. A finding the code is right about gets
+  `// biome-ignore lint/<group>/<rule>: <reason>` on the line above it,
+  never a loosened rule.
 - Build: `npm --prefix vite-app run build`
 - Deploy: `npm run build && npx wrangler deploy` (from repo root)
 - Dev server: use the `.claude/launch.json` `beta2-dev` config, not Bash

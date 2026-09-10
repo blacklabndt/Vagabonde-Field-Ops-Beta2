@@ -617,7 +617,7 @@ async function advance(db: SupabaseClient, run: Run, secret: string): Promise<Re
 async function verifySlice(
   db: SupabaseClient, conn: Connection, run: Run, runId: string, secret: string, deadline: number
 ): Promise<Record<string, unknown>> {
-  let c = reviveVerifyCursor(run.cursor, String(run.started_at ?? new Date().toISOString()));
+  const c = reviveVerifyCursor(run.cursor, String(run.started_at ?? new Date().toISOString()));
   const persist = async (): Promise<boolean> => {
     const { data: held, error } = await db.from("backup_runs").update({
       phase: c.done ? "done" : "files", cursor: c, heartbeat_at: new Date().toISOString(), counts: verifyCounts(c)

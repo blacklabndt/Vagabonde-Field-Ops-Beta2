@@ -605,7 +605,7 @@ test("an apostrophe in a name does not become a Drive query syntax error", async
 
 test("Google looks for the folder rather than making a second one of the same name", async () => {
   const drive = new GoogleDrive("tok");
-  const found = await withFetch(async (url, init) => {
+  const found = await withFetch(async (_url, init) => {
     assert.notEqual(init.method, "POST", "nothing may be created when the folder is already there");
     return json({ files: [{ id: "folder-9", name: "tables" }] });
   }, async calls => {
@@ -618,7 +618,7 @@ test("Google looks for the folder rather than making a second one of the same na
 
 test("Google creates the folder when the lookup finds none", async () => {
   const drive = new GoogleDrive("tok");
-  const made = await withFetch(async (url, init) => {
+  const made = await withFetch(async (_url, init) => {
     if (!init.method || init.method === "GET") return json({ files: [] });
     assert.equal(JSON.parse(init.body).mimeType, "application/vnd.google-apps.folder");
     return json({ id: "folder-new" });
@@ -957,6 +957,7 @@ test("the shared modules read nothing from the world around them", () => {
       `${f} must not use a constructor parameter property`);
     // No literal control character may reach a source file (git would call
     // it binary); dropboxArg's high range is written as escapes.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: those bytes are exactly what the test is looking for
     assert.ok(!/[\x00-\x08\x0e-\x1f\x7f]/.test(src), `${f} must hold no control characters`);
   }
 });

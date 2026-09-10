@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { todayLocal, money, seesPrices } from "../data.js";
 import { Db } from "../db.js";
 import { Blueprint, Btn, TableScroll, StatusTag, TagX, ErrorBox, Dialog, downloadCsv, emailIn, RowsPerPage, useRowsPerPage } from "./common.jsx";

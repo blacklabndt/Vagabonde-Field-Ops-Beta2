@@ -40,7 +40,7 @@ export function monthFolderOf(job) {
   const iso = job.createdAtIso;
   if (iso) {
     const d = new Date(iso);
-    if (!isNaN(d)) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    if (!Number.isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   }
   const m = /^(\d{4})-(\d{2})/.exec(String(job.createdAt || ""));
   return m ? `${m[1]}-${m[2]}` : "Undated";
@@ -99,7 +99,7 @@ const hrs = n => String(Math.round((Number(n) || 0) * 100) / 100);
 const fmtWhen = iso => {
   if (!iso) return "";
   const d = new Date(iso);
-  return isNaN(d) ? String(iso) : d.toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" });
+  return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" });
 };
 const row = (label, value) => (value ? `${label}: ${value}` : null);
 
@@ -162,7 +162,7 @@ export function jobDetailsText({ job, record = {}, tickets = [], jhas = [], repo
     row("Status", job.status),
     row("Raised", [job.createdAt, job.createdBy ? `by ${job.createdBy}` : ""].filter(Boolean).join(" ")),
     row("Archived", [meta.at, meta.by ? `by ${meta.by}` : "", meta.range ? `· ${meta.range}` : ""].filter(Boolean).join(" "))
-  ].filter(Boolean).forEach(l => out.push(l));
+  ].filter(Boolean).forEach(l => { out.push(l); });
 
   out.push("", `TICKETS (${tickets.length})`);
   if (!tickets.length) out.push("  none");
@@ -223,11 +223,11 @@ export function jobDetailsText({ job, record = {}, tickets = [], jhas = [], repo
 
   if (notOnFile.length) {
     out.push("", "NO PDF ON FILE (the details above are the record)");
-    notOnFile.forEach(m => out.push(`  ${m}`));
+    notOnFile.forEach(m => { out.push(`  ${m}`); });
   }
   if (missing.length) {
     out.push("", "NOT RETRIEVED");
-    missing.forEach(m => out.push(`  ${m}`));
+    missing.forEach(m => { out.push(`  ${m}`); });
   }
   return out.join("\n") + "\n";
 }

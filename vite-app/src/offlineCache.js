@@ -88,7 +88,7 @@ const rtLastWritten = new Map();
 // How many liveOnly calls are in flight. While any is, readThrough refuses
 // to fall back: see liveOnly below.
 let liveOnlyDepth = 0;
-const notify = () => listeners.forEach(fn => fn(state));
+const notify = () => listeners.forEach(fn => { fn(state); });
 
 function setState(next) {
   if (next.servingCached === state.servingCached && next.at === state.at) return;

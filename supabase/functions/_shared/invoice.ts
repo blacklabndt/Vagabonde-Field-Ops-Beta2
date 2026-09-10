@@ -109,7 +109,7 @@ const day = (s: string) => {
 // client or the office reads goes through here.
 export const edmontonStamp = (iso: string) => {
   const d = new Date(iso);
-  return isNaN(+d) ? "" : d.toLocaleString("en-CA",
+  return Number.isNaN(+d) ? "" : d.toLocaleString("en-CA",
     { timeZone: "America/Edmonton", dateStyle: "medium", timeStyle: "short" });
 };
 
@@ -118,7 +118,7 @@ export const edmontonStamp = (iso: string) => {
 // true and is not what a client's accounts department wants to be told.
 export const edmontonDay = (iso: string) => {
   const d = new Date(iso);
-  return isNaN(+d) ? "" : d.toLocaleDateString("en-CA",
+  return Number.isNaN(+d) ? "" : d.toLocaleDateString("en-CA",
     { timeZone: "America/Edmonton", dateStyle: "medium" });
 };
 

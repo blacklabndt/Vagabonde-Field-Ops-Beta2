@@ -1,0 +1,104 @@
+// Biome: the linter `npm test` runs over the app, the Worker and the Edge
+// Functions (vite-app/package.json's `lint` script; the binary is the app's
+// dev dependency). It is here to catch the mistakes that ship — an import
+// nobody uses, a variable computed and forgotten, a hook missing what it
+// reads, a callback that returns into forEach — and not to restyle 47,000
+// lines: the formatter and the import sorter are off, and every rule turned
+// off below says why. A finding the code is right about is suppressed on
+// its own line with `// biome-ignore lint/<group>/<rule>: <reason>`, never
+// by loosening the rule.
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
+  "root": true,
+  // .gitignore is the ignore list (node_modules, dist, dev-dist, .wrangler).
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  // Scripts only. The design system's stylesheet is a delivered file,
+  // app.css doubles a property on purpose where svh falls back to vh, and
+  // index.html's one inline script is the Worker's to hash, not this
+  // linter's to restyle.
+  "files": {
+    "includes": [
+      "vite-app/**/*.js",
+      "vite-app/**/*.jsx",
+      "vite-app/**/*.mjs",
+      "vite-app/**/*.cjs",
+      "worker/**/*.js",
+      "worker/**/*.mjs",
+      "supabase/functions/**/*.ts",
+      "!vite-app/node_modules",
+      "!vite-app/dist",
+      "!vite-app/dev-dist"
+    ]
+  },
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+  "linter": {
+    "enabled": true,
+    // The hook rules: a hook below an early return, a hook missing a value
+    // it reads. check-render.cjs scans for the first as well; two readers
+    // of one mistake is fine.
+    "domains": { "react": "recommended" },
+    "rules": {
+      "preset": "recommended",
+      // Accessibility is not what this linter is for: the crew's tablets
+      // are the audience. The two rules in the group that would have caught
+      // a bug do not apply here — Btn defaults type="button", so the two
+      // forms in auth.jsx cannot be submitted by a stray button, and every
+      // href="#" handler calls preventDefault (the hash is the router).
+      "a11y": { "preset": "none" },
+      "complexity": {
+        // `a && a.b` is the house idiom; 265 rewrites to `a?.b` change
+        // nothing the code does.
+        "useOptionalChain": "off",
+        // The render scan and the tests match source text, indentation
+        // and all; two spaces in those regexes are the point.
+        "noAdjacentSpacesInRegex": "off",
+        // `obj["Overtime"]` beside `obj["Technician — overtime"]` reads as
+        // a pair; the dotted form would not.
+        "useLiteralKeys": "off",
+        "noUselessUndefinedInitialization": "error",
+        "useDateNow": "error"
+      },
+      "correctness": {
+        "noUnusedVariables": "error",
+        "noUnusedImports": "error",
+        // A parameter kept for its position is named with a leading
+        // underscore, which the rule ignores.
+        "noUnusedFunctionParameters": "error",
+        // Only missing captures are reported: the screens list
+        // `job ? job.dbId : null` where they mean to re-run on the id and
+        // not on every reload of the record, and that is not a mistake.
+        "useExhaustiveDependencies": {
+          "level": "info",
+          "options": { "reportUnnecessaryDependencies": false }
+        }
+      },
+      "style": {
+        // Concatenation and template strings are both fine; 198 rewrites
+        // for no behaviour is churn.
+        "useTemplate": "off",
+        // The functions' `!` marks a value the line above has just checked.
+        "noNonNullAssertion": "off",
+        "useConst": "error",
+        "useImportType": "error",
+        "useNodejsImportProtocol": "error",
+        "useExponentiationOperator": "error"
+      },
+      "suspicious": {
+        // The functions read supabase-js rows loosely on purpose; the
+        // erasable-TypeScript guard in backupShared.test.mjs is the type
+        // discipline that matters there.
+        "noExplicitAny": "off",
+        // Every list keyed by index here is static text (notes, help
+        // paragraphs, breadcrumbs) or rows with no state of their own —
+        // HazardRow keeps none; the ratings live in the builder by name.
+        "noArrayIndexKey": "off",
+        // The rule wants Object.hasOwn, which needs Safari 15.4; the
+        // `Object.prototype.hasOwnProperty.call` form is the one every
+        // device in the truck runs.
+        "noPrototypeBuiltins": "off",
+        "noGlobalIsNan": "error"
+      }
+    }
+  }
+}

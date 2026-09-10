@@ -108,7 +108,7 @@ function oqNotify() {
   oqNotifying = true;
   // A read that fails (IndexedDB gone, private mode) must not become an
   // unhandled rejection in whoever's save path triggered it.
-  oqGetAll().then(items => oqListeners.forEach(fn => fn(items))).catch(() => {})
+  oqGetAll().then(items => oqListeners.forEach(fn => { fn(items); })).catch(() => {})
     .then(() => {
       oqNotifying = false;
       if (oqNotifyAgain) { oqNotifyAgain = false; oqNotify(); }

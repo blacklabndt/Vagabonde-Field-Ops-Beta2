@@ -42,7 +42,7 @@ async function loadRecovery(hash) {
   const rewrites = [];
   globalThis.window = {
     location: { hash, pathname: "/", search: "" },
-    history: { replaceState: (state, title, url) => { rewrites.push(url); } }
+    history: { replaceState: (_state, _title, url) => { rewrites.push(url); } }
   };
 
   const patched = SOURCE.replace(IMPORT_LINE, "const { sbClient } = globalThis.__recoveryStub;");

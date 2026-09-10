@@ -754,7 +754,7 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
   // through the morning used to zero the badges over messages they had
   // never scrolled to.
   const seenIds = useRef(new Set());
-  useEffect(() => { messages.forEach(m => seenIds.current.add(m.id)); }, [messages]);
+  useEffect(() => { messages.forEach(m => { seenIds.current.add(m.id); }); }, [messages]);
   // Rows that must mount without the entrance animation: everything the
   // initial load and the "Show earlier" pages bring in. A message not in
   // this set is one that arrived while you were watching — those rise in.
@@ -834,7 +834,7 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
           if (!live) return;
           // The room you walk into holds still; only what arrives after
           // you is animated.
-          if (initial) page.forEach(m => quietIds.current.add(m.id));
+          if (initial) page.forEach(m => { quietIds.current.add(m.id); });
           // Messages that arrive by poll — the room's only pulse while the
           // realtime channel is down — are read on screen like any other,
           // so the bookmark moves for them too; it used to move only for
@@ -1115,7 +1115,7 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
     setLoadingOlder(true);
     try {
       const { messages: older, hasMore: more } = await Db.listChatMessages(messages[0].createdAt);
-      older.forEach(m => quietIds.current.add(m.id));
+      older.forEach(m => { quietIds.current.add(m.id); });
       // Only when something was prepended: an empty page leaves the list
       // untouched, so the layout effect never runs to clear this, and the
       // stale height would throw the reader up the list at the next
@@ -1375,7 +1375,7 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
     if (!r) return;
     r.discard = !keep;
     r.rec.onstop = () => {
-      r.stream.getTracks().forEach(t => t.stop());
+      r.stream.getTracks().forEach(t => { t.stop(); });
       setRecording(null);
       recRef.current = null;
       if (r.discard || !r.chunks.length) return;
@@ -1436,7 +1436,7 @@ export function TeamChatScreen({ currentUser, onOpenJob, onRead }) {
     if (r) {
       r.discard = true;
       try { r.rec.stop(); } catch (_) { /* already stopped */ }
-      r.stream.getTracks().forEach(t => t.stop());
+      r.stream.getTracks().forEach(t => { t.stop(); });
     }
   }, []);
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Db } from "../db.js";
 import { money } from "../data.js";
 import { Btn, Dialog, ErrorBox, Field } from "./common.jsx";

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { TABS, CONTEXT_TABS, ROLE_PRESETS, TECH_LEVELS } from "../data.js";
 import { Db } from "../db.js";
 import { UNIVERSAL_TABS, tabList, Blueprint, Btn, CheckBox, TagX, Field, Dialog, ErrorBox, Switch, emailIn, useMissingFields, SearchSelect, Loading, RequiredLeft } from "./common.jsx";

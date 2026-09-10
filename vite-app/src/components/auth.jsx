@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { sbClient, forgetStoredSession } from "../config.js";
 import { tabList, Blueprint, Btn, Field, ErrorBox } from "./common.jsx";
 import { OfflineCache } from "../offlineCache.js";

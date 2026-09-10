@@ -152,9 +152,6 @@ async function drawJha(jha: any): Promise<Uint8Array> {
   const rule = (yy: number, x = M, w = W) =>
     page.drawLine({ start: { x, y: yy }, end: { x: x + w, y: yy }, thickness: 0.6, color: LINE });
 
-  const box = (x: number, yy: number, w: number, h: number, fill?: any) =>
-    page.drawRectangle({ x, y: yy - h, width: w, height: h, borderWidth: 0.6, borderColor: LINE, color: fill });
-
   // A section header: accent rule with the title sitting on it.
   const section = (title: string) => {
     y -= 14;
@@ -172,7 +169,7 @@ async function drawJha(jha: any): Promise<Uint8Array> {
   // it down over the row beneath — the LSD printed through the muster point.
   const cell = (label: string, value: string, x: number, yy: number, w: number) => {
     text(label.toUpperCase(), x, yy, { size: 6, color: MUTED });
-    cellLines(value, w).forEach((ln, i) => text(ln, x, yy - 10 - i * 10, { size: 8.5 }));
+    cellLines(value, w).forEach((ln, i) => { text(ln, x, yy - 10 - i * 10, { size: 8.5 }); });
   };
 
   // A row of cells across the page, evenly split. Its height is the tallest
@@ -183,7 +180,7 @@ async function drawJha(jha: any): Promise<Uint8Array> {
     const lines = Math.max(1, ...cells.map(([, v]) => cellLines(v, w).length));
     const need = Math.max(h, 14 + lines * 10);
     pageBreakIfNeeded(need);
-    cells.forEach(([l, v], i) => cell(l, v, M + 4 + i * w, y, w));
+    cells.forEach(([l, v], i) => { cell(l, v, M + 4 + i * w, y, w); });
     y -= need;
   };
 
@@ -273,7 +270,7 @@ async function drawJha(jha: any): Promise<Uint8Array> {
     pageBreakIfNeeded(6 + tall * 10 + 6);
     cx = M + 2;
     wrapped.forEach((lines, i) => {
-      lines.forEach((ln, k) => text(ln, cx, y - k * 10, { size: 8, bold: i === 8 && w.doseMr != null }));
+      lines.forEach((ln, k) => { text(ln, cx, y - k * 10, { size: 8, bold: i === 8 && w.doseMr != null }); });
       cx += cols[i].w;
     });
     y -= 4 + tall * 10;
@@ -350,7 +347,7 @@ async function drawJha(jha: any): Promise<Uint8Array> {
        ["Site rep", jha.site_rep ?? ""], ["Closed out", jha.closed_at ? fmtStamp(jha.closed_at) : "—"]]);
   // Wider than the sheet, so it wraps by hand like everything else here.
   wrapLines("Filed electronically through VagaboNDE Field Ops. The account filing this assessment is the record of who completed it; no handwritten signature is collected.",
-    W - 8, font, 7).forEach((ln, i) => text(ln, M + 4, y - i * 9, { size: 7, color: MUTED }));
+    W - 8, font, 7).forEach((ln, i) => { text(ln, M + 4, y - i * 9, { size: 7, color: MUTED }); });
 
   footer();
   return await doc.save();
@@ -438,12 +435,12 @@ const EDMONTON = "America/Edmonton";
 const fmtDate = (ts: string) => {
   if (!ts) return "";
   const d = new Date(ts);
-  return isNaN(+d) ? "" : d.toLocaleDateString("en-CA", { timeZone: EDMONTON, day: "2-digit", month: "short", year: "numeric" });
+  return Number.isNaN(+d) ? "" : d.toLocaleDateString("en-CA", { timeZone: EDMONTON, day: "2-digit", month: "short", year: "numeric" });
 };
 // The year rides along: a hazard assessment is kept for years, and "02 Sep,
 // 18:30" on a filed record does not say which September.
 const fmtStamp = (ts: string) => {
   if (!ts) return "";
   const d = new Date(ts);
-  return isNaN(+d) ? "" : d.toLocaleString("en-CA", { timeZone: EDMONTON, day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+  return Number.isNaN(+d) ? "" : d.toLocaleString("en-CA", { timeZone: EDMONTON, day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 };

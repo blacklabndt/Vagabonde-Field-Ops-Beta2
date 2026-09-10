@@ -66,7 +66,7 @@ export async function restoreSession({
     let identity = null;
     let identityUnreadable = false;
     try { identity = await Promise.resolve(readIdentity()); }
-    catch (e) { identityUnreadable = true; }
+    catch { identityUnreadable = true; }
     if (identity) return { user: identity, offline: true, reason };
     return { user: null, offline: true, reason, identityUnreadable };
   };
@@ -74,7 +74,7 @@ export async function restoreSession({
   let sessionResult;
   try {
     sessionResult = await withTimeout(Promise.resolve(getSession()), timeoutMs);
-  } catch (e) {
+  } catch {
     return cached("session-error");
   }
   if (sessionResult === TIMED_OUT) return cached("session-timeout");
@@ -103,7 +103,7 @@ export async function restoreSession({
   let profileResult;
   try {
     profileResult = await withTimeout(Promise.resolve(fetchProfile(session.user.id)), timeoutMs);
-  } catch (e) {
+  } catch {
     return cached("profile-error");
   }
   if (profileResult === TIMED_OUT) return cached("profile-timeout");

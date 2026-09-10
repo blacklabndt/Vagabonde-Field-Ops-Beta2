@@ -83,7 +83,7 @@ const CHAT_COLUMNS =
 function stamp(ts) {
   if (!ts) return "";
   const d = new Date(ts);
-  return isNaN(d) ? "" : d.toLocaleString("en-CA", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString("en-CA", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 // Profiles carry first/last names now, but older rows may only have the
@@ -349,7 +349,7 @@ function invalidate(...keys) {
 // The local calendar day of a timestamp, for comparing against a plain date.
 function localDay(ts) {
   const d = ts ? new Date(ts) : null;
-  if (!d || isNaN(+d)) return "";
+  if (!d || Number.isNaN(+d)) return "";
   return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
 }
 
@@ -583,8 +583,8 @@ export const Db = {
       const q = String(search || "").trim().toLowerCase();
       const orgs = [];
       try {
-        if (scope !== "Contractors") (await this.listClients()).forEach(c => orgs.push({ type: "client", id: c.id, name: c.name }));
-        if (scope !== "Clients") (await this.listContractors()).forEach(c => orgs.push({ type: "contractor", id: c.id, name: c.name }));
+        if (scope !== "Contractors") (await this.listClients()).forEach(c => { orgs.push({ type: "client", id: c.id, name: c.name }); });
+        if (scope !== "Clients") (await this.listContractors()).forEach(c => { orgs.push({ type: "contractor", id: c.id, name: c.name }); });
       } catch (e) {
         // Cold cache: the directory is saved at sign-in, so this is a device
         // that has never been in range signed in. Say that, not "Failed to
@@ -969,7 +969,7 @@ export const Db = {
         OfflineCache.put("jobs.recent", result);
         // Each job on its own key too, so opening one offline works even
         // though Job detail fetches it by id rather than off the list.
-        result.rows.forEach(j => OfflineCache.put("job." + j.dbId, j));
+        result.rows.forEach(j => { OfflineCache.put("job." + j.dbId, j); });
         // And the contents of each — deliberately not awaited, so the board
         // paints on the first response rather than the fourth.
         this.prefetchJobDetails(result.rows.map(j => j.dbId));
@@ -1028,12 +1028,12 @@ export const Db = {
           const bucket = byJob.get(row.job_id);
           if (bucket) bucket.push(shape(row));
         });
-        byJob.forEach((value, id) => OfflineCache.put(prefix + id, value));
+        byJob.forEach((value, id) => { OfflineCache.put(prefix + id, value); });
       };
       spread("jhas.", jhas, shapeJha);
       spread("reports.", reports, shapeReport);
       spread("tickets.", tickets, shapeJobTicket);
-    } catch (e) {
+    } catch {
       // Offline, or the request was refused — either way the board is already
       // on screen and nothing here is worth interrupting it for.
     }
@@ -1445,7 +1445,8 @@ export const Db = {
         const list = Array.isArray(row.hazards) ? row.hazards : [];
         for (const h of list) {
           if (!h || !h.name || !h.rating) continue;
-          const seen = remembered[h.name] || (remembered[h.name] = {});
+          if (!remembered[h.name]) remembered[h.name] = {};
+          const seen = remembered[h.name];
           for (const key of ["s", "p", "f"]) {
             if (seen[key] === undefined && h.rating[key]) seen[key] = h.rating[key];
           }
@@ -1490,7 +1491,7 @@ export const Db = {
       const raw = d.endReading === "" || d.endReading == null ? null : Number(decimalString(d.endReading));
       // Dose is carried to one decimal place — that's the precision the DRDs
       // are read to, so 2.11 files as 2.1 rather than implying more.
-      const dose = raw == null || isNaN(raw) ? null : Math.round(raw * 10) / 10;
+      const dose = raw == null || Number.isNaN(Number(raw)) ? null : Math.round(raw * 10) / 10;
       return { ...d, startReading: 0, endReading: dose, doseMr: dose };
     });
     const { data: updated, error } = await sbClient.from("jhas").update({
@@ -2807,7 +2808,12 @@ export const Db = {
         if (error) throw error;
         return data || [];
       }, r => r.line_order));
-      for (const batchRows of walked) for (const r of batchRows) (lines[r.ticket_id] || (lines[r.ticket_id] = [])).push(r);
+      for (const batchRows of walked) {
+        for (const r of batchRows) {
+          if (!lines[r.ticket_id]) lines[r.ticket_id] = [];
+          lines[r.ticket_id].push(r);
+        }
+      }
     }
     return { invoices, lines, invoiceNumbers };
   },
@@ -2931,7 +2937,7 @@ export const Db = {
       // screen says so, and the database mints the real one on replay.
       const hit = await OfflineCache.read("ticketno." + prefix).catch(() => null);
       const lastKnown = hit ? parseInt(String(hit.value).slice(prefix.length), 10) : NaN;
-      const base = isNaN(lastKnown) ? 1 : lastKnown;
+      const base = Number.isNaN(lastKnown) ? 1 : lastKnown;
 
       const queued = await OfflineQueue.list().catch(() => []);
       const alreadyQueuedUnderThisPrefix = queued.filter(item =>

@@ -43,7 +43,7 @@ export function retryAfterFromError(err) {
 // Doubling from one second: 1s, 2s, 4s, 8s. `attempt` is the attempt that just
 // failed, counting from 1.
 export function backoffMs(attempt) {
-  return 1000 * Math.pow(2, attempt - 1);
+  return 1000 * 2 ** (attempt - 1);
 }
 
 // The longest any single wait is honoured for. Retry-After is the far end's

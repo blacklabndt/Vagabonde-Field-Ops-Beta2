@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Blueprint, Btn, TagX, Dialog, ErrorBox } from "./common.jsx";
 import { OfflineQueue } from "../offlineQueue.js";
 

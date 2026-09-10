@@ -1,4 +1,3 @@
-import React from "react";
 import { Dialog, Btn } from "./common.jsx";
 import { helpFor } from "../help.js";
 

@@ -26,7 +26,7 @@
 // private.internal_config and read only through the service-role accessor,
 // and a request without it is not the database.
 
-import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendMail, appSettings, corsHeaders, wrapEmail, esc } from "../_shared/mail.ts";
 import { secretsMatch } from "../_shared/constantTime.ts";
 

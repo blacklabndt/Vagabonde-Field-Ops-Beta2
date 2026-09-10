@@ -76,7 +76,7 @@ export function useDebounced(fn, delay = 500) {
       delete timers.current[key];
       const args = pending.current[key];
       delete pending.current[key];
-      if (args) { try { latest.current(key, ...args); } catch (e) { /* nothing left to show it on */ } }
+      if (args) { try { latest.current(key, ...args); } catch { /* nothing left to show it on */ } }
     });
   }, []);
   const debounced = useCallback((key, ...args) => {
@@ -512,14 +512,14 @@ export function useRowsPerPage() {
     try {
       const saved = parseInt(localStorage.getItem(ROWS_KEY), 10);
       return PAGE_SIZES.includes(saved) ? saved : PAGE_SIZES[0];
-    } catch (e) {
+    } catch {
       // Private mode, or storage disabled. Not worth failing a screen over.
       return PAGE_SIZES[0];
     }
   });
   const choose = n => {
     setRows(n);
-    try { localStorage.setItem(ROWS_KEY, String(n)); } catch (e) { /* as above */ }
+    try { localStorage.setItem(ROWS_KEY, String(n)); } catch { /* as above */ }
   };
   return [rows, choose];
 }

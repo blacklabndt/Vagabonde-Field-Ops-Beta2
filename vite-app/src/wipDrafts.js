@@ -110,7 +110,7 @@ export function wipJobLabel(row) {
 // stopped.
 export function wipWhen(at, now = Date.now()) {
   const d = new Date(at || NaN);
-  if (isNaN(d.getTime())) return "kept on this device";
+  if (Number.isNaN(d.getTime())) return "kept on this device";
   const time = d.toLocaleTimeString("en-CA", { hour: "2-digit", minute: "2-digit" });
   const today = new Date(now);
   const yesterday = new Date(now);

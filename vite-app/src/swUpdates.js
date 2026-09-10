@@ -18,7 +18,7 @@ const listeners = new Set();
 let ready = false;
 let apply = null;
 
-const notify = () => listeners.forEach(fn => fn(ready));
+const notify = () => listeners.forEach(fn => { fn(ready); });
 
 export const SwUpdates = {
   // fn(ready) — called immediately with the current state, then on change.

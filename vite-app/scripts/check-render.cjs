@@ -13,8 +13,8 @@
 // it can run anywhere `node` runs, and the failure mode it guards is coarse
 // enough that a rough scan catches it.
 
-const fs = require("fs");
-const path = require("path");
+const fs = require("node:fs");
+const path = require("node:path");
 
 // Every hook React exports, not only the ones the app happens to use today:
 // the whole point of the scan is to catch the one that gets reached for next
@@ -91,7 +91,7 @@ for (const file of walk(root).filter(f => /\.(jsx?|mjs)$/.test(f))) {
       braces[1].split(",")
         .map(s => s.trim().split(/\s+as\s+/).pop())
         .filter(Boolean)
-        .forEach(n => known.add(n));
+        .forEach(n => { known.add(n); });
     }
     const dflt = clause.replace(/\{[^}]*\}/, "").replace(/,/g, "").trim();
     if (dflt) known.add(dflt.replace(/^\*\s+as\s+/, ""));
@@ -116,12 +116,12 @@ for (const file of walk(root).filter(f => /\.(jsx?|mjs)$/.test(f))) {
   }
   for (const m of src.matchAll(/(?:const|let|var)\s*\{([^}]*)\}\s*=/g)) {
     m[1].split(",").map(s => s.trim().split(":").pop().trim().split("=")[0].trim())
-      .filter(n => /^[A-Z]\w*$/.test(n)).forEach(n => known.add(n));
+      .filter(n => /^[A-Z]\w*$/.test(n)).forEach(n => { known.add(n); });
   }
   // Plain function parameters: function Foo(Bar) / (Bar) =>
   for (const m of src.matchAll(/\(([^)]*)\)\s*=>/g)) {
     m[1].split(",").map(s => s.trim().split("=")[0].trim())
-      .filter(n => /^[A-Z]\w*$/.test(n)).forEach(n => known.add(n));
+      .filter(n => /^[A-Z]\w*$/.test(n)).forEach(n => { known.add(n); });
   }
 
   const used = new Set();

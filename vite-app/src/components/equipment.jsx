@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Db } from "../db.js";
 import { Blueprint, Btn, TableScroll, TagX, Field, Dialog, ErrorBox, RowsPerPage, useRowsPerPage } from "./common.jsx";
 
@@ -10,8 +10,8 @@ const EQUIPMENT_FILTERS = ["All", ...EQUIPMENT_TYPES, "Due soon", "Overdue"];
 function calDaysLeft(dueStr) {
   if (!dueStr) return null;
   const due = new Date(dueStr + "T12:00:00");
-  if (isNaN(+due)) return null;
-  return Math.round((due - new Date()) / 86400000);
+  if (Number.isNaN(+due)) return null;
+  return Math.round((due - Date.now()) / 86400000);
 }
 
 function CalDueTag({ due }) {

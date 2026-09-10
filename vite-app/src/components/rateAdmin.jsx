@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { STANDARD_RATE_LINES, money, gstRateOf, GST_RATE_DEFAULT } from "../data.js";
 import { Db, DEFAULT_SCHEDULE } from "../db.js";
 import { Toasts } from "../toastBus.js";

@@ -241,7 +241,7 @@ export const quarterOf = dateStr => Math.floor((Number(String(dateStr || "").sli
 export const withinDays = (ts, days) => {
   if (!ts) return false;
   const t = new Date(ts).getTime();
-  return !isNaN(t) && (Date.now() - t) < days * 86400000;
+  return !Number.isNaN(t) && (Date.now() - t) < days * 86400000;
 };
 
 // Whole days between a timestamp and now. Counted from local midnight on each
@@ -250,7 +250,7 @@ export const withinDays = (ts, days) => {
 export function ageInDays(ts) {
   if (!ts) return 0;
   const then = new Date(ts);
-  if (isNaN(then)) return 0;
+  if (Number.isNaN(then.getTime())) return 0;
   const a = new Date(then.getFullYear(), then.getMonth(), then.getDate());
   const now = new Date();
   const b = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -627,9 +627,9 @@ export const Store = {
     try {
       const raw = localStorage.getItem("nde." + key);
       return raw ? JSON.parse(raw) : fallback;
-    } catch (e) { return fallback; }
+    } catch { return fallback; }
   },
   save(key, value) {
-    try { localStorage.setItem("nde." + key, JSON.stringify(value)); } catch (e) {}
+    try { localStorage.setItem("nde." + key, JSON.stringify(value)); } catch {}
   }
 };

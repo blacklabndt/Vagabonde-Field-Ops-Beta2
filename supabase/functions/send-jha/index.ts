@@ -10,7 +10,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendMail, base64, corsHeaders, wrapEmail, esc, MAX_ATTACHMENT_BYTES,
-         recipients, optionalRecipients } from "../_shared/mail.ts";
+         recipients, optionalRecipients, type Attachment } from "../_shared/mail.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -78,7 +78,7 @@ Deno.serve(async (req) => {
     // 2. A link that outlives the email being forwarded around a bit, but not
     // forever — 14 days, same as a report.
     let link = "";
-    let attachments = undefined;
+    let attachments: Attachment[] | undefined;
     let attachmentNote = "";
 
     // The link and the bytes are independent storage calls; together.

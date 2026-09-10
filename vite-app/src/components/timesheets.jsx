@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { localDate, dayMonth, payPeriodLabel, recentPayPeriods, hours, recentQuarters, recentYears, quarterOf } from "../data.js";
 import { Db } from "../db.js";
 // The dose ledger calls one RPC that has no Db wrapper of its own; the sign-in
@@ -281,7 +281,6 @@ export function TimesheetsScreen({ currentUser }) {
   // Back to page 1 when the person or the period changes — page 4 of one
   // person's entries means nothing on the next.
   useEffect(() => { setEntryPage(0); }, [selected, period.start, pageSize]);
-  const statCount = 3 + (showSolo ? 2 : 0) + (showMileage ? 1 : 0);
   const approvalFor = id => approvals.find(a => a.profile_id === id);
   const approved = person ? approvalFor(person.profileId) : null;
 

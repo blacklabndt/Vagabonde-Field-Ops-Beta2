@@ -807,7 +807,7 @@ export function App() {
       // this person on a store that was never theirs.
       if (claimFailed) {
         try { const { error } = await sbClient.auth.signOut(); if (error) forgetStoredSession(); }
-        catch (e) { forgetStoredSession(); }
+        catch { forgetStoredSession(); }
         try { await OfflineCache.remove(IDENTITY_KEY); } catch { /* nothing more to try */ }
         setCurrentUser(null);
         setBootError("This device couldn't clear the previous person's data — try again.");
