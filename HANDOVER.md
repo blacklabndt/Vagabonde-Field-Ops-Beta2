@@ -73,12 +73,14 @@ deploy the Worker. Path A avoids all of this.
 > trigger: `20260818155616_chat_messages_expire.sql`,
 > `20260818190952_chat_push_subscriptions.sql`,
 > `20260826041947_the_database_signs_its_own_calls.sql` (both the push and
-> the retention job), `20260905080604_the_project_backs_itself_up.sql` and
-> `20260906143757_the_office_hears_about_failures.sql`.
+> the retention job), `20260905080604_the_project_backs_itself_up.sql`,
+> `20260906143757_the_office_hears_about_failures.sql` and
+> `20260910213858_a_send_can_wait_for_its_time.sql`.
 > So a fresh project stands up a `backup-tick` job posting at *this*
 > project's `backup-run` every five minutes, a `chat-retention-nightly`
 > job posting at its `chat-retention`, an `admin-digest-daily` job posting
-> at its `admin-digest` every morning, and a trigger on `chat_messages`
+> at its `admin-digest` every morning, a `scheduled-sends-tick` job posting
+> at its `scheduled-sends` every five minutes, and a trigger on `chat_messages`
 > posting every insert at its `chat-push`. They are rejected — the
 > `x-internal-secret` is minted per project — but the requests are real
 > and the protection is one shared secret deep. Before anything else, run

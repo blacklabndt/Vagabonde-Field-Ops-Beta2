@@ -582,6 +582,7 @@ vite-app/
                             a draft proposes, and the merge of dictated words
     ticketSeedLines.js      lines Ask drafted, matched to the rate card by label; the
                             unmatched are named, never invented
+    scheduledSends.js       what Job detail's Scheduled sends strip says about a row
     dosimetryPrompt.js      the serials offer's pure questions: which typed serial is
                             news, what keeping writes, and the once-a-session mark
     wipDrafts.js            the half-entered work Open tickets lists off the device
@@ -651,9 +652,11 @@ supabase/
                             chat-retention), the automatic backup (backup-oauth,
                             backup-run, backup-restore), the morning digest to the
                             Admins (admin-digest), the drawer's feature-request
-                            mail, gif-search, mail-test and ask (the app-wide
+                            mail, gif-search, mail-test, ask (the app-wide
                             assistant: a question answered by Claude from the tools
-                            behind the caller's own tabs, every read as the caller); plus
+                            behind the caller's own tabs, every read as the caller) and
+                            scheduled-sends (the five-minute tick that fires the sends
+                            Ask scheduled, gated again as the person who set each); plus
                             `_shared/`, which is library code, not a function —
                             invoice/JHA rendering, mail, the approval token, and the
                             nine modules the backup is built from (drive.ts and its
@@ -661,7 +664,11 @@ supabase/
                             Restore/Oauth/Common, gzip) and Ask's four (askTools, the
                             tools and their tabs; askLoop, the Messages API loop;
                             askDrafts, the seed a draft opens a form with; askSends,
-                            who a send may go to and the gates the screens apply),
+                            who a send may go to and the gates the screens apply;
+                            scheduledSends, the fire-time gate and the clock of a
+                            send that waits), the three send bodies (mailJha,
+                            mailReport, mailApproval — one email each, called by the
+                            live function and by the scheduled-sends tick),
                             most of them erasable TypeScript the node suite imports
                             directly
   handover/                 the handover runbooks — the two wipes, the probes a

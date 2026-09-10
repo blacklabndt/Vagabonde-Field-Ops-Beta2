@@ -66,13 +66,19 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   without that it dies on its first statement in the fresh environment it
   exists for. Never apply the baseline to the live project; it is for fresh
   environments. Replaying the repo into a fresh project also stands up cron
-  jobs and a chat push trigger pointed at THIS project's functions (six
-  migrations bake the URL and publishable key in, `admin-digest-daily`
+  jobs and a chat push trigger pointed at THIS project's functions (seven
+  migrations bake the URL and publishable key in, `scheduled-sends-tick`
   the latest), so unschedule them and
   re-point the trigger before anything else — HANDOVER.md's Path B says how. An unshipped
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
   Nothing is waiting there now. The latest is
+  `20260910213858_a_send_can_wait_for_its_time.sql` — the
+  `scheduled_sends` table (Ask's timers), its policies and the
+  `scheduled-sends-tick` cron job (every five minutes, x-internal-secret,
+  admin-digest's shape; DEPLOY THE FUNCTION FIRST). Probes beside it, run
+  under role simulation. Before it, `20260910195523_ask_has_a_key.sql` —
+  `app_settings.anthropic_api_key`. Before it,
   `20260910130301_a_jha_is_open_or_closed.sql` — `jhas.status` gains the
   check list (`Open`, `Closed`) the other four status columns had from the
   start; it was NOT NULL with a default since the baseline, but nothing
@@ -438,9 +444,52 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   entry so Job detail reads the sent stamp, and answers the `done`
   sentence, which the card pushes as an answer turn (`isSendAction` in
   askThread.js tells the two proposal shapes apart). A refusal stays on
-  the card's error line in the function's own words. No cc, no reports,
-  no chase marking, no timers (next slice). Spec:
+  the card's error line in the function's own words. No cc, no chase
+  marking. Spec:
   `docs/superpowers/specs/2026-09-10-ask-sending-design.md`.
+  The fourth slice is timers, and the send bodies moved for it: the
+  email, the storage read and the sent stamp or token write of send-jha,
+  send-report and send-ticket-approval live ONCE each in
+  `_shared/mailJha.ts`, `mailReport.ts` and `mailApproval.ts`; the
+  live functions keep their doors, their reads as the caller and their
+  gates and call the module, and so does the `scheduled-sends` function
+  (`verify_jwt = false`, x-internal-secret through `secretsMatch`,
+  `constantTime.test.mjs` reads it back), which the cron job
+  `scheduled-sends-tick` calls every five minutes. Nobody is signed in
+  when it fires, so a scheduled send's authority is TWO HALVES and
+  never more: the `scheduled_sends` row was inserted through RLS as
+  the person (the insert policy looks the JHA, report or ticket up under
+  the caller's OWN read policies, on the row's job, in the caller's own
+  name, still queued), and at fire time `fireGate` in
+  `_shared/scheduledSends.ts` (pure, imports askSends.ts alone, in the
+  guard list) re-applies the send function's own gate against the
+  person's CURRENT profile (active, holding a tab the record's read
+  policy names, the role or ownership rule) and the record's CURRENT
+  state (a PDF, a ticket still unsigned) — anything changed fails the row
+  with the reason and nothing goes; an approval is recorded as sent by
+  the person who scheduled it. The tick claims each due row with a
+  conditional UPDATE (queued → sending), sends through the shared
+  module, writes sent or failed (and a function_errors row, where the
+  digest and Home's strip read it), never retries, and fails a row still
+  `sending` after fifteen minutes with "did not report back — check
+  before sending again", because twice is worse than once too few.
+  Signed-in accounts may write `status` alone (column grant) and only
+  queued/failed → cancelled (own rows, or the office); no delete. Ask:
+  `list_reports`, `schedule_send(kind, record_id, recipients, run_at)`
+  (tab job; the runner applies the kind's gate — a JHA's, a report's
+  role list, a ticket's price role and `ticketSendGate` — resolves
+  recipients under askSends' rule, turns "YYYY-MM-DD HH:MM" in Grande
+  Prairie's clock into an instant with `localToUtc` (DST-correct through
+  Intl; more than five minutes past or ninety days ahead refused) and
+  proposes), `list_scheduled`, `cancel_scheduled`. The card's confirm
+  shape now covers four kinds (`isConfirmAction`, `confirmLabel`: Send /
+  Schedule / Cancel it); App's `runAskAction` calls `Db.scheduleSend`
+  (the RLS insert) or `Db.cancelScheduledSend` (the conditional update;
+  zero rows is "it already went"). Job detail shows a "Scheduled sends"
+  strip (queued and failed rows, read live with the cards, never the
+  device cache; `describeScheduled` in `scheduledSends.js` words it;
+  Cancel / Dismiss through the same Db method). Spec:
+  `docs/superpowers/specs/2026-09-10-ask-timers-design.md`.
 - The screen is in the address bar: `vite-app/src/route.js` (pure, node-
   tested) spells `#/board`, `#/chat`, `#/job/S-10113` and
   `#/job/S-10113/ticket`; App.jsx pushes one history entry per screen
@@ -830,12 +879,13 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   reads both files off disk, strips the types from the function's with
   Node's own stripper, folds the whitespace and compares them. Change one,
   change the other, in the same commit; an interface goes ABOVE the marker,
-  where the twin has nothing to match. Twelve shared modules — `backupSchedule.ts`,
-  `askTools.ts`, `askLoop.ts`, `askDrafts.ts`, `askSends.ts`,
+  where the twin has nothing to match. Thirteen shared modules — `backupSchedule.ts`,
+  `askTools.ts`, `askLoop.ts`, `askDrafts.ts`, `askSends.ts`, `scheduledSends.ts`,
   `backupTables.ts`, `backupManifest.ts`, `backupRun.ts`, `backupOauth.ts`,
   `drive.ts`, `gzip.ts` and `constantTime.ts` — are erasable TypeScript with
   no imports of their own (`backupManifest.ts` may name `backupSchedule.ts`,
-  `backupOauth.ts` may name `constantTime.ts`, and nothing else), because
+  `backupOauth.ts` may name `constantTime.ts`, `scheduledSends.ts` may
+  name `askSends.ts`, and nothing else), because
   the node suite imports them straight out of
   `supabase/functions/` — an `enum`, a constructor parameter property, a
   `Deno.env` read or a control character in any of them breaks `npm test`,
