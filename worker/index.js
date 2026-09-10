@@ -20,6 +20,8 @@
 // approval page on the same host as the app, which reads better to a client
 // than a supabase.co address.
 
+import { appPolicy, approvalPolicy, errorPagePolicy, inlineScriptHashes, secured } from "./csp.mjs";
+
 const FUNCTIONS_ORIGIN = "https://eielmvxzdwwprmmfamlq.functions.supabase.co";
 
 // An allowlist, not a denylist. The upstream function needs almost nothing
@@ -78,9 +80,41 @@ export default {
       return oauthCallback(request, url);
     }
 
-    return env.ASSETS.fetch(request);
+    // Everything else is the app's own files. An HTML document leaves with
+    // the security headers — the Content-Security-Policy naming each of its
+    // inline scripts by hash (worker/csp.mjs) — and a stylesheet, a chunk or
+    // a font goes out as it is. A request for a document is answered whole:
+    // a 304 carries no body to hash, and the browser's cached copy would
+    // keep whatever policy it was fetched under.
+    const asset = await env.ASSETS.fetch(documentRequest(request));
+    // Only a whole document is rewritten: a 304 has no body to hash (a
+    // favicon fetch that missed and fell back to index.html is one).
+    return asset.status === 200 && isHtml(asset) ? await securedDocument(asset) : asset;
   }
 };
+
+const wantsHtml = request =>
+  /\btext\/html\b/i.test(request.headers.get("accept") || "") ||
+  request.headers.get("sec-fetch-dest") === "document";
+
+function documentRequest(request) {
+  if (!wantsHtml(request)) return request;
+  const headers = new Headers(request.headers);
+  headers.delete("if-none-match");
+  headers.delete("if-modified-since");
+  return new Request(request, { headers });
+}
+
+const isHtml = response => /^text\/html\b/i.test(response.headers.get("content-type") || "");
+
+async function securedDocument(asset) {
+  const html = await asset.text();
+  const headers = new Headers(asset.headers);
+  // The body is sent again from here; the edge compresses it itself.
+  headers.delete("content-encoding");
+  headers.delete("content-length");
+  return secured(html, { status: asset.status, statusText: asset.statusText, headers }, appPolicy(await inlineScriptHashes(html)));
+}
 
 // The request body, read to the cap and no further: null past it. Small by
 // design — a typed name and a signature PNG — so buffering it is nothing.
@@ -136,18 +170,20 @@ async function approvalPage(request, url, payload) {
   // Re-served as HTML. The upstream's own Content-Type is deliberately
   // discarded — it is the text/plain the platform forced on it, and it is the
   // whole reason this route exists.
-  return new Response(body, {
+  // The signing page is never legitimately framed — a page that could be is
+  // a page that could be clickjacked into approving — and it runs nothing
+  // but its own two scripts, the signature pad and the print button, each
+  // named by hash: approvalPolicy allows no host at all, and the page keeps
+  // no inline handler to need one.
+  return secured(body, {
     status: upstream.status,
     headers: {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
       "Referrer-Policy": "no-referrer",
-      "X-Content-Type-Options": "nosniff",
-      // The signing page is never legitimately framed; a page that could be
-      // is a page that could be clickjacked into approving.
-      "Content-Security-Policy": "frame-ancestors 'none'"
+      "X-Frame-Options": "DENY"
     }
-  });
+  }, approvalPolicy(await inlineScriptHashes(body)));
 }
 
 // The callback proxy. Same allowlist as the approval page — this route
@@ -198,7 +234,7 @@ const escapeHtml = s => String(s ?? "")
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
   .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
-const htmlError = message => new Response(
+const htmlError = message => secured(
   `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VagaboNDE</title>
@@ -207,5 +243,6 @@ color:#1d1f20;font-family:Helvetica,Arial,sans-serif;padding:24px}
 .c{max-width:460px;background:#fff;border:1px solid rgba(29,31,32,.55);padding:26px 24px}
 h1{font-size:22px;margin:0 0 8px}p{color:#6b6d6e;font-size:14px;margin:0}</style></head>
 <body><div class="c"><h1>Something went wrong</h1><p>${escapeHtml(message)}</p></div></body></html>`,
-  { status: 502, headers: { "Content-Type": "text/html; charset=utf-8" } }
+  { status: 502, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
+  errorPagePolicy()
 );

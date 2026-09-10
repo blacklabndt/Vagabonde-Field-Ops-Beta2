@@ -38,7 +38,14 @@
     // no less — instead of on the function that completes the connection.
     // A POST to it reached the Worker perfectly well the whole time, which
     // is exactly how the trap hides.
-    "run_worker_first": ["/approve", "/approve-ticket", "/backup/oauth/*"],
+    //
+    // Now `true` — every request runs the script first, and the script hands
+    // a file back to the asset server itself — because the Worker is what
+    // puts the Content-Security-Policy on a document (worker/csp.mjs), and
+    // a document the asset server answered on its own left without one:
+    // measured on 10 Sept, / and /privacy.html carried no policy while
+    // /approve did. A few milliseconds per file is the price.
+    "run_worker_first": true,
 
     // The app is a single page: every screen is state, not a route, and the
     // service worker already falls back to index.html for navigations. This

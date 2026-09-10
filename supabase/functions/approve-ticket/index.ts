@@ -699,7 +699,14 @@ function signForm(fingerprint: string) {
 // Offered once the document is signed (or was already): the page IS the
 // bill, so the device's own print dialog — Save as PDF — hands over a
 // pixel-faithful copy. The print rules hide this bar itself.
+// No inline handler on the button: the Worker serves this page under a
+// Content-Security-Policy that names each inline <script> by its hash
+// (worker/csp.mjs), and an attribute handler has no block to hash. The
+// listener is bound by a script the Worker hashes like the others; the
+// data-bound mark keeps a page that drew the button twice from binding it
+// twice.
 function downloadButton() {
-  return `<button type="button" class="dl" onclick="window.print()">Download PDF</button>
-    <p class="signnote">Opens your device's print dialog — choose &ldquo;Save as PDF&rdquo; to keep a copy of this bill.</p>`;
+  return `<button type="button" class="dl">Download PDF</button>
+    <p class="signnote">Opens your device's print dialog — choose &ldquo;Save as PDF&rdquo; to keep a copy of this bill.</p>
+    <script>document.querySelectorAll(".dl").forEach(function (b) { if (!b.dataset.bound) { b.dataset.bound = "1"; b.addEventListener("click", function () { window.print(); }); } });</script>`;
 }

@@ -268,6 +268,26 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   (`page`, `signForm`, `queryForm`) is approve-ticket's. Both escape every
   interpolated value with `esc()`, which lives in `_shared/mail.ts`. The
   in-app viewer iframe stays sandboxed.
+- Every HTML document this origin serves carries a Content-Security-Policy,
+  set by the Worker from `worker/csp.mjs` (pure, node-tested): the app's
+  documents from `appPolicy`, the approval page from `approvalPolicy`, the
+  Worker's own error page from `errorPagePolicy`. Scripts run from this
+  origin, from `cdn.jsdelivr.net` (pdf.js, SheetJS, jsPDF — each loaded on
+  demand with SRI) and from inline `<script>` blocks the Worker hashes as
+  it serves the document — which is why a request for a document is
+  answered whole and never 304 — so an inline event handler (`onclick=`)
+  is refused: the approval page's Download button binds its listener in a
+  script instead, and none may be added. `connect-src` is this origin, the
+  Supabase project (https and wss, for realtime) and `api.klipy.com`;
+  pictures may come from any https host (KLIPY's CDN, storage links);
+  sound from this origin, blob: and Supabase storage; `object-src` is
+  none, `base-uri` and `form-action` self, `frame-ancestors` self (the
+  invoice viewer is a srcdoc iframe of our own) and none on the approval
+  page, which allows no host at all. A new external script or API host
+  must be added to `csp.mjs` or it will not load; `workerCsp.test.mjs`
+  reads the screens back for the CDN and API hosts they name. The
+  `beta2-worker` launch config runs `wrangler dev` over the built app so
+  the headers can be read in the browser.
 - Accounts are created by the create-user Edge Function (Admin-gated,
   service key, arrives email-confirmed), never by client signUp: the
   signup endpoint answers to anyone with the publishable key, so the
