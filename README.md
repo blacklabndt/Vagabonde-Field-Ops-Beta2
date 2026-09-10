@@ -666,7 +666,8 @@ supabase/
                             askDrafts, the seed a draft opens a form with; askSends,
                             who a send may go to and the gates the screens apply;
                             scheduledSends, the fire-time gate and the clock of a
-                            send that waits), the three send bodies (mailJha,
+                            send that waits; askKnowledge, what Ask knows about the
+                            app itself and where the person is), the three send bodies (mailJha,
                             mailReport, mailApproval — one email each, called by the
                             live function and by the scheduled-sends tick), webPush
                             (the one Web Push loop: the chat's and a scheduled send's

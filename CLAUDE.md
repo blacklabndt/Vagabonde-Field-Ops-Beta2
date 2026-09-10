@@ -522,6 +522,23 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   named ("The old send was cancelled but the new one was not
   scheduled: … Schedule it again."), because two rows would be two
   emails. Job detail keeps Cancel and Dismiss only.
+  Ask also knows the app itself and where the person is
+  (`_shared/askKnowledge.ts`, pure, in the guard list): `SCREENS` names
+  every screen by TABS key and label with one sentence each
+  (`askKnowledge.test.mjs` holds the keys and labels to `TABS` — a
+  screen added or renamed must be added here), `APP_KNOWLEDGE` is the
+  owner's prose about roles, permissions, the working day and the crew's
+  words (edit it like help.js; Ask states it as fact, so keep it true),
+  and `knowledgeText()` goes into the system prompt after the rules
+  (`systemPrompt(who, now, { knowledge, where })`). The card sends
+  `context` beside the thread — App's `screen` key, the open job's
+  number, the open ticket's id and that screen's `help.js` paragraphs —
+  which `cleanContext` checks and cuts to size (an unknown screen is
+  dropped, strings capped, help under 3000 chars) and `whereLines`
+  turns into the "Where the person is" block with the help wrapped as
+  data, so "this job" needs no question back and "what is this screen
+  for" is answered in the popup's own words. Nothing about a record comes
+  from the knowledge; that is still the tools'.
 - The screen is in the address bar: `vite-app/src/route.js` (pure, node-
   tested) spells `#/board`, `#/chat`, `#/job/S-10113` and
   `#/job/S-10113/ticket`; App.jsx pushes one history entry per screen
@@ -914,8 +931,8 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   reads both files off disk, strips the types from the function's with
   Node's own stripper, folds the whitespace and compares them. Change one,
   change the other, in the same commit; an interface goes ABOVE the marker,
-  where the twin has nothing to match. Thirteen shared modules — `backupSchedule.ts`,
-  `askTools.ts`, `askLoop.ts`, `askDrafts.ts`, `askSends.ts`, `scheduledSends.ts`,
+  where the twin has nothing to match. Fourteen shared modules — `backupSchedule.ts`,
+  `askTools.ts`, `askLoop.ts`, `askDrafts.ts`, `askSends.ts`, `scheduledSends.ts`, `askKnowledge.ts`,
   `backupTables.ts`, `backupManifest.ts`, `backupRun.ts`, `backupOauth.ts`,
   `drive.ts`, `gzip.ts` and `constantTime.ts` — are erasable TypeScript with
   no imports of their own (`backupManifest.ts` may name `backupSchedule.ts`,
