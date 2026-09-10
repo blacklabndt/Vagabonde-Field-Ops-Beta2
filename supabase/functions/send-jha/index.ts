@@ -7,19 +7,14 @@
 // Runs server-side because it holds the Resend key and needs the
 // service-role key to read a private storage object. The caller's own JWT is
 // checked first, so this can't be used as an open relay.
+//
+// This file is the door and the gate; the send itself is _shared/mailJha.ts,
+// which a scheduled send (scheduled-sends) comes through as well, after a
+// gate of its own — one email body, one sent stamp.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-// The assessment as the read below returns it. supabase-js types an embed
-// as a list without database types, so the row is named here and cast.
-interface JobEmbed { job_number?: string | null; project?: string | null; clients?: { name?: string | null } | null }
-interface JhaMailRow {
-  id: string; signed_by: string | null; pdf_key: string | null; template: string | null;
-  work_date: string | null; status: string | null; site_rep: string | null;
-  profiles: { name?: string | null } | null; jobs: JobEmbed | null;
-}
-import { sendMail, base64, corsHeaders, wrapEmail, esc, MAX_ATTACHMENT_BYTES,
-         recipients, optionalRecipients, type Attachment } from "../_shared/mail.ts";
+import { corsHeaders, recipients, optionalRecipients } from "../_shared/mail.ts";
+import { mailJha, JHA_MAIL_SELECT, type JhaMailRow } from "../_shared/mailJha.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -55,10 +50,7 @@ Deno.serve(async (req) => {
     // RLS that need nothing from each other, go out together; the checks
     // keep their order.
     const [{ data: jhaRead, error: jErr }, { data: caller }] = await Promise.all([
-      asUser
-        .from("jhas")
-        .select("id, signed_by, pdf_key, template, work_date, status, site_rep, profiles(name), jobs(job_number, project, clients(name))")
-        .eq("id", jhaId).single(),
+      asUser.from("jhas").select(JHA_MAIL_SELECT).eq("id", jhaId).single(),
       asUser.from("profiles").select("role").eq("id", user.id).single()
     ]);
     const jha = jhaRead as unknown as JhaMailRow | null;
@@ -78,97 +70,12 @@ Deno.serve(async (req) => {
       });
     }
 
-    const job: JobEmbed = jha.jobs ?? {};
-    const filename = jha.pdf_key.split("/").pop() ?? "jha.pdf";
     const admin = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
-
-    // 2. A link that outlives the email being forwarded around a bit, but not
-    // forever — 14 days, same as a report.
-    let link = "";
-    let attachments: Attachment[] | undefined;
-    let attachmentNote = "";
-
-    // The link and the bytes are independent storage calls; together.
-    const [{ data: signed }, { data: blob }] = await Promise.all([
-      admin.storage.from("jhas").createSignedUrl(jha.pdf_key, 60 * 60 * 24 * 14),
-      admin.storage.from("jhas").download(jha.pdf_key)
-    ]);
-    link = signed?.signedUrl ?? "";
-
-    if (blob) {
-      const bytes = new Uint8Array(await blob.arrayBuffer());
-      if (bytes.length <= MAX_ATTACHMENT_BYTES) {
-        attachments = [{
-          Name: filename,
-          Content: base64(bytes),
-          ContentType: "application/pdf"
-        }];
-      } else {
-        attachmentNote =
-          "<p style=\"color:#6b6d6e\">The file was too large to attach — use the link above to download it.</p>";
-      }
-    }
-
-    // Both storage calls are individually best-effort, but an email with
-    // neither the attachment nor a working link delivers nothing while the
-    // row records it as sent. If no path to the document survived, this is
-    // a failed send and has to say so.
-    if (!link && !attachments) {
-      throw new Error("Couldn't read the assessment's PDF from storage — nothing was sent. Try again, or re-render the PDF first.");
-    }
-
-    const subject = `${job.job_number} · ${job.project} — hazard assessment${jha.work_date ? " (" + jha.work_date + ")" : ""}`;
-    const note = (message || "").trim();
-    const signer = jha.profiles?.name ?? "";
-
-    const html = wrapEmail(`
-      <div style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#5980a6;margin-bottom:6px">Hazard assessment</div>
-      <div style="font-size:22px;font-weight:600;margin-bottom:4px">${esc(job.project)}</div>
-      <div style="color:#6b6d6e;margin-bottom:18px">${esc(job.job_number)} · ${esc(job.clients?.name)}</div>
-      ${note ? `<p>${esc(note).replace(/\n/g, "<br>")}</p>` : ""}
-      <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-top:1px solid rgba(29,31,32,.2);margin:18px 0 0">
-        <tr><td style="padding:8px 0;color:#6b6d6e;width:120px">File</td><td style="padding:8px 0">${esc(filename)}</td></tr>
-        ${jha.work_date ? `<tr><td style="padding:8px 0;color:#6b6d6e">Work date</td><td style="padding:8px 0">${esc(jha.work_date)}</td></tr>` : ""}
-        ${jha.template ? `<tr><td style="padding:8px 0;color:#6b6d6e">Template</td><td style="padding:8px 0">${esc(jha.template)}</td></tr>` : ""}
-        ${signer ? `<tr><td style="padding:8px 0;color:#6b6d6e">Signed by</td><td style="padding:8px 0">${esc(signer)}</td></tr>` : ""}
-        ${jha.status ? `<tr><td style="padding:8px 0;color:#6b6d6e">Status</td><td style="padding:8px 0">${esc(jha.status)}</td></tr>` : ""}
-      </table>
-      ${link ? `<p style="margin-top:22px"><a href="${link}" style="display:inline-block;background:#5980a6;color:#f2f2f3;text-decoration:none;padding:11px 20px;font-weight:600">Download the assessment</a></p>
-      <p style="font-size:11px;color:#6b6d6e">The assessment is attached, and this link works for 14 days.</p>` : ""}
-      ${attachmentNote}
-    `);
-
-    const text = [
-      `${job.job_number} — ${job.project}`,
-      job.clients?.name ?? "",
-      "",
-      note,
-      "",
-      `File: ${filename}`,
-      jha.work_date ? `Work date: ${jha.work_date}` : "",
-      signer ? `Signed by: ${signer}` : "",
-      link ? `\nDownload (14 days): ${link}` : ""
-    ].filter(Boolean).join("\n");
-
-    await sendMail({
-      from: "reports",
-      to: toList, cc: ccList, subject, htmlBody: html, textBody: text,
-      attachments, tag: "jha"
-    });
-
-    // 3. Record that it went, so the job detail can say so. A failure here
-    // is said, not swallowed (see send-report).
-    const { error: markErr } = await admin.from("jhas").update({
-      sent_at: new Date().toISOString(), sent_to: toList
-    }).eq("id", jhaId);
-    if (markErr) {
-      throw new Error(`The assessment went out, but it couldn't be marked as sent — it may still show as unsent; don't send it again. (${markErr.message})`);
-    }
-
-    return new Response(JSON.stringify({ ok: true, attached: !!attachments }), {
+    const result = await mailJha(admin, jha, toList, ccList, message);
+    return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   } catch (e) {
