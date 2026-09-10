@@ -314,6 +314,10 @@ export function App() {
   // the ticket's does. Null is the plain form.
   const [jobSeed, setJobSeed] = useState(null);
   const [jhaSeed, setJhaSeed] = useState(null);
+  // Bumped after a send, a schedule or a cancel made from Ask's card, so the
+  // job page underneath re-reads its cards: the cache entry is dropped, but
+  // the screen holds its rows in state until told.
+  const [filedNonce, setFiledNonce] = useState(0);
   // This person's hazard assessments still waiting for end readings, across
   // every job — listed on Open tickets, loaded with the draft list.
   const [myOpenJhas, setMyOpenJhas] = useState([]);
@@ -1399,11 +1403,21 @@ export function App() {
     if (action.kind === "send_jha") {
       await Db.sendJhaEmail({ jhaId: action.jha.id, to: action.to.join(", "), cc: "", message: action.message || "" });
       await OfflineCache.remove(`jhas.${action.job.id}`);
+      setFiledNonce(n => n + 1);
       return action.done;
     }
     if (action.kind === "send_ticket_approval") {
       await Db.sendTicketApproval({ ticketId: action.ticket.id, to: action.to[0] });
+      // A resend is a chase, recorded the way the tracker's resend records
+      // it: best effort, after the send, muted — "Approval sent" is the
+      // answer and "Flagged as chased" is bookkeeping. Without it, Chase all
+      // unsigned would nudge the same rep again inside its three-day window.
+      if (action.resend) {
+        Toasts.mute();
+        try { await Db.markTicketChased(action.ticket.id).catch(() => {}); } finally { Toasts.unmute(); }
+      }
       await OfflineCache.remove(`tickets.${action.job.id}`);
+      setFiledNonce(n => n + 1);
       return action.done;
     }
     // A scheduled send is one row, inserted as this person through RLS —
@@ -1415,10 +1429,12 @@ export function App() {
         kind: action.send_kind, recordId: action.record_id, jobId: action.job.id, label: action.label,
         to: action.to.join(","), message: action.message || "", runAt: action.run_at
       });
+      setFiledNonce(n => n + 1);
       return action.done;
     }
     if (action.kind === "cancel_scheduled") {
       await Db.cancelScheduledSend(action.id);
+      setFiledNonce(n => n + 1);
       return action.done;
     }
     try {
@@ -1451,6 +1467,7 @@ export function App() {
           key={activeJob.dbId || activeJob.id}
           job={activeJob} currentUser={currentUser}
           onStartJha={() => startJhaForJob(activeJob)}
+          refreshKey={filedNonce}
           onOpenTicket={openTicketDraft}
           onStartTicket={seed => startTicketForJob(activeJob, seed)}
           // The screen you are standing on has just been deleted. Move to the

@@ -13,7 +13,7 @@ import { Toasts } from "../toastBus.js";
 const newClientKey = () => (crypto.randomUUID ? crypto.randomUUID() : null);
 import { tabList, Blueprint, Btn, TableScroll, TagX, Field, PdfGlyph, PdfLink, Dialog, ErrorBox, emailIn, contactLabel, splitContact, StatusTag, useMissingFields, SearchSelect, Loading, LoadingRow, ContactText } from "./common.jsx";
 
-export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, onStartTicket, jobRecord, setJobRecord, onJobChanged, onJobDeleted }) {
+export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, onStartTicket, jobRecord, setJobRecord, onJobChanged, onJobDeleted, refreshKey = 0 }) {
   // Prices — rate cards, ticket lines, the amounts they add up to — are for
   // Admins and Technicians (the database refuses the lines to anyone else,
   // per the "round two" migration). Everyone else sees the ticket's number,
@@ -223,6 +223,17 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
   };
   // biome-ignore lint/correctness/useExhaustiveDependencies: the cards are read once per job; App remounts this screen when another job opens
   useEffect(() => { if (job && job.dbId) { setTicketPage(0); refresh(); } }, [job ? job.dbId : null]);
+
+  // App bumps refreshKey after Ask's card sent, scheduled or cancelled
+  // something on this job while the page was open; the mount read above
+  // already has the value the screen opened with, so only a change counts.
+  const seenRefresh = useRef(refreshKey);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on the signal alone; refresh is a per-render function over the same job
+  useEffect(() => {
+    if (refreshKey === seenRefresh.current) return;
+    seenRefresh.current = refreshKey;
+    if (job && job.dbId) refresh();
+  }, [refreshKey]);
 
   // The record is derived from the job row and the contact directory, so it
   // reloads whenever you open a different job instead of showing the last one.

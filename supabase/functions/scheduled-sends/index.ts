@@ -144,7 +144,12 @@ async function fire(admin: SupabaseClient, row: Row, settingsOnce: () => Promise
     const ticket = data as TicketRow | null;
     if (!ticket) throw new Error("The ticket has been deleted since this was scheduled.");
     fireGate("ticket_approval", person, ticket as unknown as Record<string, unknown>);
+    const resend = ticket.status === "Awaiting approval";
     await mailApproval(admin, ticket.id, to, undefined, person.id, await settingsOnce());
+    // A resend is a chase, recorded the way the tracker's resend records
+    // it — after the send and best effort, so a flag that did not save never
+    // turns a delivered email into a failed row.
+    if (resend) await admin.from("tickets").update({ chased_at: new Date().toISOString() }).eq("id", ticket.id);
   }
 }
 

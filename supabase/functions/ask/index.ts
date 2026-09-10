@@ -290,7 +290,11 @@ Deno.serve(async (req) => {
       } else if (name === "send_ticket_approval") {
         const { row, job, to } = await ticketForSend(String(input.ticket_id ?? ""));
         const words = sendTicketWords(row, job, to);
-        action = { kind: "send_ticket_approval", summary: words.summary, done: words.done, to, ticket: { id: row.id }, job };
+        action = {
+          kind: "send_ticket_approval", summary: words.summary, done: words.done, to, ticket: { id: row.id }, job,
+          // A resend is a chase; App stamps chased_at the way the tracker does.
+          resend: row.status === "Awaiting approval"
+        };
         out = { ready: true, summary: words.summary, to };
       } else if (name === "list_reports") {
         const job = await jobNumbered(String(input.job_number ?? ""), false);

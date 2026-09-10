@@ -127,6 +127,18 @@ function Answer({ text, jobNums, onOpenJob }) {
   );
 }
 
+// The card's own words, in one place. Edit these; nothing else reads them.
+export const CARD_WORDS = {
+  // Shown before the first question.
+  empty: "Ask about the billing tracker — what needs attention, which tickets are over 60 days, how much a client owes. Answers come from what your account can see.",
+  // Added to the above when the browser has a microphone.
+  mic: " Tap the microphone to say it instead of typing.",
+  // Under the thread while an answer is on its way.
+  busy: "Reading the tracker…",
+  // The box, when it is empty.
+  placeholder: "Ask about the tracker…"
+};
+
 function AskCard({ onClose, onOpenJob, onAction }) {
   const [turns, setTurns] = useState(askTurns);
   const [draft, setDraft] = useState("");
@@ -225,9 +237,8 @@ function AskCard({ onClose, onOpenJob, onAction }) {
       <div className="ask-thread" ref={threadEl}>
         {!turns.length && (
           <div className="ask-turn-answer" style={{ opacity: 0.8 }}>
-            Ask about the billing tracker — what needs attention, which tickets are over 60 days,
-            how much a client owes. Answers come from what your account can see.
-            {mic.supported && " Tap the microphone to say it instead of typing."}
+            {CARD_WORDS.empty}
+            {mic.supported && CARD_WORDS.mic}
           </div>
         )}
         {turns.map((t, i) => t.role === "user"
@@ -257,12 +268,12 @@ function AskCard({ onClose, onOpenJob, onAction }) {
               )}
             </div>
           ))}
-        {busy && <div className="ask-turn-answer" style={{ opacity: 0.7 }}>Reading the tracker…</div>}
+        {busy && <div className="ask-turn-answer" style={{ opacity: 0.7 }}>{CARD_WORDS.busy}</div>}
       </div>
       {error && <div className="ask-error">{error}</div>}
       <div className="ask-foot">
         <textarea ref={boxEl} className="input" rows={2} value={draft}
-          placeholder={mic.listening ? "Listening…" : "Ask about the tracker…"}
+          placeholder={mic.listening ? "Listening…" : CARD_WORDS.placeholder}
           onChange={e => setDraft(e.target.value)} onKeyDown={onKeyDown} disabled={busy || sending} />
         {mic.supported && (
           <button type="button" className={`btn btn-secondary ask-mic${mic.listening ? " ask-mic-on" : ""}`}
