@@ -22,3 +22,7 @@ supabase/.temp/
 
 # Claude Code worktrees live under the repo; never part of the project
 .claude/worktrees/
+
+# Written by `deno check` when the functions are type-checked from the root
+# (see CLAUDE.md); the repo has no Deno config of its own to pin.
+deno.lock
