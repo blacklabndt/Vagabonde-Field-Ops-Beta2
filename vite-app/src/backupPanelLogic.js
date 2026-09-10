@@ -138,7 +138,7 @@ export const verifySentence = counts => {
   // prints this sentence with no notes beside it: a check that found no
   // backup, no index or no files folder — and a run that died in its first
   // slice — must not read as "nothing to repair". The first note is the why.
-  if (!verified && !repaired && !bad && !unread) {
+  if (!checkedIn(c)) {
     const why = verifyNotes(c)[0];
     return why ? `no files were checked — ${why.replace(/\.$/, "")}` : "no files were checked";
   }
@@ -152,6 +152,19 @@ export const verifySentence = counts => {
 export const verifyNotes = counts => {
   const n = counts && counts.notes;
   return Array.isArray(n) ? n.map(String) : [];
+};
+// How many files the check got as far as hashing, whatever the answer was.
+// Zero is the state in which the sentence carries the first note itself.
+const checkedIn = c =>
+  (Number(c.verified) || 0) + (Number(c.repaired) || 0) + (Number(c.unrepairable) || 0) + (Number(c.unread) || 0);
+// The notes the sentence has not already said. The panel lists a completed
+// check's notes under its sentence; when nothing was checked that sentence
+// quotes the first note as the why — the earlier-runs row has no list to put
+// it in — so the list starts after it, or the same report is read twice.
+export const verifyNotesUnsaid = counts => {
+  const c = counts || {};
+  const notes = verifyNotes(c);
+  return checkedIn(c) ? notes : notes.slice(1);
 };
 
 // Only these two kinds put a copy of the app in the drive. A restore's own

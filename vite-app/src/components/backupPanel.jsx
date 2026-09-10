@@ -4,7 +4,7 @@ import { Btn, Dialog, Field, ErrorBox, Loading, TagX } from "./common.jsx";
 import {
   BACKUP_PROVIDERS, PROVIDER_LABEL, redirectUriFor, readBackupOutcome,
   isBeforeRestore, restoreNameMatches, failedRunAdvice, keepPhrase,
-  runRows, runFiles, runBytes, sizeTrend, carriedOverNote, verifySentence, verifyNotes
+  runRows, runFiles, runBytes, sizeTrend, carriedOverNote, verifySentence, verifyNotesUnsaid
 } from "../backupPanelLogic.js";
 import { fileSize } from "../data.js";
 import { describeSchedule, WEEKDAY_NAMES, nextRunAt, BACKUP_ZONE } from "../backupSchedule.js";
@@ -505,10 +505,14 @@ export function AutomaticBackupPanel() {
         <div style={{ fontSize: 13, marginBottom: 12 }}>
           <strong>Last {(KIND_WORDS[s.last_run.kind] || "run").toLowerCase()}:</strong>{" "}
           {s.last_run.status === "complete" && s.last_run.kind === "verify" ? (
-            <>finished {when(s.last_run.finished_at)} &middot; {s.last_run.folder_name} &middot; {verifySentence(s.last_run.counts)}.
-              {verifyNotes(s.last_run.counts).length > 0 && (
+            <>finished {when(s.last_run.finished_at)}{s.last_run.folder_name
+              ? <> &middot; {s.last_run.folder_name}</> : null} &middot; {verifySentence(s.last_run.counts)}.
+              {/* A check that found no complete backup has no folder, and the
+                  sentence has already quoted the first note as its why — the
+                  list holds what it has not said. */}
+              {verifyNotesUnsaid(s.last_run.counts).length > 0 && (
                 <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
-                  {verifyNotes(s.last_run.counts).map((n, i) => <li key={i}>{n}</li>)}
+                  {verifyNotesUnsaid(s.last_run.counts).map((n, i) => <li key={i}>{n}</li>)}
                 </ul>
               )}
             </>
