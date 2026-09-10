@@ -614,7 +614,7 @@ async function verifySlice(
 
   const index = await withRetry("Reading the backup's file index", () => readFileIndex(conn.drive, c.folderId!));
   if (!index.size) {
-    addVerifyNote(c, `${c.folderName} has no file index — it is from before files were hashed — so there is nothing to check it against. The next backup's folder will have one.`);
+    addVerifyNote(c, `${c.folderName} has no file index — it is from before files were hashed, or its records could not be squared with the folder the night it was made — so there is nothing to check it against. The next backup's folder will have one.`);
     return await finish();
   }
   const filesFolder = (await withRetry("Opening the backup's files folder", () => conn.drive.listFolders(c.folderId!))).find(f => f.name === FILES_FOLDER);
@@ -1026,8 +1026,9 @@ async function spotCheck(
 // upsert, and an object re-rendered between the two reads (a JHA closed out,
 // a timesheet re-filed) hashes differently each time, so the index built
 // from the rows can name a hash the folder's file has not got — and a
-// restore then refuses that good file as damaged until the next file check
-// repairs it. The folder is the truth: a record whose drive id is no longer
+// restore then refuses that good file as damaged, for as long as the folder
+// is kept: the file check reads only the newest complete folder, so an
+// older folder's index is never put right. The folder is the truth: a record whose drive id is no longer
 // the folder's file of that name was written over, and the file is hashed
 // again from what is there. One listing a night — the size of the one the
 // carry-over already pays for — and a download only for the rare loser.
@@ -1076,18 +1077,30 @@ async function stepManifest(
   // hashed to when it was stored. The spot check goes first, so a file it
   // re-stores is in the index under its new hash.
   const records = await listFileRows(db, runId);
-  // Never the run's failure. An index that was not reconciled is the state
-  // this phase was in before reconcileFileRows existed — a restore may call
-  // one good file damaged, and the next file check repairs it — while a
-  // refusal thrown from here throws away a night of tables and files that
-  // are already whole in the folder, manifest and all.
+  // Never the run's failure: a refusal thrown from here would throw away a
+  // night of tables and files that are already whole in the folder. But
+  // rows that could not be squared with the folder are worse than none — a
+  // restore would refuse a good file as damaged, and the file check reads
+  // only the NEWEST complete folder, so nothing would ever come back to put
+  // this one right. So that night the folder gets an EMPTY index and
+  // behaves like one from before files were hashed: a restore puts its
+  // files back unchecked and says so, tomorrow's carry-over reads through
+  // once, and the office reads why in the error log, which is where the
+  // digest looks — no screen draws this. Empty rather than absent, so a
+  // manifest attempt that wrote a full one before a blip is replaced.
+  let reconciled = true;
   try { await reconcileFileRows(db, drive, folderId, runId, records); }
-  catch (e) { console.warn(`The file records could not be reconciled with the folder: ${(e as Error).message}`); }
+  catch (e) {
+    reconciled = false;
+    await logError("backup-run", `The file records could not be squared with the folder, so this backup carries no file index and its files go back unchecked: ${(e as Error).message}`, { runId, folderId });
+  }
   c.spot = await spotCheck(db, drive, folderId, runId, records);
-  const index = records.map(r => ({ name: r.name, bucket: r.bucket, key: r.key, size: r.size, sha256: r.sha256, reused: r.reused }));
+  const index = reconciled
+    ? records.map(r => ({ name: r.name, bucket: r.bucket, key: r.key, size: r.size, sha256: r.sha256, reused: r.reused }))
+    : [];
   await withRetry("Uploading the file index", async () =>
     drive.upload(folderId, FILES_INDEX_NAME, await gzip(new TextEncoder().encode(JSON.stringify(index))), "application/gzip"));
-  m = recordFileIndex(m, records.filter(r => r.sha256).length, FILES_INDEX_NAME, c.spot);
+  m = recordFileIndex(m, reconciled ? records.filter(r => r.sha256).length : 0, FILES_INDEX_NAME, c.spot);
   m.jobs = jobsIndex(c.index as any);
   m = finishManifest(m, new Date().toISOString());
 

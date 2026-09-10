@@ -517,13 +517,18 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   slices alive at once after a reclaim can each upload one name, in either
   order — and its file is hashed again from what is there; one listing a
   night, a download only for the rare loser; best-effort and never the
-  run's failure — a listing refused is a warning in the function log, an
-  unreconciled index is the state the phase was in before, and the next
-  file check repairs it), then folds them into
-  `files.json.gz` beside manifest.json and `manifest.files` says `hashed`,
-  `index` and `spot`. An upload that lands after the manifest is the
-  residual: named `damaged` by a restore in between, repaired by the next
-  file check. A carry-over needs
+  run's failure — but rows that could not be squared with the folder are
+  worse than none, and the file check reads only the NEWEST complete
+  folder, so nothing would ever come back to put an older folder's index
+  right: that night's folder gets an EMPTY `files.json.gz` and behaves
+  like one from before files were hashed — a restore puts its files back
+  unchecked and says so, tomorrow's carry-over reads through once — and
+  the refusal goes to function_errors, where the digest reads it), then
+  folds them into `files.json.gz` beside manifest.json and
+  `manifest.files` says `hashed`, `index` and `spot`. An upload that lands
+  after the manifest is the residual: named `damaged` by a restore from
+  that folder, and put right only if the folder is still the newest when
+  the file check comes round. A carry-over needs
   the base index to hold the file's hash (else it is read through once),
   the copy keeps that hash, one carried-over file a night is downloaded
   and hashed against its record (`spot`: ok / re-stored / not checked /

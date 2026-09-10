@@ -1570,7 +1570,14 @@ test("the file rows are reconciled with the folder before the index is written f
   assert.match(source, /async function reconcileFileRows\(/);
   const reconcileAt = source.indexOf("await reconcileFileRows(db, drive, folderId, runId, records);");
   const spotAt = source.indexOf("c.spot = await spotCheck(db, drive, folderId, runId, records);");
-  const indexAt = source.indexOf("const index = records.map(");
+  const indexAt = source.indexOf("const index = reconciled");
   assert.ok(reconcileAt > 0 && spotAt > reconcileAt && indexAt > spotAt, "reconcile, then the spot check, then the index");
   assert.match(source, /if \(!id \|\| id === r\.drive_id\) continue;/, "a row whose file the folder still holds under its own id is left alone");
+  // Rows that could not be squared with the folder are worse than none: the
+  // folder gets an EMPTY index that night (replacing any a blipped attempt
+  // wrote), the office reads why in the error log, and the manifest says
+  // nothing was hashed.
+  assert.match(source, /reconciled = false;\s*\n\s*await logError\("backup-run"/, "a refusal goes where the digest reads");
+  assert.match(source, /const index = reconciled\s*\n\s*\? records\.map\([\s\S]*?\)\s*\n\s*: \[\];/, "an empty index, not a stale one");
+  assert.match(source, /recordFileIndex\(m, reconciled \? records\.filter\(r => r\.sha256\)\.length : 0, FILES_INDEX_NAME, c\.spot\)/);
 });

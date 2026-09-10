@@ -934,7 +934,7 @@ async function stepFilesBack(
   // for files nobody has looked at. A first slice that died before its cursor
   // was written starts here again, so the note is not repeated.
   if (!index.size && c.fileOffset === 0) {
-    const unchecked = `${c.folderName || "That backup"} has no file index — it is from before files were hashed — so none of its files could be checked against one on the way back.`;
+    const unchecked = `${c.folderName || "That backup"} has no file index — it is from before files were hashed, or its records could not be squared with the folder the night it was made — so none of its files could be checked against one on the way back.`;
     if (!c.notes.includes(unchecked)) addRestoreNote(c.notes, unchecked);
   }
 
@@ -1403,7 +1403,7 @@ async function stepJobFiles(
   const index = await readFileIndex(drive, c.folderId);
   // And the same admission when there is no record to check against.
   if (!index.size && c.fileOffset === 0) {
-    const unchecked = `${c.folderName || "That backup"} has no file index — it is from before files were hashed — so none of its PDFs could be checked against one on the way back.`;
+    const unchecked = `${c.folderName || "That backup"} has no file index — it is from before files were hashed, or its records could not be squared with the folder the night it was made — so none of its PDFs could be checked against one on the way back.`;
     if (!c.skipped.includes(unchecked)) addRestoreNote(c.skipped, unchecked);
   }
   for (let i = c.fileOffset; i < list.length; i++) {
