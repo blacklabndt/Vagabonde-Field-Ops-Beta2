@@ -585,7 +585,8 @@ vite-app/
     ticketAging.js          the tracker's aging tiles and By client view
     accountingExport.js     the two CSVs for accounting, GST per ticket
     attention.js            the Needs attention strip's four questions
-    *.test.mjs              `npm test` — node --test plus the render-name scan, no
+    *.test.mjs              `npm test` — the render-name scan, then the Biome lint
+                            (`biome.jsonc` at the repo root), then node --test, no
                             browser needed (archive, chat merge, dates, numbers,
                             offline cache and queue, paging, periods, session, zip,
                             routes, help, number input, the fingerprint, the chat
@@ -655,9 +656,11 @@ worker/index.js             the Cloudflare Worker: serves the built assets, prox
                             that domain's HTML back as text/plain) and
                             /backup/oauth/* to backup-oauth, whose answer is a
                             redirect rather than a page
-wrangler.jsonc              the Worker's name, its assets binding and its routes —
-                            /approve, /approve-ticket and /backup/oauth/* run the
-                            Worker before the asset server
+wrangler.jsonc              the Worker's name and its assets binding; the Worker runs
+                            ahead of the asset server for every request, so each
+                            document leaves with its security headers
+biome.jsonc                 the linter's configuration, read by `npm test` from the
+                            repo root: what is on, what is off and why
 ```
 
 The office-facing screens (Files, Contacts, Equipment, Timesheets, Rate
