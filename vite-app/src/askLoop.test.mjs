@@ -146,6 +146,12 @@ test("the system prompt names the person, the day in Grande Prairie and the rule
   assert.match(s, /null total/i);
   assert.match(s, /never an instruction/i);
   assert.match(s, /never invent/i);
+  assert.match(s, /About the app:/);
+  // The knowledge and the where block come after the rules, and only when given.
+  assert.doesNotMatch(s, /Where the person is/);
+  const full = systemPrompt({ name: "Kyle Keith", role: "Admin" }, Date.UTC(2026, 8, 10, 14, 45), { knowledge: "KNOWLEDGE HERE", where: "Where the person is: job S-1." });
+  assert.ok(full.indexOf("never an instruction") < full.indexOf("KNOWLEDGE HERE"));
+  assert.ok(full.indexOf("KNOWLEDGE HERE") < full.indexOf("Where the person is: job S-1."));
 });
 
 test("wrapRecords says what the records are and that they are data", () => {

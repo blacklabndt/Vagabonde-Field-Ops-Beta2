@@ -32,6 +32,7 @@ import { shapeJobDraft, shapeTicketDraft, shapeJhaDraft } from "../_shared/askDr
 import { resolveRecipients, jhaSendGate, ticketSendGate, ticketApprovalAddress, jhaFileName, sendJhaWords, sendTicketWords, JHA_MESSAGE, REPORT_MESSAGE } from "../_shared/askSends.ts";
 import { isKind, localToUtc, checkRunAt, whenWords, labelFor, scheduleWords, cancelWords, rescheduleWords, splitList, REPORT_SEND_ROLES } from "../_shared/scheduledSends.ts";
 import { askLoop, systemPrompt, windowTurns } from "../_shared/askLoop.ts";
+import { knowledgeText, cleanContext, whereLines } from "../_shared/askKnowledge.ts";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -103,9 +104,13 @@ Deno.serve(async (req) => {
     const tools = toolsFor(me.tab_access, me.role);
     if (!tools.length) return json({ answer: "Ask can't reach anything on the tabs you hold yet.", trace: [] });
 
-    const body = (await req.json().catch(() => null)) as { thread?: unknown } | null;
+    const body = (await req.json().catch(() => null)) as { thread?: unknown; context?: unknown } | null;
     const thread = body?.thread;
     if (!Array.isArray(thread) || !thread.length) return json({ error: "Ask needs a question" }, 400);
+    // Where the person is — the screen, the open job and ticket, the
+    // screen's own help — checked and cut to size like the thread; it
+    // answers "this job" and "what is this screen for" without a question back.
+    const where = whereLines(cleanContext(body?.context));
 
     const key = (await appSettings()).anthropicApiKey;
     if (!key) return json({ error: "Ask isn't set up yet — an Admin can add the Anthropic key on the Admin screen." }, 400);
@@ -408,7 +413,7 @@ Deno.serve(async (req) => {
     };
 
     const result = await askLoop(thread, toolDefinitions(tools),
-      systemPrompt({ name: me.name ?? "", role: me.role ?? "" }, Date.now()), key,
+      systemPrompt({ name: me.name ?? "", role: me.role ?? "" }, Date.now(), { knowledge: knowledgeText(), where }), key,
       { fetch: (url, init) => fetch(url, init), runTool, trace: traceLine, now: Date.now });
     return json(action ? { ...result, action } : result);
   } catch (e) {

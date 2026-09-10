@@ -139,7 +139,7 @@ export const CARD_WORDS = {
   placeholder: "Type here"
 };
 
-function AskCard({ onClose, onOpenJob, onAction, closing }) {
+function AskCard({ onClose, onOpenJob, onAction, closing, context }) {
   const [turns, setTurns] = useState(askTurns);
   // Turns from this index on arrived while the card was open and rise
   // into place; the ones before it were there when it opened and mount
@@ -184,7 +184,7 @@ function AskCard({ onClose, onOpenJob, onAction, closing }) {
     setBusy(true);
     setError("");
     try {
-      const { answer, trace, action } = await Db.ask([...threadForSend(), { role: "user", text }]);
+      const { answer, trace, action } = await Db.ask([...threadForSend(), { role: "user", text }], context);
       pushTurn("user", text);
       pushTurn("assistant", answer, trace, action);
       setTurns(askTurns());
@@ -292,7 +292,10 @@ function AskCard({ onClose, onOpenJob, onAction, closing }) {
   );
 }
 
-export function AskLauncher({ onOpenJob, onAction }) {
+// `context` is where the person is — App's screen key, the open job's
+// number, the open ticket's id and the screen's help — sent with each
+// question so "this job" needs no question back.
+export function AskLauncher({ onOpenJob, onAction, context }) {
   const online = useOnline();
   const [open, setOpen] = useState(false);
   // Closing plays the card's exit first; the unmount follows on a timer a
@@ -307,7 +310,7 @@ export function AskLauncher({ onOpenJob, onAction }) {
     closeTimer.current = setTimeout(() => { closeTimer.current = null; setOpen(false); setClosing(false); }, 220);
   };
 
-  if (open) return <AskCard onClose={close} onOpenJob={onOpenJob} onAction={onAction} closing={closing} />;
+  if (open) return <AskCard onClose={close} onOpenJob={onOpenJob} onAction={onAction} closing={closing} context={context} />;
   return (
     <button type="button" className="btn btn-primary ask-launcher" disabled={!online}
       title={online ? "Ask the app a question" : "AI needs a connection"} onClick={() => setOpen(true)}>

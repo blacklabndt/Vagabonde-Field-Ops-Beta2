@@ -1807,7 +1807,15 @@ export function App() {
             else openJob(job);
           }} />
       )}
-      {currentUser && <AskLauncher onOpenJob={openJobByNumber} onAction={runAskAction} />}
+      {currentUser && (
+        <AskLauncher onOpenJob={openJobByNumber} onAction={runAskAction}
+          context={{
+            screen,
+            jobNumber: activeJob ? activeJob.id : null,
+            ticketId: typeof activeTicket === "string" ? activeTicket : null,
+            help: (helpFor(screen) || { body: [] }).body
+          }} />
+      )}
       {/* The screen's own introduction, the first time this account opens
           it. Gated on the screen the tip was raised for still being the
           screen underneath: one that changes out from under it — an account

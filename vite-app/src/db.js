@@ -1966,10 +1966,11 @@ export const Db = {
   // (which fixes the recipient itself). A direct call, never queued: it is
   // a nice-to-have, and a form that fails offline says so and keeps its
   // words in the dialog for another try.
-  // Ask: the thread so far (text only, ending on the question); the
-  // function answers with the next turn and a trace of what it read.
-  async ask(thread) {
-    const { data, error } = await sbClient.functions.invoke("ask", { body: { thread } });
+  // Ask: the thread so far (text only, ending on the question) and where
+  // the person is (screen, job, ticket, the screen's help); the function
+  // answers with the next turn and a trace of what it read.
+  async ask(thread, context = null) {
+    const { data, error } = await sbClient.functions.invoke("ask", { body: { thread, context } });
     if (error) throw await fnError(error);
     if (data && data.error) throw new Error(data.error);
     return data;
