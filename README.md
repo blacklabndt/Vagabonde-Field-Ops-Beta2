@@ -557,8 +557,9 @@ vite-app/
                             a manifest the downloaded zip is checked back against
     zip.js                  a minimal ZIP writer, so the archive needs no CDN library
     backupSchedule.js       when the automatic backup is next due — Grande Prairie's
-                            clock, DST and all; a byte-identical twin lives in
-                            supabase/functions/_shared/ and a test compares them
+                            clock, DST and all; a twin lives in
+                            supabase/functions/_shared/ (the same code, typed)
+                            and a test compares them with the types stripped
     backupPanelLogic.js     the backup panel's pure parts — the provider list and
                             labels, the redirect URI each registration needs,
                             reading the outcome the drive's redirect came back with,
@@ -585,8 +586,9 @@ vite-app/
     ticketAging.js          the tracker's aging tiles and By client view
     accountingExport.js     the two CSVs for accounting, GST per ticket
     attention.js            the Needs attention strip's four questions
-    *.test.mjs              `npm test` — the render-name scan, then the Biome lint
-                            (`biome.jsonc` at the repo root), then node --test, no
+    *.test.mjs              `npm test` — the render-name scan, the Biome lint
+                            (`biome.jsonc` at the repo root), Deno's type-check of
+                            the functions, then node --test, no
                             browser needed (archive, chat merge, dates, numbers,
                             offline cache and queue, paging, periods, session, zip,
                             routes, help, number input, the fingerprint, the chat
@@ -628,6 +630,9 @@ vite-app/
   scripts/check-render.cjs  the render-name scan `npm test` runs first: every capitalised
                             tag in a JSX file must resolve to something that file imports,
                             and no hook may sit below a component's first early return
+  scripts/check-functions.cjs
+                            Deno's type-check of every Edge Function, through npx
+                            (deno pinned), the third thing `npm test` runs
 supabase/
   migrations/               schema, applied in filename order
   functions/                nineteen Edge Functions — the three that send mail

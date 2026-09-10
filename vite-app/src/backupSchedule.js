@@ -1,16 +1,18 @@
 // When the project next copies itself to the drive.
 //
 // Pure, so it can be tested and so the panel and the Edge Function can both
-// hold it. Everything below the marker is duplicated byte for byte into
-// supabase/functions/_shared/backupSchedule.ts — the tick that starts a run
-// and the line that tells the Admin when it is due must never disagree —
-// and backupSchedule.test.mjs reads both files back and compares them.
+// hold it. Everything below the marker is duplicated into
+// supabase/functions/_shared/backupSchedule.ts, the same code with type
+// annotations added — the tick that starts a run and the line that tells
+// the Admin when it is due must never disagree — and
+// backupSchedule.test.mjs reads both files back, strips the types from the
+// function's copy and compares them.
 //
 // The zone is Grande Prairie's, and it is done with Intl rather than a
 // fixed offset because Alberta moves twice a year: an offset baked in in
 // January runs an hour early all summer.
 
-// ═══ shared core · keep byte-identical with the other backupSchedule ═══
+// ═══ shared core · keep identical with the other backupSchedule, types aside ═══
 export const BACKUP_ZONE = "America/Edmonton";
 
 export const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -64,7 +66,7 @@ export function matchesDay(frequency, weekday, fields) {
   return false;
 }
 
-const cleanHour = value => {
+const cleanHour = (value) => {
   const n = Math.trunc(Number(value));
   if (!Number.isFinite(n)) return 0;
   return Math.min(23, Math.max(0, n));

@@ -33,8 +33,8 @@ export interface DriveClient {
   listFolders(parentId: string): Promise<DriveFolder[]>;
   listFiles(parentId: string): Promise<DriveEntry[]>;
   createFolder(parentId: string, name: string): Promise<string>;
-  upload(folderId: string, name: string, body: Uint8Array, contentType: string): Promise<string>;
-  download(fileId: string): Promise<Uint8Array>;
+  upload(folderId: string, name: string, body: Uint8Array<ArrayBuffer>, contentType: string): Promise<string>;
+  download(fileId: string): Promise<Uint8Array<ArrayBuffer>>;
   delete(id: string): Promise<void>;
   // A copy made on the drive, from one of its files into a folder under a
   // name — nothing passes through here. A file already there under that
@@ -258,7 +258,7 @@ export class GoogleDrive implements DriveClient {
     return String((await res.json() as { id: string }).id);
   }
 
-  async upload(folderId: string, name: string, body: Uint8Array, contentType: string): Promise<string> {
+  async upload(folderId: string, name: string, body: Uint8Array<ArrayBuffer>, contentType: string): Promise<string> {
     // Google is happy to hold two files with the same name in one folder,
     // which is exactly what a retried slice would leave behind.
     for (const clash of await this.findByName(folderId, name, false)) await this.delete(clash.id);
@@ -337,7 +337,7 @@ export class GoogleDrive implements DriveClient {
     return id;
   }
 
-  async download(fileId: string): Promise<Uint8Array> {
+  async download(fileId: string): Promise<Uint8Array<ArrayBuffer>> {
     const res = await ok(await fetch(
       `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
       { headers: this.head() }
@@ -445,7 +445,7 @@ export class OneDrive implements DriveClient {
     return String((await (await ok(res, "OneDrive folder")).json() as { id: string }).id);
   }
 
-  async upload(folderId: string, name: string, body: Uint8Array, contentType: string): Promise<string> {
+  async upload(folderId: string, name: string, body: Uint8Array<ArrayBuffer>, contentType: string): Promise<string> {
     const path = `${GRAPH}/items/${encodeURIComponent(folderId)}:/${encodeURIComponent(name)}:`;
     if (body.byteLength <= RESUMABLE_BYTES) {
       const res = await ok(await fetch(`${path}/content`, {
@@ -512,7 +512,7 @@ export class OneDrive implements DriveClient {
     return id;
   }
 
-  async download(fileId: string): Promise<Uint8Array> {
+  async download(fileId: string): Promise<Uint8Array<ArrayBuffer>> {
     const res = await ok(await fetch(`${GRAPH}/items/${encodeURIComponent(fileId)}/content`,
       { headers: this.head() }), "OneDrive download");
     return new Uint8Array(await res.arrayBuffer());
@@ -651,7 +651,7 @@ export class Dropbox implements DriveClient {
     }
   }
 
-  async upload(folderId: string, name: string, body: Uint8Array, contentType: string): Promise<string> {
+  async upload(folderId: string, name: string, body: Uint8Array<ArrayBuffer>, contentType: string): Promise<string> {
     const path = `${folderId}/${name}`;
     if (body.byteLength <= RESUMABLE_BYTES) {
       const res = await ok(await fetch("https://content.dropboxapi.com/2/files/upload", {
@@ -705,7 +705,7 @@ export class Dropbox implements DriveClient {
     return String(meta.path_display ?? path);
   }
 
-  async download(fileId: string): Promise<Uint8Array> {
+  async download(fileId: string): Promise<Uint8Array<ArrayBuffer>> {
     const res = await ok(await fetch("https://content.dropboxapi.com/2/files/download", {
       method: "POST",
       headers: this.head({ "Dropbox-API-Arg": dropboxArg({ path: fileId }) })
@@ -740,7 +740,7 @@ export class Dropbox implements DriveClient {
 // N uploads fail with a retryable error, which is how the retry loop is
 // tested without a network.
 
-interface FakeNode { id: string; name: string; parent: string; folder: boolean; body: Uint8Array }
+interface FakeNode { id: string; name: string; parent: string; folder: boolean; body: Uint8Array<ArrayBuffer> }
 
 export class FakeDrive implements DriveClient {
   nodes: Map<string, FakeNode>;
@@ -787,7 +787,7 @@ export class FakeDrive implements DriveClient {
     return Promise.resolve(id);
   }
 
-  upload(folderId: string, name: string, body: Uint8Array, _contentType: string): Promise<string> {
+  upload(folderId: string, name: string, body: Uint8Array<ArrayBuffer>, _contentType: string): Promise<string> {
     if (this.failNextUploads > 0) {
       this.failNextUploads -= 1;
       const e = new Error("The drive is unavailable (503): try again.") as DriveError;
@@ -802,10 +802,20 @@ export class FakeDrive implements DriveClient {
     return Promise.resolve(id);
   }
 
-  download(fileId: string): Promise<Uint8Array> {
+  download(fileId: string): Promise<Uint8Array<ArrayBuffer>> {
     const n = this.nodes.get(fileId);
     if (!n || n.folder) return Promise.reject(new Error(`fake drive: ${fileId} not found`));
     return Promise.resolve(new Uint8Array(n.body));
+  }
+
+  copy(fileId: string, folderId: string, name: string): Promise<string> {
+    const n = this.nodes.get(fileId);
+    if (!n || n.folder) return Promise.reject(new Error(`fake drive: ${fileId} not found`));
+    const clash = this.childrenOf(folderId, false).find(f => f.name === name);
+    if (clash) this.nodes.delete(clash.id);
+    const id = this.nextId();
+    this.nodes.set(id, { id, name, parent: folderId, folder: false, body: new Uint8Array(n.body) });
+    return Promise.resolve(id);
   }
 
   delete(id: string): Promise<void> {

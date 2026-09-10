@@ -678,7 +678,7 @@ async function verifySlice(
     const name = names[i];
     const rec = index.get(name)!;
     const id = byName.get(name) ?? null;
-    let bytes: Uint8Array | null = null;
+    let bytes: Uint8Array<ArrayBuffer> | null = null;
     let unread = "";
     if (id) {
       try { bytes = await withRetry(`Reading ${name} off the drive`, () => conn.drive.download(id)); }

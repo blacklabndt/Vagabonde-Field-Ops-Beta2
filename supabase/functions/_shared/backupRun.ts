@@ -475,7 +475,7 @@ export function nextVerifyAt(nowMs: number, everyDays: number): string {
 
 // Lower-case hex SHA-256. Web Crypto, which node and the Edge runtime
 // both carry, so this module stays import-free.
-export async function hashBytes(bytes: Uint8Array): Promise<string> {
+export async function hashBytes(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
 }

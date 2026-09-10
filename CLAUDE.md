@@ -34,15 +34,20 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   too: a row a function reads is named by a small interface beside the
   read and the read is cast to it (supabase-js types an embed as a list
   without database types, and a select built from a constant string as
-  nothing), `unknown` where the shape is JSON another module owns. Nothing
-  in `npm test` type-checks the functions (no Deno here; the deploy
-  bundler only strips types), but `npx --yes deno@2 check
-  supabase/functions/*/index.ts` does — chat-push needs
-  `--node-modules-dir=auto` run from outside the repo for its npm import —
-  and it reports 34 pre-existing errors (typed arrays into Blob and Request
-  under TypeScript 6, implicit-any parameters in backupSchedule.ts, a
-  FakeDrive without `copy`) that the deploy runtime does not. A type change
-  is judged against that baseline, not against zero.
+  nothing), `unknown` where the shape is JSON another module owns.
+- Typecheck: `npm run typecheck` (`vite-app/scripts/check-functions.cjs`),
+  and `npm test` runs it after the lint. It runs Deno's own checker through
+  npx — `deno@2.9.6`, pinned, because its TypeScript (6) is what decides,
+  and the deploy bundler only strips types — over every
+  `supabase/functions/*/index.ts`, with `--no-lock` so no deno.lock is
+  written and `--node-modules-dir=none` so chat-push's npm import stays in
+  Deno's cache. The first run downloads Deno through npx; after that it is
+  ten seconds. It passes at zero, and stays there: bytes that go into a
+  Blob, a Request or a digest are typed `Uint8Array<ArrayBuffer>` (the
+  plain generic is refused there under TypeScript 6), `FakeDrive`
+  implements every method of `DriveClient`, and backupSchedule.ts's shared
+  core is annotated — see the twin rule below for how its JavaScript twin
+  is compared.
 - Build: `npm --prefix vite-app run build`
 - Deploy: `npm run build && npx wrangler deploy` (from repo root)
 - Dev server: use the `.claude/launch.json` `beta2-dev` config, not Bash
@@ -744,10 +749,13 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   `ticket_crew` row whose person has gone is skipped and counted, because
   `profile_id` is `not null` and those are somebody's hours.
 - `nextRunAt` lives twice — `vite-app/src/backupSchedule.js` and
-  `supabase/functions/_shared/backupSchedule.ts` — with a byte-identical
-  block between the `shared core` markers, and `backupSchedule.test.mjs`
-  reads both files off disk and compares them. Change one, change the other,
-  in the same commit. Eight shared modules — `backupSchedule.ts`,
+  `supabase/functions/_shared/backupSchedule.ts` — with the same block
+  between the `shared core` markers, the function's copy annotated (the
+  checker reads it) and the panel's not, and `backupSchedule.test.mjs`
+  reads both files off disk, strips the types from the function's with
+  Node's own stripper, folds the whitespace and compares them. Change one,
+  change the other, in the same commit; an interface goes ABOVE the marker,
+  where the twin has nothing to match. Eight shared modules — `backupSchedule.ts`,
   `backupTables.ts`, `backupManifest.ts`, `backupRun.ts`, `backupOauth.ts`,
   `drive.ts`, `gzip.ts` and `constantTime.ts` — are erasable TypeScript with
   no imports of their own (`backupManifest.ts` may name `backupSchedule.ts`,

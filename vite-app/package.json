@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "check": "node scripts/check-render.cjs src",
     "lint": "cd .. && biome lint --error-on-warnings",
-    "test": "node scripts/check-render.cjs src && npm run lint && node --test src/*.test.mjs",
+    "typecheck": "node scripts/check-functions.cjs",
+    "test": "node scripts/check-render.cjs src && npm run lint && npm run typecheck && node --test src/*.test.mjs",
     "test:e2e": "playwright test"
   },
   "dependencies": {

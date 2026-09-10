@@ -150,10 +150,10 @@ Deno.serve(async (req) => {
 });
 
 // The request body, read to the cap and no further: null past it.
-async function readBounded(req: Request, max: number): Promise<Uint8Array | null> {
+async function readBounded(req: Request, max: number): Promise<Uint8Array<ArrayBuffer> | null> {
   if (!req.body) return new Uint8Array();
   const reader = req.body.getReader();
-  const chunks: Uint8Array[] = [];
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
   let size = 0;
   for (;;) {
     const { done, value } = await reader.read();

@@ -7,6 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 import {
   BACKUP_ZONE, WEEKDAY_NAMES, zonedFields, instantAt, matchesDay,
   nextRunAt, describeSchedule
@@ -136,7 +137,10 @@ test("describeSchedule says it in words a person reads", () => {
 // The tick inside backup-run computes the next run the same way the panel
 // does, and the two live in different runtimes. Rather than trust that,
 // both files carry the same block between the same markers, and this
-// reads them off disk and insists they are the same characters.
+// reads them off disk and insists they are the same code. The function's
+// copy carries type annotations, because Deno's checker reads it, so its
+// block is compared with the types stripped (Node's own stripper, which
+// leaves whitespace where they were) and every run of whitespace folded.
 
 const CORE = /\/\/ ═══ shared core[^\n]*\n([\s\S]*?)\/\/ ═══ end shared core ═══/;
 
@@ -146,9 +150,17 @@ const coreOf = path => {
   return m[1];
 };
 
+// A stripped annotation leaves its spaces behind — `(ms: number): Fields {`
+// becomes `(ms        )         {` — so each line's whitespace is folded to
+// one space and the space left before a closing bracket or a comma dropped.
+const shapeOf = code => code.split("\n")
+  .map(l => l.replace(/\s+/g, " ").replace(/ (?=[),;])/g, "").trim())
+  .filter(Boolean).join("\n");
+
 test("the panel's schedule and the function's are the same code", () => {
   const js = coreOf("./backupSchedule.js");
   const ts = coreOf("../../supabase/functions/_shared/backupSchedule.ts");
   assert.ok(js.includes("export function nextRunAt"), "the core must hold nextRunAt itself");
-  assert.equal(ts, js);
+  assert.ok(/zonedFields\(ms: number\)/.test(ts), "the function's copy is the typed one");
+  assert.equal(shapeOf(stripTypeScriptTypes(ts)), shapeOf(js));
 });
