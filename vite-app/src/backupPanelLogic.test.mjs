@@ -260,6 +260,10 @@ test("a failed backup says the schedule carries it; a failed restore says where 
   assert.match(failedRunAdvice({ kind: "backup", counts: {} }), /next scheduled backup will still run/);
   assert.match(failedRunAdvice({ kind: "before_restore", counts: {} }), /next scheduled backup will still run/);
   assert.match(failedRunAdvice(null), /next scheduled backup will still run/);
+  // A failed file check is not covered by tonight's backup — the strip and
+  // the digest say so, and the panel they point at must not say otherwise.
+  assert.match(failedRunAdvice({ kind: "verify", counts: {} }), /file check is a fortnight off/);
+  assert.doesNotMatch(failedRunAdvice({ kind: "verify", counts: {} }), /scheduled backup will still run/);
 });
 
 test("a restore-all that failed after the wipe names both ways out", () => {

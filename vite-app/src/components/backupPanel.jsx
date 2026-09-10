@@ -483,8 +483,17 @@ export function AutomaticBackupPanel() {
           <strong>{KIND_WORDS[run.kind] || run.kind} in progress</strong>
           {run.folder_name ? <> &middot; {run.folder_name}</> : null}
           <div style={{ marginTop: 4 }}>
-            {PHASE_WORDS[run.phase] || run.phase || "starting"} &middot; {plural(rowsIn(run.counts), "record")},
-            {" "}{plural(filesIn(run.counts), "file")} ({mb(bytesIn(run.counts))}{carriedOverNote(run.counts)}) so far.
+            {/* A file check loads no records and copies nothing, so the
+                backup's three figures read as a run holding none of the app
+                — on the one box built to catch exactly that. It counts in
+                verifyCounts instead, said by the helper the finished row and
+                the last-run sentence both use. */}
+            {run.kind === "verify" ? (
+              <>checking every file against its record &middot; {verifySentence(run.counts)} so far.</>
+            ) : (
+              <>{PHASE_WORDS[run.phase] || run.phase || "starting"} &middot; {plural(rowsIn(run.counts), "record")},
+                {" "}{plural(filesIn(run.counts), "file")} ({mb(bytesIn(run.counts))}{carriedOverNote(run.counts)}) so far.</>
+            )}
           </div>
           <div style={{ ...QUIET, marginTop: 4 }}>
             It keeps going on the server whether this screen is open or not &mdash; a big first backup can take an hour.
@@ -544,8 +553,12 @@ export function AutomaticBackupPanel() {
           {/* The report itself, where the run kept one, and outside the
               complete/failed branch on purpose: a per-job restore that fails
               partway still names every job it could not put back, and those
-              notes are exactly what the office has to act on. */}
-          {notesIn(s.last_run.counts).length > 0 && (
+              notes are exactly what the office has to act on. The one
+              exception is a file check that completed: verifyCounts writes
+              its notes into this same `notes`, and the branch above has
+              already listed them — asking twice reads as two reports. */}
+          {!(s.last_run.status === "complete" && s.last_run.kind === "verify")
+            && notesIn(s.last_run.counts).length > 0 && (
             <details style={{ marginTop: 6 }}>
               <summary style={{ fontSize: 13 }}>
                 It left {plural(notesIn(s.last_run.counts).length, "note")} &mdash; worth reading

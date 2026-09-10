@@ -82,6 +82,18 @@ export function failedRunAdvice(run) {
       "the copy taken automatically just before this started — to put back what was here before.";
   }
 
+  // A file check has no button of its own: the tick is the only door, and
+  // nextVerifyAt moved the clock a fortnight on the moment this run started.
+  // "The next scheduled backup will still run" is true of the backup and
+  // silent about the check, which is the thing that failed — and this is the
+  // screen Home's strip and the daily digest send the Admin to, both of which
+  // say the fortnight out loud. The three have to agree.
+  if (kind === "verify") {
+    return "Nothing in the app was changed — a file check only reads the backup and re-stores what does not match. " +
+      "The next file check is a fortnight off and tonight's backup does not repeat it, so read what went wrong " +
+      "in Recent background errors.";
+  }
+
   return "The next scheduled backup will still run.";
 }
 
