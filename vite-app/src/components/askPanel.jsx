@@ -134,7 +134,7 @@ export const CARD_WORDS = {
   // Added to the above when the browser has a microphone.
   mic: " Tap the microphone to talk to me",
   // Under the thread while an answer is on its way.
-  busy: "Thinking...",
+  busy: "Procrastinating...",
   // The box, when it is empty.
   placeholder: "Type here"
 };
