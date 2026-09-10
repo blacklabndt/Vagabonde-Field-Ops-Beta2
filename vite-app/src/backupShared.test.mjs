@@ -1507,6 +1507,13 @@ test("a file check's cursor starts empty, revives from jsonb, and its counts rea
   assert.equal(counts.verified, 10);
   assert.equal(counts.repaired, 2);
   assert.equal(counts.unrepairable, 0);
+  assert.equal(counts.unread, 0);
+  // A file the drive would not hand over is counted apart — it is not
+  // damage — and is in `files` like the rest.
+  const r = reviveVerifyCursor({ verified: 3, unread: "2" }, "2026-09-09T07:00:00Z");
+  assert.equal(r.unread, 2);
+  assert.equal(verifyCounts(r).unread, 2);
+  assert.equal(verifyCounts(r).files, 5);
   assert.equal(counts.folder, "2026-09-08 00-00");
   assert.deepEqual(counts.rows, {}, "no records: the row's record count reads zero, not NaN");
 });
@@ -1524,4 +1531,46 @@ test("the next file check is a whole number of days on, fourteen when the settin
   assert.equal(nextVerifyAt(now, 7), "2026-09-16T07:00:00.000Z");
   assert.equal(nextVerifyAt(now, 0), "2026-09-23T07:00:00.000Z");
   assert.equal(nextVerifyAt(now, NaN), "2026-09-23T07:00:00.000Z");
+});
+
+test("a file the drive would not hand over is left alone by the check, not re-stored over", () => {
+  const source = read("supabase/functions/backup-run/index.ts");
+  // A re-store clears the name off the drive before it uploads, so acting
+  // on a read that never arrived would replace a good historical assessment
+  // with today's — and lose it outright if the re-store then failed. The
+  // unread branch comes before the re-store branch and counts apart.
+  const walk = source.slice(source.indexOf("async function verifySlice("), source.indexOf("async function fail("));
+  assert.match(walk, /catch \(e\) \{ unread = \(e as Error\)\.message; bytes = null; \}/);
+  const unreadAt = walk.indexOf("} else if (unread) {");
+  const restoreAt = walk.indexOf("did not hash to its record\";");
+  assert.ok(unreadAt > 0 && restoreAt > unreadAt, "the unread branch is taken before the re-store branch");
+  assert.match(walk, /c\.unread \+= 1;/);
+  assert.match(walk, /left alone/);
+});
+
+test("a run row that could not be made puts the clock back, for both clocks", () => {
+  const source = read("supabase/functions/backup-run/index.ts");
+  // Moving the clock is the claim, so it moves before the row exists; a
+  // refused insert once cost the file check a fortnight, and a gateway page
+  // on the insert would cost the backup a night — the retry reads a clock
+  // already moved and goes idle.
+  assert.match(source, /async function queueRunOrUnmove\(/);
+  assert.match(source, /\.eq\("id", true\)\.eq\(column, moved\)/, "conditional on the value this tick wrote");
+  assert.match(source, /queueRunOrUnmove\(db, VERIFY_KIND, "backup_verify_next_at", s\.backup_verify_next_at, movedV\)/);
+  assert.match(source, /queueRunOrUnmove\(db, "backup", "backup_next_run_at", s\.backup_next_run_at, moved\)/);
+  assert.doesNotMatch(source, /await queueRun\(db, (VERIFY_KIND|"backup"), null\)/, "the tick never queues its own kinds without the way back");
+});
+
+test("the file rows are reconciled with the folder before the index is written from them", () => {
+  const source = read("supabase/functions/backup-run/index.ts");
+  // Two slices alive at once after a reclaim can each upload one name and
+  // upsert its row in either order; the folder keeps the last upload, the
+  // row the last upsert. The folder is the truth, and the index is built
+  // only after the rows agree with it.
+  assert.match(source, /async function reconcileFileRows\(/);
+  const reconcileAt = source.indexOf("await reconcileFileRows(db, drive, folderId, runId, records);");
+  const spotAt = source.indexOf("c.spot = await spotCheck(db, drive, folderId, runId, records);");
+  const indexAt = source.indexOf("const index = records.map(");
+  assert.ok(reconcileAt > 0 && spotAt > reconcileAt && indexAt > spotAt, "reconcile, then the spot check, then the index");
+  assert.match(source, /if \(!id \|\| id === r\.drive_id\) continue;/, "a row whose file the folder still holds under its own id is left alone");
 });

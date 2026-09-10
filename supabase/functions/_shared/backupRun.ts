@@ -410,6 +410,10 @@ export interface VerifyCursor {
   verified: number;
   repaired: number;
   unrepairable: number;
+  // Files the drive would not hand over on this pass — a dropped socket, a
+  // passing refusal. Nothing is known about them, so nothing is done to
+  // them: the next check reads them again.
+  unread: number;
   bytes: number;
   // Whether a repair changed a record, so the folder's index is rewritten
   // from the rows once the walk is done.
@@ -422,7 +426,7 @@ export interface VerifyCursor {
 export function newVerifyCursor(startedAt: string): VerifyCursor {
   return {
     folderId: null, folderName: null, backupRunId: null,
-    offset: 0, verified: 0, repaired: 0, unrepairable: 0, bytes: 0,
+    offset: 0, verified: 0, repaired: 0, unrepairable: 0, unread: 0, bytes: 0,
     indexDirty: false, done: false, notes: [], startedAt
   };
 }
@@ -435,7 +439,7 @@ export function reviveVerifyCursor(raw: unknown, startedAt: string): VerifyCurso
     ...base,
     folderId: str(c.folderId), folderName: str(c.folderName), backupRunId: str(c.backupRunId),
     offset: num(c.offset), verified: num(c.verified), repaired: num(c.repaired),
-    unrepairable: num(c.unrepairable), bytes: num(c.bytes),
+    unrepairable: num(c.unrepairable), unread: num(c.unread), bytes: num(c.bytes),
     indexDirty: c.indexDirty === true, done: c.done === true,
     notes: Array.isArray(c.notes) ? (c.notes as unknown[]).map(String) : []
   };
@@ -453,9 +457,10 @@ export function addVerifyNote(c: VerifyCursor, text: string): VerifyCursor {
 export function verifyCounts(c: VerifyCursor): Record<string, unknown> {
   return {
     rows: {},
-    files: num(c.verified) + num(c.repaired) + num(c.unrepairable),
+    files: num(c.verified) + num(c.repaired) + num(c.unrepairable) + num(c.unread),
     bytes: num(c.bytes),
     verified: num(c.verified), repaired: num(c.repaired), unrepairable: num(c.unrepairable),
+    unread: num(c.unread),
     folder: c.folderName ?? null,
     notes: c.notes ?? []
   };

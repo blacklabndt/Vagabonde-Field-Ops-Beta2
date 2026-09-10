@@ -383,6 +383,10 @@ test("a file check reads as one sentence, and says when there was nothing to rep
     "23 of 25 files matched their record, 2 repaired from the app");
   assert.equal(verifySentence({ verified: 20, repaired: 3, unrepairable: 2 }),
     "20 of 25 files matched their record, 3 repaired from the app, 2 could not be repaired");
+  // A file the drive would not hand over is neither repaired nor damaged;
+  // it is in the total and said apart.
+  assert.equal(verifySentence({ verified: 20, repaired: 0, unrepairable: 0, unread: 2 }),
+    "20 of 22 files matched their record, 2 could not be read this pass");
   // Nothing checked is not "nothing to repair": no backup to check, no index
   // to check it against, or a run that died in its first slice.
   assert.equal(verifySentence({}), "no files were checked");

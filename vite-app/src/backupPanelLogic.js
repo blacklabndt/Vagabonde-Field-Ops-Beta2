@@ -118,18 +118,23 @@ export const verifySentence = counts => {
   const verified = Number(c.verified) || 0;
   const repaired = Number(c.repaired) || 0;
   const bad = Number(c.unrepairable) || 0;
+  // A file the drive would not hand over on this pass: not damage, not
+  // repaired — left alone for the next check, and counted apart so the
+  // sentence does not call a read blip a broken file.
+  const unread = Number(c.unread) || 0;
   // Nothing checked is not a clean bill of health, and the earlier-runs list
   // prints this sentence with no notes beside it: a check that found no
   // backup, no index or no files folder — and a run that died in its first
   // slice — must not read as "nothing to repair". The first note is the why.
-  if (!verified && !repaired && !bad) {
+  if (!verified && !repaired && !bad && !unread) {
     const why = verifyNotes(c)[0];
     return why ? `no files were checked — ${why.replace(/\.$/, "")}` : "no files were checked";
   }
-  const parts = [`${verified} of ${verified + repaired + bad} files matched their record`];
+  const parts = [`${verified} of ${verified + repaired + bad + unread} files matched their record`];
   if (repaired) parts.push(`${repaired} repaired from the app`);
   if (bad) parts.push(`${bad} could not be repaired`);
-  if (!repaired && !bad) parts.push("nothing to repair");
+  if (unread) parts.push(`${unread} could not be read this pass`);
+  if (!repaired && !bad && !unread) parts.push("nothing to repair");
   return parts.join(", ");
 };
 export const verifyNotes = counts => {

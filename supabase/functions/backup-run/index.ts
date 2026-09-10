@@ -203,12 +203,13 @@ async function tick(db: SupabaseClient, secret: string): Promise<Record<string, 
     // reached when none is. The same conditional move of the clock is the
     // claim on it.
     if (s.backup_verify_next_at && Date.parse(String(s.backup_verify_next_at)) <= Date.now()) {
+      const movedV = nextVerifyAt(Date.now(), Number(s.backup_verify_every_days ?? 14));
       const { data: wonV, error: vErr } = await db.from("app_settings")
-        .update({ backup_verify_next_at: nextVerifyAt(Date.now(), Number(s.backup_verify_every_days ?? 14)) })
+        .update({ backup_verify_next_at: movedV })
         .eq("id", true).eq("backup_verify_next_at", s.backup_verify_next_at).select("id");
       if (vErr) throw vErr;
       if (!stillHoldsRun(wonV)) return { ok: true, idle: true };
-      const verify = await queueRun(db, VERIFY_KIND, null);
+      const verify = await queueRunOrUnmove(db, VERIFY_KIND, "backup_verify_next_at", s.backup_verify_next_at, movedV);
       return await advance(db, verify, secret);
     }
     return { ok: true, idle: true, next: s.backup_next_run_at };
@@ -222,17 +223,17 @@ async function tick(db: SupabaseClient, secret: string): Promise<Record<string, 
   // claim on tonight's run. Two ticks that read the same due time — the
   // cron and a kick landing together — would otherwise both move it and
   // both queue a run, and two runs made in the same minute share a folder.
-  const { data: won, error: nErr } = await db.from("app_settings").update({
-    backup_next_run_at: nextRunAt({
-      frequency: String(s.backup_frequency ?? "daily"),
-      weekday: Number(s.backup_weekday ?? 0),
-      hour: Number(s.backup_hour ?? 2)
-    }, Date.now())
-  }).eq("id", true).eq("backup_next_run_at", s.backup_next_run_at).select("id");
+  const moved = nextRunAt({
+    frequency: String(s.backup_frequency ?? "daily"),
+    weekday: Number(s.backup_weekday ?? 0),
+    hour: Number(s.backup_hour ?? 2)
+  }, Date.now());
+  const { data: won, error: nErr } = await db.from("app_settings").update({ backup_next_run_at: moved })
+    .eq("id", true).eq("backup_next_run_at", s.backup_next_run_at).select("id");
   if (nErr) throw nErr;
   if (!stillHoldsRun(won)) return { ok: true, idle: true };
 
-  const created = await queueRun(db, "backup", null);
+  const created = await queueRunOrUnmove(db, "backup", "backup_next_run_at", s.backup_next_run_at, moved);
   return await advance(db, created, secret);
 }
 
@@ -345,6 +346,25 @@ async function advanceById(
   // hand-off exists to prevent.
   await tend(db, run, secret);
   return moved;
+}
+
+// The clock moves before the run row exists, because moving it is the claim
+// on the run. When the insert then fails, the clock is put back — conditional
+// on the value this tick wrote, so a tick that moved it again meanwhile keeps
+// its own move — and the failure is rethrown for the log. Without this a
+// refused insert cost the file check a fortnight (the first one, on a kind
+// the table had not been taught) and would cost the backup a night, and the
+// tick's own gateway-page retry could not get either back: it re-read a
+// clock already moved and went idle.
+async function queueRunOrUnmove(
+  db: SupabaseClient, kind: string, column: string, was: unknown, moved: unknown
+): Promise<Run> {
+  try {
+    return await queueRun(db, kind, null);
+  } catch (e) {
+    await db.from("app_settings").update({ [column]: was }).eq("id", true).eq(column, moved);
+    throw e;
+  }
 }
 
 async function queueRun(db: SupabaseClient, kind: string, requestedBy: string | null): Promise<Run> {
@@ -608,15 +628,25 @@ async function verifySlice(
     const rec = index.get(name)!;
     const id = byName.get(name) ?? null;
     let bytes: Uint8Array | null = null;
+    let unread = "";
     if (id) {
       try { bytes = await withRetry(`Reading ${name} off the drive`, () => conn.drive.download(id)); }
-      catch (e) { console.warn(`Could not read ${name} off the drive: ${(e as Error).message}`); bytes = null; }
+      catch (e) { unread = (e as Error).message; bytes = null; }
     }
     if (bytes && await hashBytes(bytes) === rec.sha256) {
       c.verified += 1;
       c.bytes += bytes.byteLength;
+    } else if (unread) {
+      // A read that never arrived says nothing about the file. Re-storing on
+      // it would clear the name off the drive before the upload and put
+      // today's copy where a good historical assessment or timesheet was —
+      // and if the re-store then failed, the folder would have lost it. The
+      // nightly spot check already calls an unread file "not checked" rather
+      // than damage; so does this, and the next check reads it again.
+      c.unread += 1;
+      addVerifyNote(c, `${rec.bucket}/${rec.key} could not be read off the drive on this pass and was left alone (${unread}); the next check reads it again.`);
     } else {
-      const why = !id ? "was missing from the folder" : !bytes ? "could not be read off the drive" : "did not hash to its record";
+      const why = !id ? "was missing from the folder" : "did not hash to its record";
       try {
         const blob = await withRetry(`Re-reading ${rec.bucket}/${rec.key}`, async () => {
           const { data, error } = await db.storage.from(rec.bucket).download(rec.key);
@@ -985,6 +1015,38 @@ async function spotCheck(
   }
 }
 
+// Two slices of one run alive at once — one reclaimed while the other still
+// hung inside a download — can each upload one name and upsert its row, in
+// either order. The folder keeps the last upload and the row keeps the last
+// upsert, and an object re-rendered between the two reads (a JHA closed out,
+// a timesheet re-filed) hashes differently each time, so the index built
+// from the rows can name a hash the folder's file has not got — and a
+// restore then refuses that good file as damaged until the next file check
+// repairs it. The folder is the truth: a record whose drive id is no longer
+// the folder's file of that name was written over, and the file is hashed
+// again from what is there. One listing a night — the size of the one the
+// carry-over already pays for — and a download only for the rare loser.
+async function reconcileFileRows(
+  db: SupabaseClient, drive: DriveClient, folderId: string, runId: string, records: FileRow[]
+): Promise<void> {
+  if (!records.length) return;
+  const filesFolder = (await drive.listFolders(folderId)).find(f => f.name === FILES_FOLDER);
+  if (!filesFolder) return;
+  const live = new Map<string, string>();
+  for (const e of await withRetry("Listing the files folder", () => drive.listFiles(filesFolder.id))) live.set(e.name, e.id);
+  for (const r of records) {
+    const id = live.get(r.name);
+    if (!id || id === r.drive_id) continue;
+    const bytes = await withRetry(`Re-hashing ${r.name}`, () => drive.download(id));
+    const sha = await hashBytes(bytes);
+    const { error } = await db.from("backup_run_files")
+      .update({ sha256: sha, size: bytes.byteLength, drive_id: id })
+      .eq("run_id", runId).eq("name", r.name);
+    if (error) throw error;
+    r.sha256 = sha; r.size = bytes.byteLength; r.drive_id = id;
+  }
+}
+
 async function stepManifest(
   db: SupabaseClient, drive: DriveClient, folderId: string, c: RunCursor, kind: string, runId: string
 ): Promise<RunCursor> {
@@ -1008,6 +1070,7 @@ async function stepManifest(
   // hashed to when it was stored. The spot check goes first, so a file it
   // re-stores is in the index under its new hash.
   const records = await listFileRows(db, runId);
+  await reconcileFileRows(db, drive, folderId, runId, records);
   c.spot = await spotCheck(db, drive, folderId, runId, records);
   const index = records.map(r => ({ name: r.name, bucket: r.bucket, key: r.key, size: r.size, sha256: r.sha256, reused: r.reused }));
   await withRetry("Uploading the file index", async () =>

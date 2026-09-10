@@ -38,6 +38,11 @@ hash, size and drive id.
   damaged snapshot.
 - A file whose source has gone cannot be repaired; it is counted
   `unrepairable` and named.
+- A file the drive would not hand over on this pass — a dropped socket, a
+  passing refusal — is counted `unread`, named, and left alone: a re-store
+  deletes the name before it uploads, so acting on a read that never
+  arrived would replace a good historical copy with today's, and lose it
+  outright if the re-store then failed. The next check reads it again.
 
 The folder's `files.json.gz` is rewritten from the rows at the end of any
 slice in which a record changed — not only once the walk is done — so the

@@ -528,13 +528,16 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   folder, hashes it against the index, re-stores from the bucket whatever
   is missing or does not match (a re-rendered assessment comes back as
   today's copy and the record takes the new hash; a source that has gone
-  is `unrepairable`) and rewrites files.json.gz at the end of any slice in
+  is `unrepairable`; a file the drive would not hand over on this pass is
+  `unread` and left alone — a re-store deletes the name before it uploads,
+  so acting on a read blip would have replaced a good historical copy with
+  today's — and the next check reads it again) and rewrites files.json.gz at the end of any slice in
   which a record changed — not only at the end of the walk, because a run
   failed halfway would leave the drive's index naming the old hash for a
   file it had already replaced, and a restore then refuses that good file
   as `damaged`. Its
   cursor is `VerifyCursor` in backupRun.ts, its counts `verifyCounts`
-  (files, verified, repaired, unrepairable, notes), the panel's words
+  (files, verified, repaired, unrepairable, unread, notes), the panel's words
   `verifySentence`; `verifySlice` in backup-run runs inside the same claim
   and catch as a backup slice and makes no folder. It is in MY_KINDS, so
   the tick tends it like a backup.
@@ -579,9 +582,10 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   error or no row leaves the folder alone, because the delete once took the
   winner's backup — or the safety copy — with it,
   instead of splitting one backup across two folders. `backup_next_run_at` moves when a run STARTS, so a long night
-  does not make tomorrow late and a failure does not stop tomorrow; the move
-  is conditional on the due time the tick read, so two ticks that saw the
-  same due time queue one run, not two into one folder.
+=====OLD
+  in `backup_run_files` (service role only, rows go with the run); the
+  manifest phase folds them into `files.json.gz` beside manifest.json and
+  `manifest.files` says `hashed`, `index` and `spot`. A carry-over needs
 - Restoring everything is gated four times — the caller's own Admin profile,
   a backup from a newer schema refused outright (`backup_schema_version()`),
   the Admin typing the backup's folder name (held against the name the drive gives preflight, never the request's own copy), and a complete safety backup of
