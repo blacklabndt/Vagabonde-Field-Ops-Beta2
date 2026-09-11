@@ -73,7 +73,12 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
   Nothing is waiting there now. The latest is
-  `20260910225905_ask_learns_the_app.sql` — `ask_learned`, Ask's one
+  `20260911010317_a_reminder_is_a_timer_with_no_mail.sql` —
+  `scheduled_sends.kind` gains `reminder`, `job_id` becomes nullable, and
+  the insert policy's reminder arm (record_id and to_list pinned empty; a
+  named job must be one the caller reads under jobs_select; the send arms
+  now say `job_id is not null` themselves). Five probes beside it. Before
+  it, `20260910225905_ask_learns_the_app.sql` — `ask_learned`, Ask's one
   crew memory of how the app works (staff read; insert own; delete own
   or Admin; no update; note 3–300 chars). Seven probes beside it. Before
   it, `20260910213858_a_send_can_wait_for_its_time.sql` — the
@@ -596,6 +601,56 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   upload, where storage's policy decides. Files stay with their turn in
   the thread (memory only). The answer budget is `MAX_TOKENS = 8000`
   so a file has room. Not built: a preview in the card, XLS (BIFF).
+  SIX HELPERS (spec
+  `docs/superpowers/specs/2026-09-10-ask-six-helpers-design.md`), on the
+  same rules — every read as the caller, every write through the app's
+  own form or a confirm on the card, the function writing nothing of its
+  own. `chase_unsigned(client?, older_than_days?)` (tab tracker, price
+  roles) reads the unsigned tickets as the caller (the tracker's own
+  select, the first 1,000, and says when there were more), narrows them,
+  and plans the chase through `_shared/chasePlan.ts` — `chasePlan.js`'s
+  TWIN, the tracker's three skips between `shared core` markers, held to
+  it by `askTwins.test.mjs` the way backupSchedule's twin is, with
+  `emailIn` moved out of common.jsx into `emailIn.js` (common.jsx
+  re-exports it) and `_shared/emailIn.ts` its twin; `chaseWords` names
+  who is left alone and why. The card's Chase runs `runChaseFromAsk` in
+  App: the tracker's pool (`runSendPool`, `CHASE_WORKERS` and
+  `CHASE_INTERVAL_MS` now exported from chasePlan.js), one
+  `sendTicketApproval` and one best-effort `markTicketChased` per
+  ticket, toasts muted around it, progress in one forced toast whose
+  button is Stop, a summary naming failures by ticket number; the card is
+  answered at once with the done sentence. `draft_contact` and
+  `draft_organisation` (tab contacts) resolve the organisation as the
+  caller (exact name, the one hit, else ask; a name already on file
+  refuses the organisation draft) and hand App a `contactSeed`: the
+  Contacts screen (`seed` prop, keyed on its nonce) selects the
+  organisation and opens its own New contact form filled in, or its New
+  organisation dialog (`initial`) with the name and type, and the form's
+  Save writes as always. `find_contact` (tab contacts) and
+  `find_equipment` (tab equipment; `EQUIPMENT_FILTERS` twinned from
+  equipment.jsx, test on drift) are reads. `day_check(date?)` (tab job)
+  finds the jobs the person worked that day as them (a JHA they filed, a
+  ticket they raised or were crew on), reads that day's JHAs, tickets
+  (with a Helper crew row) and the reports uploaded on or after it, and
+  `_shared/dayCheck.ts` (pure) answers each job's gaps as phrases and
+  `done`; no helper on the ticket is a NOTE, never a gap. REMINDERS:
+  `set_reminder(text, run_at, job_number?)` (tab any) proposes a
+  `scheduled_sends` row of kind `reminder` — the label is the text,
+  record_id and to_list empty, the job optional — that App inserts through
+  RLS on the card's "Set it"; the tick's reminder branch mails nothing and
+  pushes `resultPushWords` (title Reminder, body the text, the job's
+  address or "/") to the person's own devices, and NO DEVICE IS A FAILURE
+  in words (`NO_DEVICE_WORDS`, on the strip and in function_errors);
+  `fireGate("reminder")` is the active account alone; a reminder cannot
+  be rescheduled, only cancelled and set again; `describeScheduled`
+  words it "Reminder: <text> — <time>". `my_hours` and `my_dose` (tab
+  any) default to the current pay period (1st–15th, 16th–end) and the
+  current quarter, sum the person's own `ticket_crew` rows through
+  `_shared/hoursDose.ts` (whole hundredths, never float; days are
+  distinct work dates) and read `dose_totals` as the caller; `person`
+  is an Admin's alone and is refused in words for anyone else.
+  `SEND_KINDS` stays the three sends (schedule_send refuses the reminder
+  kind), and KINDS is those plus reminder.
 - The screen is in the address bar: `vite-app/src/route.js` (pure, node-
   tested) spells `#/board`, `#/chat`, `#/job/S-10113` and
   `#/job/S-10113/ticket`; App.jsx pushes one history entry per screen
@@ -988,8 +1043,9 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   reads both files off disk, strips the types from the function's with
   Node's own stripper, folds the whitespace and compares them. Change one,
   change the other, in the same commit; an interface goes ABOVE the marker,
-  where the twin has nothing to match. Sixteen shared modules — `backupSchedule.ts`,
+  where the twin has nothing to match. Twenty shared modules — `backupSchedule.ts`,
   `askTools.ts`, `askLoop.ts`, `askDrafts.ts`, `askSends.ts`, `scheduledSends.ts`, `askKnowledge.ts`, `askLearn.ts`, `askFiles.ts`,
+  `emailIn.ts`, `chasePlan.ts`, `dayCheck.ts`, `hoursDose.ts`,
   `backupTables.ts`, `backupManifest.ts`, `backupRun.ts`, `backupOauth.ts`,
   `drive.ts`, `gzip.ts` and `constantTime.ts` — are erasable TypeScript with
   no imports of their own (`backupManifest.ts` may name `backupSchedule.ts`,

@@ -592,7 +592,10 @@ vite-app/
     wipDrafts.js            the half-entered work Open tickets lists off the device
     approvalRun.js          running the bulk cancel one draft after another, naming
                             what failed
-    chasePlan.js            who a chase would mail, before it does
+    chasePlan.js            who a chase would mail, before it does (Ask's function
+                            holds a twin; askTwins.test.mjs holds them together)
+    emailIn.js              the address inside a contact label — the one rule, twinned
+                            in Ask's function the same way
     ticketAging.js          the tracker's aging tiles and By client view
     accountingExport.js     the two CSVs for accounting, GST per ticket
     attention.js            the Needs attention strip's four questions
@@ -672,7 +675,10 @@ supabase/
                             scheduledSends, the fire-time gate and the clock of a
                             send that waits; askKnowledge, what Ask knows about the
                             app itself and where the person is; askLearn, how it learns
-                            more from the crew; askFiles, the shape of a file it makes),
+                            more from the crew; askFiles, the shape of a file it makes;
+                            emailIn and chasePlan, twins of the tracker's own; dayCheck,
+                            what a day's job still needs; hoursDose, a period's hours
+                            and dose in whole hundredths),
                             the three send bodies (mailJha,
                             mailReport, mailApproval — one email each, called by the
                             live function and by the scheduled-sends tick), webPush
