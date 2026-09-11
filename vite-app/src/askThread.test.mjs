@@ -1,6 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { askTurns, pushTurn, threadForSend, forgetAskThread, dropAction, isConfirmAction, confirmLabel, jobLinks, mergeDictation, foldTranscripts, ASK_KEEP } from "./askThread.js";
+import { askTurns, pushTurn, threadForSend, forgetAskThread, dropAction, dropLearned, isConfirmAction, confirmLabel, jobLinks, mergeDictation, foldTranscripts, ASK_KEEP } from "./askThread.js";
+
+test("an answer keeps what was learned, and the × drops one note from the turn alone", () => {
+  forgetAskThread();
+  pushTurn("user", "cancel approval is on the ticket row");
+  pushTurn("assistant", "Noted.", [], null, [{ id: "n1", note: "Cancel approval is on the ticket row.", extra: "dropped" }, { id: "n2", note: "Two." }]);
+  assert.deepEqual(askTurns()[1].learned, [{ id: "n1", note: "Cancel approval is on the ticket row." }, { id: "n2", note: "Two." }]);
+  dropLearned(1, "n1");
+  assert.deepEqual(askTurns()[1].learned, [{ id: "n2", note: "Two." }]);
+  assert.equal(askTurns()[1].text, "Noted.");
+  dropLearned(1, "n2");
+  assert.equal("learned" in askTurns()[1], false);
+  pushTurn("assistant", "Nothing.", [], null, []);
+  assert.equal("learned" in askTurns()[2], false);
+  forgetAskThread();
+});
 
 test("a proposal the card confirms in place is told from a draft by its kind, and the button says what it does", () => {
   assert.equal(isConfirmAction({ kind: "send_jha" }), true);
@@ -8,6 +23,7 @@ test("a proposal the card confirms in place is told from a draft by its kind, an
   assert.equal(isConfirmAction({ kind: "schedule_send" }), true);
   assert.equal(isConfirmAction({ kind: "cancel_scheduled" }), true);
   assert.equal(isConfirmAction({ kind: "reschedule_send" }), true);
+  assert.equal(isConfirmAction({ kind: "forget_learned" }), true);
   assert.equal(isConfirmAction({ kind: "draft_jha" }), false);
   assert.equal(isConfirmAction(null), false);
   assert.equal(isConfirmAction({}), false);
@@ -16,6 +32,7 @@ test("a proposal the card confirms in place is told from a draft by its kind, an
   assert.equal(confirmLabel({ kind: "schedule_send" }), "Schedule");
   assert.equal(confirmLabel({ kind: "cancel_scheduled" }), "Cancel it");
   assert.equal(confirmLabel({ kind: "reschedule_send" }), "Reschedule");
+  assert.equal(confirmLabel({ kind: "forget_learned" }), "Forget it");
   assert.equal(confirmLabel(null), "");
 });
 

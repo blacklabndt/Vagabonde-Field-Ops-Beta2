@@ -312,6 +312,7 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
         </div>
 
         <RecentErrorsPanel />
+        <LearnedPanel />
       </div>
 
       {/* onCleared is passed straight through: the jobs the clear removes may
@@ -329,6 +330,64 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
 // renders, account removals — that nobody would otherwise hear about until
 // a client or a tech complained. Admin-only, like the rest of this screen.
 // (It sat on Users & access; the owner asked for it here.)
+// What Ask has learned from the crew about the app — kept on its own after
+// conversations, one memory for everyone, so the office can read it and
+// prune a wrong note. This list is the oversight the no-confirm learning
+// rests on: an Admin may delete any note; the speaker their own.
+function LearnedPanel() {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
+  const load = async () => {
+    setErr("");
+    try { setRows(await Db.listLearned()); }
+    catch (e) { setRows([]); setErr(e.message || "Couldn't read what Ask has learned."); }
+  };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read once at mount; load is a per-render function over the same Db
+  useEffect(() => { load(); }, []);
+  const forget = async id => {
+    setBusy(id);
+    setErr("");
+    try { await Db.forgetLearned(id); setRows(r => (r || []).filter(x => x.id !== id)); }
+    catch (e) { setErr(e.message || "Couldn't delete that note."); }
+    finally { setBusy(""); }
+  };
+  const when = iso => { try { return new Date(iso).toLocaleDateString("en-CA", { month: "short", day: "numeric" }); } catch { return ""; } };
+  return (
+    <Blueprint style={{ padding: "18px 20px", minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
+        <div style={{ ...SECTION_TITLE, marginBottom: 0 }}>What Ask has learned</div>
+        <span style={{ marginLeft: "auto" }}>
+          <Btn variant="secondary" onClick={load} disabled={rows === null}>{rows === null ? "Loading…" : "Refresh"}</Btn>
+        </span>
+      </div>
+      <div style={{ fontSize: 12, color: "color-mix(in srgb, var(--color-text) 60%, transparent)", marginBottom: 14 }}>
+        Things the crew has told Ask about how the app works, kept on its own after conversations and used in every answer.
+        A note from an Admin is treated as fact; one from anyone else as something a crew member said. Delete anything wrong.
+      </div>
+      <ErrorBox>{err}</ErrorBox>
+      {rows && !rows.length && !err && (
+        <div style={{ fontSize: 13, color: "color-mix(in srgb, var(--color-text) 55%, transparent)" }}>Nothing learned yet.</div>
+      )}
+      {rows && rows.length > 0 && (
+        <div style={{ display: "grid", gap: 8 }}>
+          {rows.map(r => (
+            <div key={r.id} style={{ border: "1px solid var(--color-neutral-300)", padding: "10px 12px", fontSize: 13, display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <div>{r.note}</div>
+                <div style={{ fontSize: 11, color: "color-mix(in srgb, var(--color-text) 55%, transparent)", marginTop: 4 }}>
+                  {r.profiles ? `${r.profiles.name || "(no name)"} · ${r.profiles.role || ""}` : "(account removed)"} · {when(r.created_at)}
+                </div>
+              </div>
+              <Btn variant="secondary" disabled={busy === r.id} onClick={() => forget(r.id)}>{busy === r.id ? "Working…" : "Delete"}</Btn>
+            </div>
+          ))}
+        </div>
+      )}
+    </Blueprint>
+  );
+}
+
 function RecentErrorsPanel() {
   const [errors, setErrors] = useState([]);
   const [loading, setLoading] = useState(true);

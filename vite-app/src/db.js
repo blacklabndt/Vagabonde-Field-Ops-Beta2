@@ -3757,6 +3757,25 @@ export const Db = {
   // offset that would skip a row when the log grew between two presses.
   // `functionName` narrows to one function, because twenty copies of the same
   // line hide the older, different error that matters.
+  // ── What Ask has learned (one crew memory, ask_learned) ───────────
+  // Every staff account reads the whole list; RLS lets the speaker or an
+  // Admin delete. Never the device cache: a note forgotten is forgotten.
+  async listLearned() {
+    const { data, error } = await sbClient.from("ask_learned")
+      .select("id, note, created_at, said_by, profiles(name, role)")
+      .order("created_at", { ascending: false }).limit(200);
+    if (error) throw error;
+    return data || [];
+  },
+
+  // Conditional on a row going: zero rows back is a note already gone, or
+  // one this account may not forget (not the speaker, not an Admin).
+  async forgetLearned(id) {
+    const { data, error } = await sbClient.from("ask_learned").delete().eq("id", id).select("id");
+    if (error) throw error;
+    if (!data || !data.length) throw plainError("That note is already gone, or not yours to forget — an Admin can.");
+  },
+
   async listFunctionErrors(limit = 20, { before = null, functionName = "" } = {}) {
     let q = sbClient.from("function_errors").select("*");
     if (functionName) q = q.eq("function_name", functionName);

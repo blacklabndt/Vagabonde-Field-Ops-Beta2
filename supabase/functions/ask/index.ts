@@ -25,13 +25,14 @@
 // The loop itself is _shared/askLoop.ts, pure and node-tested; this file
 // is the door, the runners and the log line.
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { appSettings, corsHeaders } from "../_shared/mail.ts";
 import { toolsFor, toolDefinitions, traceLine, searchArgs, JHA_TEMPLATES, HAZARD_NAMES, PRICE_ROLES } from "../_shared/askTools.ts";
 import { shapeJobDraft, shapeTicketDraft, shapeJhaDraft } from "../_shared/askDrafts.ts";
 import { resolveRecipients, jhaSendGate, ticketSendGate, ticketApprovalAddress, jhaFileName, sendJhaWords, sendTicketWords, JHA_MESSAGE, REPORT_MESSAGE } from "../_shared/askSends.ts";
 import { isKind, localToUtc, checkRunAt, whenWords, labelFor, scheduleWords, cancelWords, rescheduleWords, splitList, REPORT_SEND_ROLES } from "../_shared/scheduledSends.ts";
-import { askLoop, systemPrompt, windowTurns } from "../_shared/askLoop.ts";
+import { askLoop, systemPrompt, windowTurns, API_URL, API_VERSION } from "../_shared/askLoop.ts";
+import { learnPrompt, parseLearned, roomFor, learnedLines, forgetWords, LEARN_MODEL, LEARN_MAX_TOKENS, MAX_LEARNED, type LearnedRow } from "../_shared/askLearn.ts";
 import { knowledgeText, cleanContext, whereLines } from "../_shared/askKnowledge.ts";
 
 const json = (body: unknown, status = 200) =>
@@ -111,6 +112,13 @@ Deno.serve(async (req) => {
     // screen's own help — checked and cut to size like the thread; it
     // answers "this job" and "what is this screen for" without a question back.
     const where = whereLines(cleanContext(body?.context));
+    // What the crew has taught Ask about the app, read as the caller (every
+    // staff account may): into the prompt after the built-in knowledge,
+    // graded by the speaker's role as it is now.
+    const { data: learnedData, error: learnedErr } = await asUser.from("ask_learned")
+      .select("id, note, created_at, profiles(name, role)").order("created_at").limit(MAX_LEARNED);
+    if (learnedErr) throw new Error(learnedErr.message);
+    const learnedRows = (learnedData ?? []) as unknown as LearnedRow[];
 
     const key = (await appSettings()).anthropicApiKey;
     if (!key) return json({ error: "Ask isn't set up yet — an Admin can add the Anthropic key on the Admin screen." }, 400);
@@ -368,6 +376,17 @@ Deno.serve(async (req) => {
         const words = cancelWords(row.label, Date.parse(row.run_at));
         action = { kind: "cancel_scheduled", summary: words.summary, done: words.done, id: row.id };
         out = { ready: true, summary: words.summary };
+      } else if (name === "list_learned") {
+        out = learnedRows.map(r => ({
+          id: r.id, note: r.note, said_by: r.profiles?.name ?? "(account removed)", role: r.profiles?.role ?? null, when: r.created_at
+        }));
+      } else if (name === "forget_learned") {
+        const id = String(input.id ?? "").trim();
+        const row = learnedRows.find(r => r.id === id);
+        if (!row) throw new Error("No learned note with that id — use list_learned to find it.");
+        const words = forgetWords(row.note);
+        action = { kind: "forget_learned", summary: words.summary, done: words.done, id: row.id };
+        out = { ready: true, summary: words.summary };
       } else if (name === "reschedule_send") {
         // The row as the caller may read it (own, or the office), then the
         // record again through the helper schedule_send uses — the screen's
@@ -413,15 +432,50 @@ Deno.serve(async (req) => {
     };
 
     const result = await askLoop(thread, toolDefinitions(tools),
-      systemPrompt({ name: me.name ?? "", role: me.role ?? "" }, Date.now(), { knowledge: knowledgeText(), where }), key,
+      systemPrompt({ name: me.name ?? "", role: me.role ?? "" }, Date.now(), { knowledge: knowledgeText(), learned: learnedLines(learnedRows), where }), key,
       { fetch: (url, init) => fetch(url, init), runTool, trace: traceLine, now: Date.now });
-    return json(action ? { ...result, action } : result);
+    // Then it learns: one small call over the conversation's own text (never
+    // a tool result) and the notes it has, and the rows it decides on are
+    // written AS THE CALLER through RLS — a replace of someone else's note
+    // by a non-Admin is refused by the delete policy and the new note lands
+    // beside the old one, where the Admin's list shows both. Best effort:
+    // nothing here can fail the answer, and a missed note is not an error.
+    const learned = await learn(asUser, thread, result.answer, learnedRows, key, user.id).catch(() => []);
+    return json({ ...result, learned, ...(action ? { action } : {}) });
   } catch (e) {
     const message = (e as Error).message;
     await logError("ask", message, { user: userId, tool });
     return json({ error: message }, 400);
   }
 });
+
+// One extractor call and the writes it asks for, as the caller. Returns the
+// notes added, with their ids, for the card's "Learned:" line.
+async function learn(asUser: SupabaseClient, thread: unknown, answer: string, existing: LearnedRow[], apiKey: string, userId: string): Promise<{ id: string; note: string }[]> {
+  const turns = [...windowTurns(thread), { role: "assistant" as const, text: answer }];
+  const { system, user } = learnPrompt(turns, existing.map(e => ({ id: e.id, note: e.note })));
+  const res = await fetch(API_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": API_VERSION },
+    body: JSON.stringify({ model: LEARN_MODEL, max_tokens: LEARN_MAX_TOKENS, system, messages: [{ role: "user", content: user }] })
+  });
+  if (!res.ok) return [];
+  const reply = (await res.json()) as { content?: { type: string; text?: string }[] };
+  const text = (reply.content ?? []).filter(b => b.type === "text").map(b => b.text ?? "").join("\n");
+  const decided = parseLearned(text, existing.map(e => e.id));
+  const notes: string[] = [];
+  for (const r of decided.replace) {
+    // Refused (not the speaker, not an Admin) is a silent zero rows; the
+    // corrected note is still written beside the old one.
+    await asUser.from("ask_learned").delete().eq("id", r.id);
+    notes.push(r.note);
+  }
+  const room = roomFor(existing.length - decided.replace.length, decided.add.length);
+  notes.push(...decided.add.slice(0, room));
+  if (!notes.length) return [];
+  const { data } = await asUser.from("ask_learned").insert(notes.map(note => ({ note, said_by: userId }))).select("id, note");
+  return ((data ?? []) as { id: string; note: string }[]);
+}
 
 // Best-effort, never masks the real error (admin-digest's shape).
 async function logError(functionName: string, message: string, context: Record<string, unknown> = {}) {

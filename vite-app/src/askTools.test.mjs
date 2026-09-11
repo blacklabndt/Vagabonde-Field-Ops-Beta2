@@ -20,7 +20,7 @@ test("every tool sits behind a tab the app has", () => {
 test("toolsFor offers exactly the tools behind the tabs held, and the price roles for a ticket", () => {
   assert.deepEqual(toolsFor(["tracker"]).map(t => t.name), ["tracker_stats", "ticket_aging", "search_tickets"]);
   assert.deepEqual(toolsFor(["board", "job", "jha", "ticket"], "Helper").map(t => t.name),
-    ["find_client", "find_job", "job_record", "draft_job", "draft_jha", "list_jhas", "list_tickets", "send_jha", "list_reports", "schedule_send", "list_scheduled", "cancel_scheduled", "reschedule_send"]);
+    ["find_client", "find_job", "job_record", "draft_job", "draft_jha", "list_jhas", "list_tickets", "send_jha", "list_reports", "schedule_send", "list_scheduled", "cancel_scheduled", "reschedule_send", "list_learned", "forget_learned"]);
   assert.ok(toolsFor(["ticket"], "Technician").some(t => t.name === "draft_ticket"));
   assert.ok(toolsFor(["ticket"], "Admin").some(t => t.name === "draft_ticket"));
   assert.ok(!toolsFor(["ticket"], "Coordinator").some(t => t.name === "draft_ticket"));
@@ -52,6 +52,8 @@ test("the timer tools sit behind job, and the kinds are scheduledSends.ts's", ()
   assert.equal(traceLine("list_scheduled", { job_number: "S-10113" }), "listed the scheduled sends on S-10113");
   assert.equal(traceLine("cancel_scheduled", { id: "x" }), "proposed cancelling a scheduled send");
   assert.equal(traceLine("reschedule_send", { id: "x", run_at: "2026-09-11 09:00" }), "proposed moving a scheduled send");
+  assert.equal(traceLine("list_learned", {}), "read what it has learned");
+  assert.equal(traceLine("forget_learned", { id: "x" }), "proposed forgetting a learned note");
 });
 
 test("the definitions carry only what the API takes", () => {

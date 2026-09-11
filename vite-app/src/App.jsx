@@ -1457,6 +1457,10 @@ export function App() {
       setFiledNonce(n => n + 1);
       return action.done;
     }
+    if (action.kind === "forget_learned") {
+      await Db.forgetLearned(action.id);
+      return action.done;
+    }
     // Moving a send is the old row cancelled and a new one inserted, in
     // that order: a cancel that finds nothing ("it already went") stops
     // here, and an insert that then fails leaves nothing queued rather

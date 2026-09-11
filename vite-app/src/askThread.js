@@ -13,11 +13,24 @@ export function askTurns() { return turns.slice(); }
 
 // An answer may carry an action — the form a draft proposes — kept on the
 // turn for the card's buttons and, like the trace, never sent back.
-export function pushTurn(role, text, trace, action) {
+export function pushTurn(role, text, trace, action, learned) {
   const turn = { role, text };
   if (trace && trace.length) turn.trace = trace.slice();
   if (action) turn.action = action;
+  if (Array.isArray(learned) && learned.length) turn.learned = learned.map(n => ({ id: n.id, note: n.note }));
   turns = [...turns, turn].slice(-ASK_KEEP);
+}
+
+// The × on a "Learned:" line: the note is gone from the row (Db) and from
+// the turn that showed it; the answer's words stay.
+export function dropLearned(index, id) {
+  turns = turns.map((t, i) => {
+    if (i !== index || !t.learned) return t;
+    const left = t.learned.filter(n => n.id !== id);
+    const kept = { ...t };
+    if (left.length) kept.learned = left; else delete kept.learned;
+    return kept;
+  });
 }
 
 // "Not now": the proposal goes, the words stay.
@@ -33,7 +46,7 @@ export function dropAction(index) {
 // A proposal the card confirms in place — a send, a scheduled send, a
 // cancel — as against a draft, which opens a form. The button's word is
 // the action's.
-export const CONFIRM_KINDS = ["send_jha", "send_ticket_approval", "schedule_send", "cancel_scheduled", "reschedule_send"];
+export const CONFIRM_KINDS = ["send_jha", "send_ticket_approval", "schedule_send", "cancel_scheduled", "reschedule_send", "forget_learned"];
 export function isConfirmAction(action) {
   return !!action && CONFIRM_KINDS.includes(action.kind);
 }
@@ -42,6 +55,7 @@ export function confirmLabel(action) {
   if (action.kind === "schedule_send") return "Schedule";
   if (action.kind === "cancel_scheduled") return "Cancel it";
   if (action.kind === "reschedule_send") return "Reschedule";
+  if (action.kind === "forget_learned") return "Forget it";
   return "Send";
 }
 

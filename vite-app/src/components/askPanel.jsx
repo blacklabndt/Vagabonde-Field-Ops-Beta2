@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Db } from "../db.js";
 import { Btn } from "./common.jsx";
-import { askTurns, pushTurn, threadForSend, dropAction, isConfirmAction, confirmLabel, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
+import { askTurns, pushTurn, threadForSend, dropAction, dropLearned, isConfirmAction, confirmLabel, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
 
 // Ask: a square launcher at the bottom right of every screen (it says
 // "AI", per Kyle) and the card it opens. Not a dialog — no backdrop, the
@@ -184,9 +184,9 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context }) {
     setBusy(true);
     setError("");
     try {
-      const { answer, trace, action } = await Db.ask([...threadForSend(), { role: "user", text }], context);
+      const { answer, trace, action, learned } = await Db.ask([...threadForSend(), { role: "user", text }], context);
       pushTurn("user", text);
-      pushTurn("assistant", answer, trace, action);
+      pushTurn("assistant", answer, trace, action, learned);
       setTurns(askTurns());
       setDraft("");
     } catch (e) {
@@ -251,6 +251,25 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context }) {
             <div key={i} className={`ask-turn-answer${i >= arrivedFrom.current ? " ask-turn-in" : ""}`}>
               <Answer text={t.text} jobNums={jobNums} onOpenJob={onOpenJob} />
               {t.trace && t.trace.length > 0 && <div className="ask-trace">{t.trace.join(" · ")}</div>}
+              {/* What this answer taught Ask about the app — kept on its own,
+                  shown so it is never a secret, with an × that forgets it on
+                  the spot: the person's own note, their own act. */}
+              {t.learned && t.learned.length > 0 && (
+                <div className="ask-learned">
+                  {t.learned.map(n => (
+                    <div key={n.id} className="ask-learned-note">
+                      <span>Learned: {n.note}</span>
+                      <button type="button" className="ask-learned-x" title="Forget this" aria-label={`Forget: ${n.note}`}
+                        onClick={async () => {
+                          setError("");
+                          try { await Db.forgetLearned(n.id); } catch (e) { setError(e.message || "Couldn't forget that."); return; }
+                          dropLearned(i, n.id);
+                          setTurns(askTurns());
+                        }}>×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
               {/* A proposal, on the latest answer only — an older one may
                   be about a job that has since been made. A draft's is the
                   app's own form, filled in, one tap away; nothing is

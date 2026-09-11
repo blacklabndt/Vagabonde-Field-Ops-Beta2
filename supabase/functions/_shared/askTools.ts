@@ -218,6 +218,16 @@ export const ASK_TOOLS: AskTool[] = [
       },
       required: ["id"], additionalProperties: false
     }
+  },
+  {
+    name: "list_learned", tab: "board",
+    description: "What Ask has learned from the crew about how the app works — kept on its own after conversations: id, the note, who said it and their role, when. Use it when asked what Ask remembers or has learned.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "forget_learned", tab: "board",
+    description: "Propose forgetting one learned note by the id list_learned gave: the card asks the person to confirm. Only the person who said it, or an Admin, can forget it; nothing changes until they confirm.",
+    input_schema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false }
   }
 ];
 
@@ -282,5 +292,7 @@ export function traceLine(name: string, input: Record<string, unknown>): string 
   if (name === "list_scheduled") return str(input.job_number) ? `listed the scheduled sends on ${str(input.job_number)}` : "listed the scheduled sends";
   if (name === "cancel_scheduled") return "proposed cancelling a scheduled send";
   if (name === "reschedule_send") return "proposed moving a scheduled send";
+  if (name === "list_learned") return "read what it has learned";
+  if (name === "forget_learned") return "proposed forgetting a learned note";
   return `read ${name}`;
 }

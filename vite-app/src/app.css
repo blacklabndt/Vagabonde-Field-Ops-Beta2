@@ -860,6 +860,11 @@ label.field-label-missing {
 .ask-error { padding: 0 12px 8px; color: #c9542f; font-size: 0.85rem; }
 .ask-proposal { margin-top: 8px; padding: 10px; border: 1px solid var(--color-accent); }
 .ask-proposal-to { margin-top: 4px; font-size: 12px; opacity: 0.8; word-break: break-all; }
+/* What an answer taught Ask: one line a note, the × beside it. */
+.ask-learned { margin-top: 6px; font-size: 12px; opacity: 0.8; display: grid; gap: 2px; }
+.ask-learned-note { display: flex; align-items: flex-start; gap: 6px; }
+.ask-learned-x { background: none; border: 0; color: inherit; cursor: pointer; font-size: 15px; line-height: 1; padding: 0 4px; margin-left: auto; }
+.ask-learned-x:hover { opacity: 1; color: var(--color-accent-700); }
 
 /* — Ask's motion — the same vocabulary as the rest of the app, and the
    same switch: the blanket data-motion rule above flattens all of it.
