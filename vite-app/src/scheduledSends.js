@@ -21,8 +21,14 @@ export function describeScheduled(row, nowMs = Date.now()) {
   const when = Number.isFinite(at) ? whenWords(at) : "an unknown time";
   const failed = row.status === "failed";
   const due = row.status === "queued" && Number.isFinite(at) && at <= nowMs;
-  const line = failed
-    ? `${row.label} to ${row.to_list} — was due ${when}, not sent`
-    : `${row.label} to ${row.to_list} — ${due ? "due now, sending within five minutes" : `sends ${when}`}`;
-  return { line, failed, due, error: failed ? (row.error || "The send failed.") : "" };
+  // A reminder names no addresses: its label is the text, and it "fires"
+  // rather than sends.
+  const reminder = row.kind === "reminder";
+  const line = reminder
+    ? (failed ? `Reminder: ${row.label} — was due ${when}, not delivered`
+      : `Reminder: ${row.label} — ${due ? "due now, within five minutes" : when}`)
+    : failed
+      ? `${row.label} to ${row.to_list} — was due ${when}, not sent`
+      : `${row.label} to ${row.to_list} — ${due ? "due now, sending within five minutes" : `sends ${when}`}`;
+  return { line, failed, due, error: failed ? (row.error || (reminder ? "The reminder was not delivered." : "The send failed.")) : "" };
 }

@@ -15,7 +15,10 @@
 
 import { jhaSendGate, ticketSendGate, JHA_SEND_ROLES, type JhaToSend, type TicketToSend } from "./askSends.ts";
 
-export const KINDS = ["jha", "report", "ticket_approval"] as const;
+// A reminder is the fourth kind: a timer with no mail, fired as a push to
+// the person's own devices (scheduled-sends' reminder branch); its label is
+// the text, its record_id and to_list are empty, its job optional.
+export const KINDS = ["jha", "report", "ticket_approval", "reminder"] as const;
 export type Kind = typeof KINDS[number];
 export function isKind(v: unknown): v is Kind { return typeof v === "string" && (KINDS as readonly string[]).includes(v); }
 
@@ -26,7 +29,8 @@ export const REPORT_SEND_ROLES = JHA_SEND_ROLES;
 export const READ_TABS: Record<Kind, readonly string[]> = {
   jha: ["jha", "job", "users"],
   report: ["upload", "job", "users"],
-  ticket_approval: [] // is_staff(): any tab at all
+  ticket_approval: [], // is_staff(): any tab at all
+  reminder: [] // the person's own, whatever they hold
 };
 // A row claimed and not reported back in this long died mid-send. It is
 // failed, not retried: the email may well have gone, and twice is worse
@@ -87,6 +91,9 @@ export function fireGate(kind: Kind, person: Person, record: Record<string, unkn
   if (person.deactivated_at || !tabs.length) throw new Error("The account that scheduled this send is locked.");
   const needs = READ_TABS[kind];
   if (needs.length && !needs.some(t => tabs.includes(t))) throw new Error("The account that scheduled this send no longer holds a tab that can read the record.");
+  // A reminder has no record and no recipient: an active account is the
+  // whole gate.
+  if (kind === "reminder") return;
   if (kind === "jha") {
     jhaSendGate(record as unknown as JhaToSend, { id: person.id, role: person.role });
   } else if (kind === "report") {
@@ -154,22 +161,62 @@ export function rescheduleWords(kind: Kind, label: string, job: { job_number: st
 export interface ResultPush {
   kind: "scheduled_send"; id: string; ok: boolean; title: string; body: string; job_number: string; url: string; tag: string;
 }
-export function resultPushWords(row: { id: string; label: string; to_list: string; run_at: string }, jobNumber: string, error: string | null): ResultPush {
+export function resultPushWords(row: { id: string; kind?: string; label: string; to_list: string; run_at: string }, jobNumber: string, error: string | null): ResultPush {
   const failed = !!error;
+  const url = jobNumber ? `/#/job/${encodeURIComponent(jobNumber)}` : "/";
+  const tag = `scheduled-send-${row.id}`;
+  // A reminder's push IS the reminder: the text is the body, the title says
+  // which job if one was named, and a failure says why it did not reach a device.
+  if (row.kind === "reminder") {
+    return {
+      kind: "scheduled_send", id: row.id, ok: !failed,
+      title: failed ? "Reminder not delivered" : `Reminder${jobNumber ? ` on ${jobNumber}` : ""}`,
+      body: error ? error : row.label,
+      job_number: jobNumber, url, tag
+    };
+  }
   return {
     kind: "scheduled_send", id: row.id, ok: !failed,
     title: `${failed ? "Not sent" : "Sent"}: ${row.label} on ${jobNumber}`,
     body: error ? error : `To ${splitList(row.to_list).join(", ")} · ${whenWords(Date.parse(row.run_at))}`,
-    job_number: jobNumber,
-    url: `/#/job/${encodeURIComponent(jobNumber)}`,
-    tag: `scheduled-send-${row.id}`
+    job_number: jobNumber, url, tag
   };
 }
 
-export function cancelWords(label: string, runAtMs: number): SendWords {
+export function cancelWords(label: string, runAtMs: number, kind?: string): SendWords {
   const when = whenWords(runAtMs);
+  if (kind === "reminder") {
+    return {
+      summary: `Cancel the reminder "${label}" set for ${when}?`,
+      done: `Cancelled: the reminder "${label}" will not fire at ${when}.`
+    };
+  }
   return {
     summary: `Cancel the send of ${label} set for ${when}?`,
     done: `Cancelled: ${label} will not be sent at ${when}.`
+  };
+}
+
+// A reminder's text: one line, three to three hundred characters, the
+// label the row carries and the push's body.
+export const REMINDER_MAX = 300;
+export function reminderText(v: unknown): string {
+  const text = String(v ?? "").replace(/\s+/g, " ").trim();
+  if (text.length < 3) throw new Error("A reminder needs a few words — what should it say?");
+  if (text.length > REMINDER_MAX) throw new Error(`A reminder is at most ${REMINDER_MAX} characters — shorten it.`);
+  return text;
+}
+
+// Why a reminder could not go: the tick found no device subscribed for the
+// person, or none that would take the push. The strip and the push say it.
+export const NO_DEVICE_WORDS = "No device of yours is set up for notifications — turn them on in the drawer, then set the reminder again.";
+export const NO_DEVICE_TOOK_IT = "No device of yours accepted the notification — open the app and turn notifications on again, then set the reminder again.";
+
+export function reminderWords(text: string, job: { job_number: string } | null, runAtMs: number): SendWords {
+  const when = whenWords(runAtMs);
+  const on = job ? ` on ${job.job_number}` : "";
+  return {
+    summary: `Set a reminder${on} for ${when}: "${text}"?`,
+    done: `Set: "${text}" comes as a notification at ${when}${on}, on the devices where notifications are turned on, whether or not the app is open.${job ? " Job detail lists it and can cancel it." : " Ask me to list or cancel it."}`
   };
 }

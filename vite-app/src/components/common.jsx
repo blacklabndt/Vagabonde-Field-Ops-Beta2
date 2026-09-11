@@ -1,3 +1,4 @@
+import { EMAIL_RE, emailIn } from "../emailIn.js";
 import { csvCell } from "../askFiles.js";
 import React, { useState, useEffect, useRef, useCallback, useId } from "react";
 import { createPortal } from "react-dom";
@@ -901,8 +902,9 @@ export function NumField({ value, onChange, step, style, ...rest }) {
 // The job record keeps a contact as one display string ("T. Beaudry · (780)
 // 555-0142 · t.beaudry@…"), so anything that needs to email them has to pull
 // the address back out rather than mailing the whole label.
-const EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.-]+/;
-export const emailIn = s => { const m = EMAIL_RE.exec(s || ""); return m ? m[0] : ""; };
+// The rule itself lives in emailIn.js (Ask's function holds a twin); the
+// screens keep importing it from here.
+export { emailIn };
 
 // One place that turns a directory contact into the single display string the
 // job record and tickets carry ("T. Beaudry · (780) 555-0142 · t.b@…"). The

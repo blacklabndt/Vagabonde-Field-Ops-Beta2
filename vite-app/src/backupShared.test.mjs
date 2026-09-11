@@ -936,6 +936,7 @@ test("the shared modules read nothing from the world around them", () => {
   // import of supabase-js or a read of Deno.env in any of the three breaks
   // this file outright; the assertion is here so the reason is named.
   for (const f of ["backupTables.ts", "backupManifest.ts", "drive.ts", "backupOauth.ts", "askTools.ts", "askLoop.ts", "askDrafts.ts", "askSends.ts", "scheduledSends.ts", "askKnowledge.ts", "askLearn.ts", "askFiles.ts",
+    "emailIn.ts", "chasePlan.ts", "dayCheck.ts", "hoursDose.ts",
     "backupRun.ts", "backupSchedule.ts", "gzip.ts", "constantTime.ts"]) {
     const src = read(`supabase/functions/_shared/${f}`);
     // Every import statement, however it is wrapped: the specifier is the

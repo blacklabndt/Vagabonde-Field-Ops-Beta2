@@ -24,3 +24,15 @@ test("a queued row past its time is due; a failed one says so and carries its er
   assert.equal(describeScheduled({ ...row, status: "failed", error: "" }, now).error, "The send failed.");
   assert.match(describeScheduled({ ...row, run_at: "junk" }, now).line, /an unknown time/);
 });
+
+test("a reminder row names its text and its time, and no addresses", () => {
+  const now = Date.UTC(2026, 8, 10, 20, 0);
+  const row = { kind: "reminder", label: "Call Pembina about the AFE", to_list: "", run_at: "2026-09-11T13:00:00Z", status: "queued", error: null };
+  assert.deepEqual(describeScheduled(row, now), {
+    line: "Reminder: Call Pembina about the AFE — Fri, Sep 11, 07:00", failed: false, due: false, error: ""
+  });
+  assert.match(describeScheduled(row, Date.UTC(2026, 8, 11, 13, 1)).line, /due now, within five minutes/);
+  const f = describeScheduled({ ...row, status: "failed", error: "" }, now);
+  assert.equal(f.line, "Reminder: Call Pembina about the AFE — was due Fri, Sep 11, 07:00, not delivered");
+  assert.equal(f.error, "The reminder was not delivered.");
+});

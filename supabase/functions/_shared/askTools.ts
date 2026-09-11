@@ -34,12 +34,22 @@ export const HAZARD_NAMES = [
 ];
 // Who may see money, and so draft a ticket (seesPrices in data.js).
 export const PRICE_ROLES = ["Admin", "Technician"];
-// What a scheduled send may be; scheduledSends.ts's KINDS, and
-// askTools.test.mjs fails on drift.
+// What schedule_send may send: scheduledSends.ts's KINDS bar the reminder,
+// which set_reminder proposes on its own; askTools.test.mjs fails on drift.
 export const SEND_KINDS = ["jha", "report", "ticket_approval"];
 // The kinds make_file builds — askFiles.ts's list, twice because neither
 // may import the other; askTools.test.mjs fails on drift.
 export const FILE_KINDS = ["html", "css", "csv", "xlsx", "pdf"];
+// Twins of equipment.jsx's EQUIPMENT_TYPES and EQUIPMENT_FILTERS (All, the
+// types, Due soon, Overdue) — search_equipment's filter keys;
+// askTools.test.mjs reads that file and fails on drift.
+export const EQUIPMENT_TYPES = ["Exposure device", "Survey meter", "Dosimeter", "TLD / OSLD", "Crank", "Guide tube"];
+export const EQUIPMENT_FILTERS = ["All", ...EQUIPMENT_TYPES, "Due soon", "Overdue"];
+const PERIOD_FIELDS = {
+  start: { type: "string", description: "the first day, YYYY-MM-DD" },
+  end: { type: "string", description: "the last day, YYYY-MM-DD; a year at most" },
+  person: { type: "string", description: "Admin only: another crew member, by name" }
+};
 const TABLE_SCHEMA = {
   type: "object",
   properties: {
@@ -262,6 +272,74 @@ export const ASK_TOOLS: AskTool[] = [
     name: "forget_learned", tab: "board",
     description: "Propose forgetting one learned note by the id list_learned gave: the card asks the person to confirm. Only the person who said it, or an Admin, can forget it; nothing changes until they confirm.",
     input_schema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false }
+  },
+  {
+    name: "chase_unsigned", tab: "tracker", roles: PRICE_ROLES,
+    description: "Propose chasing unsigned tickets — resending the approval link for every ticket awaiting the client's approval that is due one — the way the tracker's Chase all unsigned does: a ticket whose rep has a question open, one sent or chased in the last three days, and one with no client email on file are left alone and named. Narrow it with client (part of the client's name) and/or older_than_days (awaiting approval for more than this many days, counted from the work date). The card asks the person to confirm with Chase; nothing is sent until they do. Answer with how many go and who is left alone and why.",
+    input_schema: {
+      type: "object",
+      properties: { client: { type: "string" }, older_than_days: { type: "integer", minimum: 0 } },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "draft_contact", tab: "contacts",
+    description: "Propose a new contact at a client or contractor already in the directory: opens the Contacts screen's own New contact form on that organisation, filled in for the person to check and save. Nothing is saved until they do. organisation is the organisation's name (find_client, job_record or find_contact can confirm it). Ask for what was not said rather than inventing an address or a phone number.",
+    input_schema: {
+      type: "object",
+      properties: {
+        organisation: { type: "string" }, name: { type: "string" },
+        title: { type: "string", description: "their job title or role" }, email: { type: "string" }, phone: { type: "string" }, notes: { type: "string" }
+      },
+      required: ["organisation", "name"], additionalProperties: false
+    }
+  },
+  {
+    name: "draft_organisation", tab: "contacts",
+    description: "Propose a new client or contractor: opens the Contacts screen's New organisation dialog with the name and type filled in for the person to add. Nothing is saved until they do; refused when an organisation of that name is already on file.",
+    input_schema: {
+      type: "object",
+      properties: { name: { type: "string" }, type: { type: "string", enum: ["client", "contractor"] } },
+      required: ["name", "type"], additionalProperties: false
+    }
+  },
+  {
+    name: "find_contact", tab: "contacts",
+    description: "People in the directory whose name, title, email or phone contains the words given, each with their organisation's name and type and whether they are its primary contact. Give organisation to look inside one client or contractor. Up to twenty.",
+    input_schema: { type: "object", properties: { q: { type: "string" }, organisation: { type: "string" } }, required: ["q"], additionalProperties: false }
+  },
+  {
+    name: "day_check", tab: "job",
+    description: "Am I done for the day? For every job this person worked on a date (a JHA they filed, a ticket they raised or were crew on), what that day still needs: the JHA filed and sent, a report uploaded (on or after that day) and sent, the ticket raised and sent for approval — each gap as a phrase, and a note when the ticket names no helper. date is YYYY-MM-DD, today if omitted. Answer with what is missing per job, or that the day is done.",
+    input_schema: { type: "object", properties: { date: { type: "string", description: DATE } }, additionalProperties: false }
+  },
+  {
+    name: "set_reminder", tab: "any",
+    description: "Propose a reminder: at run_at the text reaches the person's own devices as a notification, whether or not the app is open (only devices where notifications are turned on). The card asks the person to confirm with Set it; nothing is set until they do. run_at is Grande Prairie's clock as YYYY-MM-DD HH:MM — with no hour, ask for one. job_number ties it to a job, so the notification opens that job's page and Job detail lists it. list_scheduled shows reminders beside scheduled sends and cancel_scheduled cancels one.",
+    input_schema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "what the reminder says, one line" },
+        run_at: { type: "string", description: "YYYY-MM-DD HH:MM, Grande Prairie's clock" },
+        job_number: { type: "string" }
+      },
+      required: ["text", "run_at"], additionalProperties: false
+    }
+  },
+  {
+    name: "my_hours", tab: "any",
+    description: "This person's hours from their billing tickets — straight, overtime, solo and solo overtime, mileage and days — per job and in total for a period: the current pay period (the 1st to the 15th, or the 16th to the month's end) unless start and end are given. person, by name, is for an Admin asking about someone else; anyone else is refused. Solo hours are timesheet-only and never billed.",
+    input_schema: { type: "object", properties: PERIOD_FIELDS, additionalProperties: false }
+  },
+  {
+    name: "my_dose", tab: "any",
+    description: "This person's radiation dose from the crew ledger — total mR, the days with dose, and each quarter's total — for a period: the current calendar quarter unless start and end are given. person, by name, is for an Admin asking about someone else; anyone else is refused.",
+    input_schema: { type: "object", properties: PERIOD_FIELDS, additionalProperties: false }
+  },
+  {
+    name: "find_equipment", tab: "equipment",
+    description: "Equipment on the fleet list: type, serial number, calibration due date, status and who holds it. search matches the serial or the holder's name; filter is All, one of the types, Due soon (calibration coming up) or Overdue. Up to fifty, in the screen's order.",
+    input_schema: { type: "object", properties: { search: { type: "string" }, filter: { type: "string", enum: EQUIPMENT_FILTERS } }, additionalProperties: false }
   }
 ];
 
@@ -331,5 +409,23 @@ export function traceLine(name: string, input: Record<string, unknown>): string 
   if (name === "make_file") return `made ${str(input.name) || "a file"}${str(input.kind) ? ` (${str(input.kind)})` : ""}`;
   if (name === "list_learned") return "read what it has learned";
   if (name === "forget_learned") return "proposed forgetting a learned note";
+  if (name === "chase_unsigned") {
+    const bits: string[] = [];
+    if (str(input.client)) bits.push(`for ${str(input.client)}`);
+    const days = Number(input.older_than_days);
+    if (Number.isInteger(days) && days > 0) bits.push(`older than ${days} days`);
+    return `proposed a chase${bits.length ? ` ${bits.join(", ")}` : ""}`;
+  }
+  if (name === "draft_contact") return `drafted a contact at ${str(input.organisation)}`;
+  if (name === "draft_organisation") return `drafted a new ${str(input.type) || "organisation"}: ${str(input.name)}`;
+  if (name === "find_contact") return `looked up contact "${str(input.q)}"${str(input.organisation) ? ` at ${str(input.organisation)}` : ""}`;
+  if (name === "day_check") return `checked the day${str(input.date) ? ` (${str(input.date)})` : ""}`;
+  if (name === "set_reminder") return `proposed a reminder at ${str(input.run_at)}`;
+  if (name === "my_hours") return `read ${str(input.person) ? `${str(input.person)}'s` : "own"} hours`;
+  if (name === "my_dose") return `read ${str(input.person) ? `${str(input.person)}'s` : "own"} dose`;
+  if (name === "find_equipment") {
+    const f = str(input.filter);
+    return `looked up equipment${str(input.search) ? ` "${str(input.search)}"` : ""}${f && f !== "All" ? ` (${f})` : ""}`;
+  }
   return `read ${name}`;
 }

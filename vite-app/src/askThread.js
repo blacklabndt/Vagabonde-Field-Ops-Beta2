@@ -49,7 +49,7 @@ export function dropAction(index) {
 // A proposal the card confirms in place — a send, a scheduled send, a
 // cancel — as against a draft, which opens a form. The button's word is
 // the action's.
-export const CONFIRM_KINDS = ["send_jha", "send_ticket_approval", "schedule_send", "cancel_scheduled", "reschedule_send", "forget_learned"];
+export const CONFIRM_KINDS = ["send_jha", "send_ticket_approval", "schedule_send", "cancel_scheduled", "reschedule_send", "forget_learned", "chase", "set_reminder"];
 export function isConfirmAction(action) {
   return !!action && CONFIRM_KINDS.includes(action.kind);
 }
@@ -59,6 +59,8 @@ export function confirmLabel(action) {
   if (action.kind === "cancel_scheduled") return "Cancel it";
   if (action.kind === "reschedule_send") return "Reschedule";
   if (action.kind === "forget_learned") return "Forget it";
+  if (action.kind === "chase") return "Chase";
+  if (action.kind === "set_reminder") return "Set it";
   return "Send";
 }
 

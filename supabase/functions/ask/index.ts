@@ -27,10 +27,14 @@
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { appSettings, corsHeaders } from "../_shared/mail.ts";
-import { toolsFor, toolDefinitions, traceLine, searchArgs, JHA_TEMPLATES, HAZARD_NAMES, PRICE_ROLES } from "../_shared/askTools.ts";
+import { toolsFor, toolDefinitions, traceLine, searchArgs, JHA_TEMPLATES, HAZARD_NAMES, PRICE_ROLES, EQUIPMENT_FILTERS } from "../_shared/askTools.ts";
+import { planChase, chaseWords } from "../_shared/chasePlan.ts";
+import { emailIn } from "../_shared/emailIn.ts";
+import { dayCheck, type DayJob } from "../_shared/dayCheck.ts";
+import { todayIn, isDay, payPeriodFor, quarterFor, periodFrom, periodWords, sumHours, type CrewRow } from "../_shared/hoursDose.ts";
 import { shapeJobDraft, shapeTicketDraft, shapeJhaDraft } from "../_shared/askDrafts.ts";
 import { resolveRecipients, jhaSendGate, ticketSendGate, ticketApprovalAddress, jhaFileName, sendJhaWords, sendTicketWords, JHA_MESSAGE, REPORT_MESSAGE } from "../_shared/askSends.ts";
-import { isKind, localToUtc, checkRunAt, whenWords, labelFor, scheduleWords, cancelWords, rescheduleWords, splitList, REPORT_SEND_ROLES } from "../_shared/scheduledSends.ts";
+import { isKind, localToUtc, checkRunAt, whenWords, labelFor, scheduleWords, cancelWords, rescheduleWords, splitList, reminderText, reminderWords, REPORT_SEND_ROLES } from "../_shared/scheduledSends.ts";
 import { askLoop, systemPrompt, windowTurns, API_URL, API_VERSION } from "../_shared/askLoop.ts";
 import { learnPrompt, parseLearned, roomFor, learnedLines, forgetWords, LEARN_MODEL, LEARN_MAX_TOKENS, MAX_LEARNED, type LearnedRow } from "../_shared/askLearn.ts";
 import { knowledgeText, cleanContext, whereLines } from "../_shared/askKnowledge.ts";
@@ -85,6 +89,33 @@ interface RescheduleRow {
   id: string; kind: string; record_id: string; label: string; to_list: string; message: string; run_at: string; status: string;
   jobs: { id: string; job_number: string } | null;
 }
+interface UnsignedRow {
+  id: string; client_contact: { name?: string | null } | null; chased_at: string | null; queried_at: string | null;
+  approval_sent_at: string | null; work_date: string | null; jobs: { job_number: string; clients: { name: string } | null } | null;
+}
+interface DirHit { org_type: string; org_id: string; name: string; contact_count: number }
+interface PersonRow { id: string; name: string | null; first_name: string | null; last_name: string | null }
+interface DirContactRow { id: string; org_type: string; org_id: string; name: string; title: string | null; email: string | null; phone: string | null; is_primary: boolean }
+interface DayJhaRow { id: string; job_id: string; sent_at: string | null }
+interface DayTicketRow { id: string; job_id: string; status: string | null; approval_sent_at: string | null }
+interface DayReportRow { id: string; job_id: string; sent_at: string | null }
+interface HoursRow {
+  straight_hours: unknown; ot_hours: unknown; solo_hours: unknown; solo_ot_hours: unknown; mileage_km: unknown;
+  tickets: { work_date: string; jobs: { job_number: string } | null } | null;
+}
+interface DoseRow { profile_id: string; name: string | null; days: number | string; total_mr: number | string; q1: number | string; q2: number | string; q3: number | string; q4: number | string }
+interface EquipmentRow {
+  id: string; type: string; serial_number: string | null; calibration_due: string | null; status: string; assigned_name: string | null; total_count: number | string;
+}
+// Unsigned tickets a chase reads at most — the tracker walks every page;
+// Ask reads one and says when there were more.
+const CHASE_READ_CAP = 1000;
+// A short text from the model, cut to size.
+const given = (v: unknown, max = 200): string => String(v ?? "").trim().slice(0, max);
+// Words safe inside a PostgREST or() filter: the characters it reads as
+// syntax, and LIKE's own wildcards, become spaces.
+const likeSafe = (v: string): string => v.replace(/[%_,()\\]/g, " ").replace(/\s+/g, " ").trim();
+const later = (a: string | null, b: string | null): string | null => (!a ? (b || null) : !b ? a : (Date.parse(a) >= Date.parse(b) ? a : b));
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -152,6 +183,45 @@ Deno.serve(async (req) => {
       return { id: j.id, job_number: j.job_number, project: j.project, client_name: j.clients?.name ?? null, status: j.status };
     };
     const activeJob = (number: string) => jobNumbered(number, true);
+    // An organisation of either kind, the way a client is resolved: an
+    // exact name, else the one hit, else the model is told what to ask.
+    const findOrgs = async (q: string, scope = "All"): Promise<DirHit[]> => {
+      const { data, error } = await asUser.rpc("search_org_directory", { q, scope, page_num: 0, page_size: 10 });
+      if (error) throw new Error(error.message);
+      return (data ?? []) as DirHit[];
+    };
+    const resolveOrg = async (name: string) => {
+      if (!name) throw new Error("Which organisation? Ask the person.");
+      const hits = (await findOrgs(name)).map(r => ({ type: r.org_type, id: r.org_id, name: r.name }));
+      const exact = hits.filter(h => h.name.toLowerCase() === name.toLowerCase());
+      if (exact.length === 1) return exact[0];
+      if (hits.length === 1) return hits[0];
+      if (!hits.length) throw new Error(`No client or contractor called "${name}" is in the directory. Ask the person which it is, or propose it with draft_organisation.`);
+      throw new Error(`More than one organisation matches "${name}": ${hits.map(h => `${h.name} (${h.type})`).join(", ")}. Ask the person which.`);
+    };
+    // Another crew member by name — an Admin's question alone, checked by
+    // the caller; the read is the profiles list every staff account has.
+    const findPerson = async (name: string) => {
+      const pat = likeSafe(name);
+      if (!pat) throw new Error("Which person? Ask for a name.");
+      const { data, error } = await asUser.from("profiles").select("id, name, first_name, last_name")
+        .is("deactivated_at", null)
+        .or(`name.ilike.%${pat}%,first_name.ilike.%${pat}%,last_name.ilike.%${pat}%`).order("name").limit(10);
+      if (error) throw new Error(error.message);
+      const hits = ((data ?? []) as PersonRow[]).map(p => ({ id: p.id, name: p.name || [p.first_name, p.last_name].filter(Boolean).join(" ") || "(no name)" }));
+      const exact = hits.filter(h => h.name.toLowerCase() === name.toLowerCase());
+      if (exact.length === 1) return exact[0];
+      if (hits.length === 1) return hits[0];
+      if (!hits.length) throw new Error(`Nobody on the crew is called "${name}". Ask the person who they mean.`);
+      throw new Error(`More than one person matches "${name}": ${hits.map(h => h.name).join(", ")}. Ask which.`);
+    };
+    // Whose hours or dose: the caller's own, or — for an Admin — a named person's.
+    const whose = async (person: unknown) => {
+      const name = given(person);
+      if (!name) return { id: user.id, name: me.name || "you", own: true };
+      if (me.role !== "Admin") throw new Error("Only an Admin can ask about someone else's hours or dose — this person may ask about their own.");
+      return { ...(await findPerson(name)), own: false };
+    };
     // The contacts on file for these organisations, primary first.
     const contactsFor = async (orgIds: (string | null)[]): Promise<ContactRow[]> => {
       const orgs = orgIds.filter((x): x is string => !!x);
@@ -332,7 +402,7 @@ Deno.serve(async (req) => {
         // the time; the row is inserted by App through RLS once the person
         // presses Schedule, and gated again when it fires.
         const kind = input.kind;
-        if (!isKind(kind)) throw new Error("kind must be jha, report or ticket_approval.");
+        if (!isKind(kind) || kind === "reminder") throw new Error("kind must be jha, report or ticket_approval; a reminder is set_reminder's.");
         const runAt = localToUtc(input.run_at);
         checkRunAt(runAt, Date.now());
         const recordId = String(input.record_id ?? "").trim();
@@ -372,12 +442,12 @@ Deno.serve(async (req) => {
         }));
       } else if (name === "cancel_scheduled") {
         const { data, error } = await asUser.from("scheduled_sends")
-          .select("id, label, run_at, status").eq("id", String(input.id ?? "").trim()).maybeSingle();
+          .select("id, kind, label, run_at, status").eq("id", String(input.id ?? "").trim()).maybeSingle();
         if (error) throw new Error(error.message);
-        const row = data as { id: string; label: string; run_at: string; status: string } | null;
+        const row = data as { id: string; kind: string; label: string; run_at: string; status: string } | null;
         if (!row) throw new Error("No scheduled send with that id — use list_scheduled to find it.");
         if (row.status !== "queued" && row.status !== "failed") throw new Error(`That send is already ${row.status}; there is nothing to cancel.`);
-        const words = cancelWords(row.label, Date.parse(row.run_at));
+        const words = cancelWords(row.label, Date.parse(row.run_at), row.kind);
         action = { kind: "cancel_scheduled", summary: words.summary, done: words.done, id: row.id };
         out = { ready: true, summary: words.summary };
       } else if (name === "make_file") {
@@ -406,7 +476,9 @@ Deno.serve(async (req) => {
           .eq("id", String(input.id ?? "").trim()).maybeSingle();
         if (error) throw new Error(error.message);
         const row = data as unknown as RescheduleRow | null;
-        if (!row || !row.jobs) throw new Error("No scheduled send with that id — use list_scheduled to find it.");
+        if (!row) throw new Error("No scheduled send with that id — use list_scheduled to find it.");
+        if (row.kind === "reminder") throw new Error("A reminder cannot be moved — cancel it (cancel_scheduled) and set a new one (set_reminder).");
+        if (!row.jobs) throw new Error("No scheduled send with that id — use list_scheduled to find it.");
         if (row.status !== "queued" && row.status !== "failed") throw new Error(`That send is already ${row.status}; there is nothing to move.`);
         if (!isKind(row.kind)) throw new Error(`Nothing sends a "${row.kind}".`);
         const wantsTime = String(input.run_at ?? "").trim() !== "";
@@ -433,6 +505,168 @@ Deno.serve(async (req) => {
           record_id: row.record_id, label: row.label, message: row.message, run_at: new Date(runAt).toISOString(), job
         };
         out = { ready: true, summary: words.summary, to, run_at: new Date(runAt).toISOString() };
+      } else if (name === "chase_unsigned") {
+        // The tracker's read (listUnsignedTicketContacts' select) as the
+        // caller, narrowed as asked, its plan (chasePlan.ts, the tracker's
+        // twin) and its words; the card's Chase runs the tracker's own
+        // pool in App, one send and one chased stamp per ticket.
+        const clientQ = given(input.client);
+        const daysRaw = Number(input.older_than_days);
+        const older = Number.isInteger(daysRaw) && daysRaw > 0 ? daysRaw : 0;
+        const { data, error } = await asUser.from("tickets")
+          .select("id, client_contact, chased_at, queried_at, approval_sent_at, work_date, jobs(job_number, clients(name))")
+          .eq("status", "Awaiting approval").order("id").limit(CHASE_READ_CAP);
+        if (error) throw new Error(error.message);
+        const all = (data ?? []) as unknown as UnsignedRow[];
+        // Older than N days: a work date before today less N, in Grande
+        // Prairie's calendar — the tracker's own way of counting an age.
+        const cutoff = older ? todayIn(Date.now() - older * 86_400_000) : "";
+        const rows = all
+          .filter(r => !clientQ || (r.jobs?.clients?.name ?? "").toLowerCase().includes(clientQ.toLowerCase()))
+          .filter(r => !older || ((r.work_date ?? "") !== "" && (r.work_date ?? "") < cutoff));
+        const plan = planChase(rows.map(r => ({
+          id: r.id, contactLabel: r.client_contact?.name ?? "",
+          chasedAt: later(r.chased_at, r.approval_sent_at), queriedAt: r.queried_at
+        })), { emailIn });
+        const scope = `${clientQ ? ` for ${clientQ}` : ""}${older ? ` older than ${older} days` : ""}`;
+        const words = chaseWords(plan, scope);
+        action = { kind: "chase", summary: words.summary, done: words.done, tickets: plan.due, skipped: words.skipped };
+        out = {
+          ready: true, summary: words.summary, due: plan.due.map(d => d.id), queried: plan.queried, recent: plan.recent, no_email: plan.noEmail,
+          ...(all.length >= CHASE_READ_CAP ? { note: `Only the first ${CHASE_READ_CAP} unsigned tickets were read; the tracker's Chase all unsigned reads every one.` } : {})
+        };
+      } else if (name === "draft_contact") {
+        const org = await resolveOrg(given(input.organisation));
+        const seed = { name: given(input.name), title: given(input.title), email: given(input.email), phone: given(input.phone), notes: given(input.notes, 1000) };
+        if (!seed.name) throw new Error("A contact needs a name. Ask the person.");
+        const summary = `Add ${seed.name}${seed.title ? ` (${seed.title})` : ""} to ${org.name}'s contacts${seed.email ? `, ${seed.email}` : ""}${seed.phone ? `, ${seed.phone}` : ""}? The Contacts screen's form opens filled in for you to save.`;
+        action = { kind: "draft_contact", summary, org, seed };
+        out = { ready: true, summary, organisation: org };
+      } else if (name === "draft_organisation") {
+        const orgName = given(input.name);
+        const type = input.type === "contractor" ? "contractor" : input.type === "client" ? "client" : "";
+        if (!orgName) throw new Error("An organisation needs a name. Ask the person.");
+        if (!type) throw new Error("type must be client or contractor.");
+        const dup = (await findOrgs(orgName)).find(h => h.name.toLowerCase() === orgName.toLowerCase());
+        if (dup) throw new Error(`${dup.name} is already on file as a ${dup.org_type}; add people to it with draft_contact.`);
+        const summary = `Add ${orgName} as a new ${type}? The Contacts screen's New organisation dialog opens with it filled in for you to add.`;
+        action = { kind: "draft_organisation", summary, seed: { name: orgName, type } };
+        out = { ready: true, summary };
+      } else if (name === "find_contact") {
+        const pat = likeSafe(given(input.q));
+        if (!pat) throw new Error("Give part of a name, title, email or phone.");
+        let query = asUser.from("contacts").select("id, org_type, org_id, name, title, email, phone, is_primary")
+          .or(`name.ilike.%${pat}%,title.ilike.%${pat}%,email.ilike.%${pat}%,phone.ilike.%${pat}%`)
+          .order("name").limit(20);
+        const orgQ = given(input.organisation);
+        if (orgQ) { const org = await resolveOrg(orgQ); query = query.eq("org_type", org.type).eq("org_id", org.id); }
+        const { data, error } = await query;
+        if (error) throw new Error(error.message);
+        const people = (data ?? []) as DirContactRow[];
+        const orgNames = new Map<string, string>();
+        for (const kind of ["client", "contractor"] as const) {
+          const ids = [...new Set(people.filter(p => p.org_type === kind).map(p => p.org_id))];
+          if (!ids.length) continue;
+          const { data: orgs, error: oErr } = await asUser.from(kind === "client" ? "clients" : "contractors").select("id, name").in("id", ids);
+          if (oErr) throw new Error(oErr.message);
+          for (const o of (orgs ?? []) as { id: string; name: string }[]) orgNames.set(`${kind}:${o.id}`, o.name);
+        }
+        out = people.map(p => ({
+          id: p.id, name: p.name, title: p.title, email: p.email, phone: p.phone, primary: p.is_primary,
+          organisation: { type: p.org_type, name: orgNames.get(`${p.org_type}:${p.org_id}`) ?? "" }
+        }));
+      } else if (name === "day_check") {
+        const wanted = given(input.date);
+        if (wanted && !isDay(wanted)) throw new Error("date must be YYYY-MM-DD.");
+        const day = wanted || todayIn(Date.now());
+        // The jobs the person worked that day: a JHA they filed, a ticket
+        // they raised, a ticket they were crew on — each read as them.
+        const [jhaMine, ticketMine, crewMine] = await Promise.all([
+          asUser.from("jhas").select("job_id").eq("signed_by", user.id).eq("work_date", day),
+          asUser.from("tickets").select("job_id").eq("technician_id", user.id).eq("work_date", day),
+          asUser.from("ticket_crew").select("ticket_id, tickets!inner(job_id, work_date)").eq("profile_id", user.id).eq("tickets.work_date", day)
+        ]);
+        for (const r of [jhaMine, ticketMine, crewMine]) if (r.error) throw new Error(r.error.message);
+        const jobIds = new Set<string>([
+          ...((jhaMine.data ?? []) as { job_id: string }[]).map(r => r.job_id),
+          ...((ticketMine.data ?? []) as { job_id: string }[]).map(r => r.job_id),
+          ...((crewMine.data ?? []) as unknown as { tickets: { job_id: string } | null }[]).map(r => r.tickets?.job_id ?? "").filter(Boolean)
+        ]);
+        if (!jobIds.size) {
+          out = { date: day, jobs: [], note: "No JHA, ticket or crew entry of this person's is on file for that date." };
+        } else {
+          const ids = [...jobIds];
+          const dayStart = new Date(localToUtc(`${day} 00:00`)).toISOString();
+          const [jobsRes, jhasRes, ticketsRes, reportsRes] = await Promise.all([
+            asUser.from("jobs").select("id, job_number").in("id", ids),
+            asUser.from("jhas").select("id, job_id, sent_at").in("job_id", ids).eq("work_date", day),
+            asUser.from("tickets").select("id, job_id, status, approval_sent_at").in("job_id", ids).eq("work_date", day),
+            asUser.from("reports").select("id, job_id, sent_at").in("job_id", ids).gte("uploaded_at", dayStart)
+          ]);
+          for (const r of [jobsRes, jhasRes, ticketsRes, reportsRes]) if (r.error) throw new Error(r.error.message);
+          const tickets = (ticketsRes.data ?? []) as DayTicketRow[];
+          const helpers = new Set<string>();
+          if (tickets.length) {
+            const { data: crew, error: cErr } = await asUser.from("ticket_crew").select("ticket_id, crew_role")
+              .in("ticket_id", tickets.map(t => t.id)).eq("crew_role", "Helper");
+            if (cErr) throw new Error(cErr.message);
+            for (const c of (crew ?? []) as { ticket_id: string }[]) helpers.add(c.ticket_id);
+          }
+          const jobs = (jobsRes.data ?? []) as { id: string; job_number: string }[];
+          const checks = jobs.map(j => {
+            const dayJob: DayJob = {
+              job_number: j.job_number,
+              jhas: ((jhasRes.data ?? []) as DayJhaRow[]).filter(r => r.job_id === j.id).map(r => ({ sent_at: r.sent_at })),
+              tickets: tickets.filter(t => t.job_id === j.id).map(t => ({ id: t.id, status: t.status, approval_sent_at: t.approval_sent_at, helper: helpers.has(t.id) })),
+              reports: ((reportsRes.data ?? []) as DayReportRow[]).filter(r => r.job_id === j.id).map(r => ({ sent_at: r.sent_at }))
+            };
+            return dayCheck(dayJob);
+          });
+          out = { date: day, jobs: checks, done: checks.every(c => c.done) };
+        }
+      } else if (name === "set_reminder") {
+        const label = reminderText(input.text);
+        const runAt = localToUtc(input.run_at);
+        checkRunAt(runAt, Date.now());
+        const number = given(input.job_number);
+        const found = number ? await jobNumbered(number, false) : null;
+        const job = found ? { id: found.id, job_number: found.job_number } : null;
+        const words = reminderWords(label, job, runAt);
+        action = { kind: "set_reminder", summary: words.summary, done: words.done, label, run_at: new Date(runAt).toISOString(), job };
+        out = { ready: true, summary: words.summary, run_at: new Date(runAt).toISOString() };
+      } else if (name === "my_hours") {
+        const who = await whose(input.person);
+        const period = periodFrom(input.start, input.end, payPeriodFor(todayIn(Date.now())));
+        const { data, error } = await asUser.from("ticket_crew")
+          .select("straight_hours, ot_hours, solo_hours, solo_ot_hours, mileage_km, tickets!inner(work_date, jobs(job_number))")
+          .eq("profile_id", who.id).gte("tickets.work_date", period.start).lte("tickets.work_date", period.end).limit(1000);
+        if (error) throw new Error(error.message);
+        const rows: CrewRow[] = ((data ?? []) as unknown as HoursRow[]).map(r => ({
+          job_number: r.tickets?.jobs?.job_number ?? "(job unknown)", work_date: r.tickets?.work_date ?? "",
+          straight_hours: r.straight_hours, ot_hours: r.ot_hours, solo_hours: r.solo_hours, solo_ot_hours: r.solo_ot_hours, mileage_km: r.mileage_km
+        }));
+        out = { person: who.name, period: periodWords(period), ...sumHours(rows), note: "Hours in whole numbers and hundredths; solo hours are timesheet-only and never billed." };
+      } else if (name === "my_dose") {
+        const who = await whose(input.person);
+        const period = periodFrom(input.start, input.end, quarterFor(todayIn(Date.now())));
+        const { data, error } = await asUser.rpc("dose_totals", { p_start: period.start, p_end: period.end });
+        if (error) throw new Error(error.message);
+        const row = ((data ?? []) as DoseRow[]).find(r => r.profile_id === who.id) ?? null;
+        out = {
+          person: who.name, period: periodWords(period),
+          days_with_dose: row ? Number(row.days) : 0, total_mr: row ? Number(row.total_mr) : 0,
+          quarters_mr: { q1: row ? Number(row.q1) : 0, q2: row ? Number(row.q2) : 0, q3: row ? Number(row.q3) : 0, q4: row ? Number(row.q4) : 0 },
+          note: "mR from the crew entries on billing tickets in the period; the quarters are the calendar quarters the days fall in."
+        };
+      } else if (name === "find_equipment") {
+        const filter = EQUIPMENT_FILTERS.includes(given(input.filter)) ? given(input.filter) : "All";
+        const { data, error } = await asUser.rpc("search_equipment", { filter_key: filter, page_num: 0, page_size: 50, search: given(input.search) });
+        if (error) throw new Error(error.message);
+        const rows = (data ?? []) as EquipmentRow[];
+        out = {
+          total: rows.length ? Number(rows[0].total_count) : 0, filter,
+          equipment: rows.map(e => ({ id: e.id, type: e.type, serial: e.serial_number, calibration_due: e.calibration_due, status: e.status, held_by: e.assigned_name || null }))
+        };
       } else {
         throw new Error(`no tool named ${name}`);
       }

@@ -6,6 +6,8 @@ import { tabList, Blueprint, Btn, ErrorBox, ErrorBoundary, TagX, Toast, Loading,
 import { Toasts } from "./toastBus.js";
 import { forgetHeldDrafts } from "./chatDrafts.js";
 import { forgetAskThread } from "./askThread.js";
+import { runSendPool } from "./sendPool.js";
+import { CHASE_WORKERS, CHASE_INTERVAL_MS } from "./chasePlan.js";
 import { forgetDosimetryAsked } from "./dosimetryPrompt.js";
 import { QueueBadge, QueueDialog } from "./components/queuePanel.jsx";
 import { FeatureRequestDialog } from "./components/featureRequest.jsx";
@@ -314,6 +316,10 @@ export function App() {
   // the ticket's does. Null is the plain form.
   const [jobSeed, setJobSeed] = useState(null);
   const [jhaSeed, setJhaSeed] = useState(null);
+  // What Ask's draft_contact / draft_organisation hand the Contacts screen:
+  // an organisation and a contact to open the form with, or a new
+  // organisation's name and type for its dialog; a nonce per opening.
+  const [contactSeed, setContactSeed] = useState(null);
   // Bumped after a send, a schedule or a cancel made from Ask's card, so the
   // job page underneath re-reads its cards: the cache entry is dropped, but
   // the screen holds its rows in state until told.
@@ -1417,9 +1423,71 @@ export function App() {
   // shows; a refusal is thrown to the card in the function's own words.
   // The job's list is dropped from the device cache so the next read of
   // Job detail shows the sent stamp and not the remembered copy.
+  // A chase from Ask: the tracker's own pool over the tickets the card
+  // confirmed — one send and one chased stamp each, muted around it so
+  // "Approval sent" does not fire N times — with progress in one forced
+  // toast whose button is Stop, and a summary naming what failed by ticket
+  // number. Not awaited by the card: the done sentence says where to look.
+  const runChaseFromAsk = async due => {
+    const stop = { now: false };
+    const progress = (done, total) => Toasts.show(`Chasing… ${done} of ${total}`, "ok", true, { label: "Stop", onClick: () => { stop.now = true; } });
+    progress(0, due.length);
+    Toasts.mute();
+    let out;
+    try {
+      out = await runSendPool(due, async t => {
+        await Db.sendTicketApproval({ ticketId: t.id, to: t.to });
+        // Recorded on the ticket after the send, best effort: a flag that
+        // did not save must never turn a delivered email into a failure.
+        await Db.markTicketChased(t.id).catch(() => {});
+      }, { concurrency: CHASE_WORKERS, minInterval: CHASE_INTERVAL_MS, shouldStop: () => stop.now, onProgress: progress });
+    } catch (e) {
+      Toasts.unmute();
+      Toasts.clearAction();
+      Toasts.show(`The chase stopped: ${e.message || "try again from the tracker."}`, "error", true);
+      return;
+    }
+    Toasts.unmute();
+    Toasts.clearAction();
+    const parts = [`Chased ${out.sent.length} of ${due.length}`];
+    if (out.stopped && out.remaining) parts.push(`stopped — ${out.remaining} not attempted`);
+    if (out.failed.length) {
+      const ids = out.failed.map(f => f.item.id);
+      parts.push(`${ids.length} failed to send: ${ids.slice(0, 20).join(", ")}${ids.length > 20 ? ` and ${ids.length - 20} more` : ""}`);
+    }
+    Toasts.show(parts.join(" · "), out.failed.length ? "error" : "ok", true);
+    setFiledNonce(n => n + 1);
+  };
+
   const runAskAction = async action => {
     if (!action) return;
     if (action.kind === "draft_job") { setJobSeed({ ...action.seed, next: action.next || null, nonce: Date.now() }); return; }
+    // The Contacts screen's own form, opened on the organisation with the
+    // seed, or its New organisation dialog with the name and type; the
+    // form's Save writes, as always. The tools sit behind the contacts
+    // tab, so the screen is one the person holds.
+    if (action.kind === "draft_contact" || action.kind === "draft_organisation") {
+      const nonce = Date.now();
+      setContactSeed(action.kind === "draft_contact"
+        ? { org: action.org, contact: { ...action.seed, nonce }, nonce }
+        : { newOrg: action.seed, nonce });
+      goto("contacts");
+      return;
+    }
+    // A reminder is a scheduled_sends row of kind reminder, inserted as this
+    // person through RLS with no record and no address; the tick pushes it.
+    if (action.kind === "set_reminder") {
+      await Db.scheduleSend({
+        kind: "reminder", recordId: "", jobId: action.job ? action.job.id : null, label: action.label,
+        to: "", message: "", runAt: action.run_at
+      });
+      setFiledNonce(n => n + 1);
+      return action.done;
+    }
+    if (action.kind === "chase") {
+      runChaseFromAsk(action.tickets || []);
+      return action.done;
+    }
     if (action.kind === "send_jha") {
       await Db.sendJhaEmail({ jhaId: action.jha.id, to: action.to.join(", "), cc: "", message: action.message || "" });
       await OfflineCache.remove(`jhas.${action.job.id}`);
@@ -1558,7 +1626,7 @@ export function App() {
       body = <FilesScreen currentUser={currentUser} />;
       break;
     case "contacts":
-      body = <ContactsScreen currentUser={currentUser} />;
+      body = <ContactsScreen currentUser={currentUser} seed={contactSeed} />;
       break;
     case "equipment":
       body = <EquipmentScreen currentUser={currentUser} />;

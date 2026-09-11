@@ -36,6 +36,12 @@ test("a proposal the card confirms in place is told from a draft by its kind, an
   assert.equal(confirmLabel({ kind: "cancel_scheduled" }), "Cancel it");
   assert.equal(confirmLabel({ kind: "reschedule_send" }), "Reschedule");
   assert.equal(confirmLabel({ kind: "forget_learned" }), "Forget it");
+  assert.equal(isConfirmAction({ kind: "chase" }), true);
+  assert.equal(isConfirmAction({ kind: "set_reminder" }), true);
+  assert.equal(isConfirmAction({ kind: "draft_contact" }), false);
+  assert.equal(isConfirmAction({ kind: "draft_organisation" }), false);
+  assert.equal(confirmLabel({ kind: "chase" }), "Chase");
+  assert.equal(confirmLabel({ kind: "set_reminder" }), "Set it");
   assert.equal(confirmLabel(null), "");
 });
 

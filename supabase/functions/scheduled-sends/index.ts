@@ -30,7 +30,7 @@ import { secretsMatch } from "../_shared/constantTime.ts";
 import { mailJha, JHA_MAIL_SELECT, type JhaMailRow } from "../_shared/mailJha.ts";
 import { mailReport, REPORT_MAIL_SELECT, type ReportMailRow } from "../_shared/mailReport.ts";
 import { mailApproval } from "../_shared/mailApproval.ts";
-import { fireGate, isKind, resultPushWords, STUCK_MS, STUCK_WORDS, type Person } from "../_shared/scheduledSends.ts";
+import { fireGate, isKind, resultPushWords, STUCK_MS, STUCK_WORDS, NO_DEVICE_WORDS, NO_DEVICE_TOOK_IT, type Person } from "../_shared/scheduledSends.ts";
 import { sendPush, type PushSub } from "../_shared/webPush.ts";
 
 const json = (body: unknown, status = 200) =>
@@ -40,7 +40,7 @@ const json = (body: unknown, status = 200) =>
 const BATCH = 20;
 
 interface Row {
-  id: string; kind: string; record_id: string; job_id: string; label: string; to_list: string; message: string;
+  id: string; kind: string; record_id: string; job_id: string | null; label: string; to_list: string; message: string;
   run_at: string; set_by: string; status: string; fired_at: string | null; jobs: { job_number: string } | null;
 }
 interface TicketRow { id: string; status: string | null; total: number | string | null; technician_id: string | null }
@@ -69,7 +69,7 @@ Deno.serve(async (req) => {
       .eq("status", "sending").lt("fired_at", new Date(now - STUCK_MS).toISOString())
       .select("id, label, job_id");
     if (stuckErr) throw new Error(stuckErr.message);
-    for (const s of (stuckRows ?? []) as { id: string; label: string; job_id: string }[]) {
+    for (const s of (stuckRows ?? []) as { id: string; label: string; job_id: string | null }[]) {
       await logError("scheduled-sends", `${s.label}: ${STUCK_WORDS}`, { id: s.id, job_id: s.job_id });
     }
 
@@ -98,7 +98,9 @@ Deno.serve(async (req) => {
         await fire(admin, row, settingsOnce);
         await admin.from("scheduled_sends").update({ status: "sent" }).eq("id", row.id);
         fired++;
-        await tellScheduler(admin, row, null);
+        // A reminder's push was the firing itself; a second "Sent" would
+        // be noise on the same devices.
+        if (row.kind !== "reminder") await tellScheduler(admin, row, null);
       } catch (e) {
         const message = (e as Error).message;
         await admin.from("scheduled_sends").update({ status: "failed", error: message }).eq("id", row.id);
@@ -125,6 +127,18 @@ async function fire(admin: SupabaseClient, row: Row, settingsOnce: () => Promise
   if (pErr) throw new Error(pErr.message);
   const person = p as Person | null;
   if (!person) throw new Error("The account that scheduled this send no longer exists.");
+
+  // A reminder: no mail, no record — the push to the person's own devices
+  // is the whole act, and no device to push to is the failure, in words the
+  // strip shows.
+  if (row.kind === "reminder") {
+    fireGate("reminder", person, {});
+    const subs = await devicesOf(admin, row.set_by);
+    if (!subs.length) throw new Error(NO_DEVICE_WORDS);
+    const { sent } = await sendPush(admin, subs, resultPushWords(row, row.jobs?.job_number ?? "", null));
+    if (!sent) throw new Error(NO_DEVICE_TOOK_IT);
+    return;
+  }
   const to = recipients(row.to_list, "to");
 
   if (row.kind === "jha") {
@@ -164,13 +178,19 @@ async function fire(admin: SupabaseClient, row: Row, settingsOnce: () => Promise
 // Only the scheduler's devices, and only while the account is active.
 async function tellScheduler(admin: SupabaseClient, row: Row, error: string | null): Promise<void> {
   try {
-    const { data } = await admin.from("push_subscriptions")
-      .select("id, endpoint, p256dh, auth, profiles!inner(deactivated_at)")
-      .eq("profile_id", row.set_by).is("profiles.deactivated_at", null);
-    const subs = (data ?? []) as unknown as PushSub[];
+    const subs = await devicesOf(admin, row.set_by);
     if (!subs.length) return;
     await sendPush(admin, subs, resultPushWords(row, row.jobs?.job_number ?? "", error));
   } catch { /* best effort: the row's status is the record */ }
+}
+
+// The person's subscribed devices, while the account is active.
+async function devicesOf(admin: SupabaseClient, profileId: string): Promise<PushSub[]> {
+  const { data, error } = await admin.from("push_subscriptions")
+    .select("id, endpoint, p256dh, auth, profiles!inner(deactivated_at)")
+    .eq("profile_id", profileId).is("profiles.deactivated_at", null);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as PushSub[];
 }
 
 async function logError(functionName: string, message: string, context: Record<string, unknown> = {}) {

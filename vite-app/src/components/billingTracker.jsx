@@ -4,7 +4,7 @@ import { Db } from "../db.js";
 import { Blueprint, Btn, TableScroll, StatusTag, TagX, ErrorBox, Dialog, downloadCsv, emailIn, RowsPerPage, useRowsPerPage } from "./common.jsx";
 import { Toasts } from "../toastBus.js";
 import { runSendPool } from "../sendPool.js";
-import { planChase } from "../chasePlan.js";
+import { planChase, CHASE_WORKERS, CHASE_INTERVAL_MS } from "../chasePlan.js";
 import { rollUpAging, isMissingTicketAging, AGING_BUCKETS } from "../ticketAging.js";
 import { ticketExportRows, lineExportRows } from "../accountingExport.js";
 
@@ -24,8 +24,6 @@ const PILL_TONE = {
 // per-second ceiling, which a straight fan-out walks into immediately. Twenty
 // failing ticket numbers on screen is enough for the office to act on and
 // short enough to read — the rest are counted, not listed.
-const CHASE_WORKERS = 3;
-const CHASE_INTERVAL_MS = 500;
 const CHASE_LIST_LIMIT = 20;
 // How many of the tickets about to be emailed the confirm dialog names one by
 // one. Forty is about as much as anyone reads before scrolling past it, and

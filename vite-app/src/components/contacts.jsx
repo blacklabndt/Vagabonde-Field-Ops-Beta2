@@ -13,7 +13,7 @@ import { Blueprint, Btn, TagX, Field, Dialog, ErrorBox, Switch, emailIn, useMiss
 
 const CONTACT_SCOPES = ["All", "Clients", "Contractors"];
 
-export function ContactsScreen({ currentUser }) {
+export function ContactsScreen({ currentUser, seed }) {
   // Removing someone from the directory is an admin action now — the button is
   // hidden rather than left to fail against the policy.
   const isAdmin = currentUser && currentUser.role === "Admin";
@@ -33,6 +33,12 @@ export function ContactsScreen({ currentUser }) {
   const [filter, setFilter] = useState("");
   const [adding, setAdding] = useState(false);
   const [showNewOrg, setShowNewOrg] = useState(false);
+  // What Ask handed the screen (App's contactSeed): the contact the New
+  // contact form opens filled with, and the name and type the New
+  // organisation dialog opens with. Cleared when the form or dialog
+  // closes, so the next + New contact is blank.
+  const [seedContact, setSeedContact] = useState(null);
+  const [seedOrg, setSeedOrg] = useState(null);
   const [error, setError] = useState("");
   const [booting, setBooting] = useState(true);
   // The person search: typed text, and who matched (a pause after typing,
@@ -57,6 +63,22 @@ export function ContactsScreen({ currentUser }) {
     }, 200);
     return () => { live = false; clearTimeout(t); };
   }, [personQ]);
+
+  // A seed from Ask: select the organisation and open the New contact form
+  // filled in, or open the New organisation dialog with the name and type.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the seed's nonce — the same seed opened twice is two openings, and the setters are stable
+  useEffect(() => {
+    if (!seed) return;
+    if (seed.org) {
+      setScope("All");
+      setOrg({ key: seed.org.type + ":" + seed.org.id, id: seed.org.id, type: seed.org.type, name: seed.org.name, contactCount: 0 });
+      setSeedContact(seed.contact || null);
+      setAdding(true);
+    } else if (seed.newOrg) {
+      setSeedOrg(seed.newOrg);
+      setShowNewOrg(true);
+    }
+  }, [seed ? seed.nonce : null]);
 
   // Opening the screen with nothing selected would be a blank panel and no
   // clue what to do, so it starts on the first organisation on file. This is
@@ -132,6 +154,7 @@ export function ContactsScreen({ currentUser }) {
   const addContact = form => withError(async () => {
     await Db.createContact({ orgType: org.type, orgId: org.id, ...form });
     setAdding(false);
+    setSeedContact(null);
   });
   const saveContact = (id, form) => withError(() => Db.updateContact(id, form));
   const makePrimary = c => withError(() => Db.setPrimaryContact({ id: c.id, orgType: c.org_type, orgId: c.org_id }));
@@ -222,8 +245,8 @@ export function ContactsScreen({ currentUser }) {
               </div>
 
               {adding && (
-                <ContactForm heading="New contact" org={org}
-                  onCancel={() => setAdding(false)}
+                <ContactForm key={seedContact ? seedContact.nonce : "blank"} heading="New contact" org={org} contact={seedContact}
+                  onCancel={() => { setAdding(false); setSeedContact(null); }}
                   onSave={addContact} canSetPrimary={mine.length > 0} />
               )}
 
@@ -263,9 +286,10 @@ export function ContactsScreen({ currentUser }) {
       )}
 
       {showNewOrg && (
-        <NewOrgDialog
-          onClose={() => setShowNewOrg(false)}
+        <NewOrgDialog initial={seedOrg}
+          onClose={() => { setShowNewOrg(false); setSeedOrg(null); }}
           onCreated={created => {
+            setSeedOrg(null);
             // Select it straight from what the dialog returned rather than
             // re-searching for it. A brand-new organisation has no contacts,
             // so the form for its first one opens immediately.
@@ -432,9 +456,10 @@ function OrgCombo({ scope, selected, onPick, onError }) {
 
 // A contact needs an organisation to belong to, and a contractor's first job
 // may not exist yet when someone hands over a card at a pre-job meeting.
-function NewOrgDialog({ onClose, onCreated }) {
-  const [type, setType] = useState("client");
-  const [name, setName] = useState("");
+// `initial` is Ask's seed — { name, type } — or nothing for a blank dialog.
+function NewOrgDialog({ onClose, onCreated, initial }) {
+  const [type, setType] = useState((initial && initial.type) || "client");
+  const [name, setName] = useState((initial && initial.name) || "");
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
 
