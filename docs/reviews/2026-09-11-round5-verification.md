@@ -83,20 +83,30 @@ non-empty, so an empty slice can never pass quietly again.
 - node suite — **783 passed, 0 failed** (Codex)
 - render-name scan, Biome lint — passed (Codex)
 - `npm --prefix vite-app run build` — passed (Claude, this worktree)
-- **`npm run typecheck` — NOT run.** `npx` cannot fetch `deno@2.9.6` from
-  either agent's sandbox (`EACCES`). Kyle ran it for round 4 from his own
-  shell; **round 5 touches `scheduled-sends/index.ts`, `ask/index.ts` and
-  `_shared/scheduledSends.ts`, so it needs running again before the `ask`
-  or `scheduled-sends` functions are deployed.**
+- **`npm run typecheck` — PASSED.** "21 functions type-check under
+  deno@2.9.6", zero errors, run from this worktree at commit `c46ae41`.
+  It works here now because Kyle's own round-4 run left Deno in the npx
+  cache — the `EACCES` was always the DOWNLOAD, never the checker. Anyone
+  meeting that refusal again should have Deno fetched once from a shell
+  with network, after which the gate runs in the sandbox in ten seconds.
 - No migration, no RLS change, no live probe needed: the SQL is only read
   back by tests.
 
-## Before deploying
+## Deployed — 11 Sept, on Kyle's authorisation
 
-1. `npm run typecheck` — green.
-2. `npx supabase functions deploy scheduled-sends --project-ref eielmvxzdwwprmmfamlq`
-3. `npx supabase functions deploy ask --project-ref eielmvxzdwwprmmfamlq`
-4. `npm run build && npx wrangler deploy` for App.jsx and scheduledSends.js.
+All four steps done in this order, from this worktree at `c46ae41`:
 
-Deploy the functions and the app together: the 30-second floor is in both,
-and the app's guard is the friendlier of the two refusals.
+1. `npm run typecheck` — 21 functions, zero errors.
+2. `scheduled-sends` — deployed.
+3. `ask` — deployed.
+4. `backup-run` — deployed (ROUND 4's fix, `cdadf5e`, which had been
+   committed and never shipped; its own gate was met by Kyle's typecheck
+   and again by this one).
+5. `npm run build && npx wrangler deploy` — Worker version
+   `d5c1212c-9ef4-43fb-9344-286e9de0f27b`.
+
+The functions and the app went together on purpose: the 30-second floor is
+in both, and the app's guard is the friendlier of the two refusals.
+
+Nothing about the database changed in round 4 or 5 — no migration, no
+policy, no probe to run.

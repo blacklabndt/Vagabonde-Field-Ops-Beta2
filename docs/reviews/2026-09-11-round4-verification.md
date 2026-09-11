@@ -76,10 +76,12 @@ NOT run, and why:
 - The backup itself was not exercised against the live drive; the behaviour
   is covered by the tests above and by the cursor arithmetic they drive.
 
-## Before deploying `backup-run`
+## Deployed — 11 Sept
 
-1. `npm run typecheck` — DONE, Kyle, 11 Sept.
+1. `npm run typecheck` — DONE (Kyle from his own shell, then again from
+   this worktree: 21 functions, zero errors).
 2. `npx supabase functions deploy backup-run --project-ref eielmvxzdwwprmmfamlq`
+   — DONE, alongside round 5's two functions.
 3. Watch one tick: the panel's last-run sentence and `backup_runs.cursor`
    should show parts advancing as before. On a normal 1,000-row cap the new
    ceilings are never reached, so a night that looks unchanged is the
