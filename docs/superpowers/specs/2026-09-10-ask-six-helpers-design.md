@@ -50,15 +50,19 @@ with the name and type. The form's own Save writes, as today.
 Tool `day_check(date?)` — tab job. `date` is a Grande Prairie calendar
 day, today by default. As the caller: JHAs with `signed_by` = me and
 `work_date` = date; tickets with `technician_id` = me and `work_date` =
-date; `ticket_crew` rows of mine whose ticket's `work_date` = date;
-reports with `profile_id` = me uploaded that day. The union of their
-jobs is "the jobs I worked". Per job the runner reads that job's JHAs,
-tickets (with crew count) and reports of the date and
-`_shared/dayCheck.ts` (pure) answers `{ job_number, jha: { signed,
-sent }, report: { uploaded, sent }, ticket: { exists, status, sent,
-helper } , missing: [...] }`, `missing` being plain phrases ("JHA not
-sent", "no ticket yet", "ticket not sent for approval", "no helper on
-the ticket", "report not sent"). Ask answers with what is missing and
+date; `ticket_crew` rows of mine whose ticket's `work_date` = date
+(reports carry no uploader column, so they never name a job on their
+own). The union of their jobs is "the jobs I worked". Per job the runner
+reads that job's JHAs and tickets of the date (with any Helper crew row)
+and its reports uploaded on or after the day — a report often lands the
+next morning — and `_shared/dayCheck.ts` (pure) answers `{ job_number,
+jha: { filed, sent }, report: { uploaded, sent }, ticket: { exists, id,
+status, sent, helper }, missing: [...], notes: [...], done }`, `missing`
+being plain phrases ("no JHA filed", "JHA not sent", "no report
+uploaded", "report not sent", "no ticket yet", "ticket T-… not sent for
+approval") and `notes` carrying "no helper on ticket T-… (fine if you
+worked alone)" — a note and never a gap, because working alone is a real
+day; `done` is an empty `missing`. Ask answers with what is missing and
 names the jobs.
 
 ## 4. Reminders
