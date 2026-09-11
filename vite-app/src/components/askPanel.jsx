@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Db } from "../db.js";
 import { Btn } from "./common.jsx";
 import { askTurns, pushTurn, threadForSend, dropAction, dropLearned, isConfirmAction, confirmLabel, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
+import { downloadFile, fileToUpload } from "../askFiles.js";
 
 // Ask: a square launcher at the bottom right of every screen (it says
 // "AI", per Kyle) and the card it opens. Not a dialog — no backdrop, the
@@ -139,7 +140,7 @@ export const CARD_WORDS = {
   placeholder: "Type here"
 };
 
-function AskCard({ onClose, onOpenJob, onAction, closing, context }) {
+function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles }) {
   const [turns, setTurns] = useState(askTurns);
   // Turns from this index on arrived while the card was open and rise
   // into place; the ones before it were there when it opened and mount
@@ -184,9 +185,9 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context }) {
     setBusy(true);
     setError("");
     try {
-      const { answer, trace, action, learned } = await Db.ask([...threadForSend(), { role: "user", text }], context);
+      const { answer, trace, action, learned, files } = await Db.ask([...threadForSend(), { role: "user", text }], context);
       pushTurn("user", text);
-      pushTurn("assistant", answer, trace, action, learned);
+      pushTurn("assistant", answer, trace, action, learned, files);
       setTurns(askTurns());
       setDraft("");
     } catch (e) {
@@ -200,6 +201,33 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context }) {
 
   const onKeyDown = e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+
+  // A file Ask made: the bytes are built here, on the device, from the
+  // checked shape the function returned. Download is the person's own act;
+  // Save to Files asks once and goes through the Files screen's own upload
+  // into the Ask folder, where storage's policy decides.
+  const [fileBusy, setFileBusy] = useState("");
+  const [savePrompt, setSavePrompt] = useState("");
+  const [saved, setSaved] = useState({});
+  const fileKey = (i, k) => `${i}:${k}`;
+  const download = async (key, f) => {
+    setFileBusy(key);
+    setError("");
+    try { await downloadFile(f); }
+    catch (e) { setError(e.message || "Couldn't build that file."); }
+    finally { setFileBusy(""); }
+  };
+  const saveToFiles = async (key, f) => {
+    setFileBusy(key);
+    setSavePrompt("");
+    setError("");
+    try {
+      await Db.uploadSharedFile("Ask", await fileToUpload(f));
+      Db.forgetFileTree();
+      setSaved(s => ({ ...s, [key]: true }));
+    } catch (e) { setError(e.message || "Couldn't save that file."); }
+    finally { setFileBusy(""); }
   };
 
   // The person said Send, Schedule or Cancel it: App calls the same Db
@@ -251,6 +279,36 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context }) {
             <div key={i} className={`ask-turn-answer${i >= arrivedFrom.current ? " ask-turn-in" : ""}`}>
               <Answer text={t.text} jobNums={jobNums} onOpenJob={onOpenJob} />
               {t.trace && t.trace.length > 0 && <div className="ask-trace">{t.trace.join(" · ")}</div>}
+              {t.files && t.files.length > 0 && (
+                <div className="ask-files">
+                  {t.files.map((f, k) => {
+                    const key = fileKey(i, k);
+                    const busy = fileBusy === key;
+                    return (
+                      <div key={key} className="ask-file">
+                        <div className="ask-file-name">{f.words || f.name}</div>
+                        {savePrompt === key
+                          ? (
+                            <div className="ask-file-actions">
+                              <span>Save {f.name} to Files › Ask?</span>
+                              <Btn variant="primary" disabled={busy} onClick={() => saveToFiles(key, f)}>Save</Btn>
+                              <Btn variant="secondary" disabled={busy} onClick={() => setSavePrompt("")}>Not now</Btn>
+                            </div>
+                          )
+                          : (
+                            <div className="ask-file-actions">
+                              <Btn variant="secondary" disabled={busy} onClick={() => download(key, f)}>{busy ? "Working…" : "Download"}</Btn>
+                              {canSaveFiles && !saved[key] && (
+                                <Btn variant="secondary" disabled={busy} onClick={() => setSavePrompt(key)}>Save to Files</Btn>
+                              )}
+                              {saved[key] && <span className="ask-file-saved">Saved to Files › Ask</span>}
+                            </div>
+                          )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               {/* What this answer taught Ask about the app — kept on its own,
                   shown so it is never a secret, with an × that forgets it on
                   the spot: the person's own note, their own act. */}
@@ -314,7 +372,7 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context }) {
 // `context` is where the person is — App's screen key, the open job's
 // number, the open ticket's id and the screen's help — sent with each
 // question so "this job" needs no question back.
-export function AskLauncher({ onOpenJob, onAction, context }) {
+export function AskLauncher({ onOpenJob, onAction, context, canSaveFiles }) {
   const online = useOnline();
   const [open, setOpen] = useState(false);
   // Closing plays the card's exit first; the unmount follows on a timer a
@@ -329,7 +387,7 @@ export function AskLauncher({ onOpenJob, onAction, context }) {
     closeTimer.current = setTimeout(() => { closeTimer.current = null; setOpen(false); setClosing(false); }, 220);
   };
 
-  if (open) return <AskCard onClose={close} onOpenJob={onOpenJob} onAction={onAction} closing={closing} context={context} />;
+  if (open) return <AskCard onClose={close} onOpenJob={onOpenJob} onAction={onAction} closing={closing} context={context} canSaveFiles={canSaveFiles} />;
   return (
     <button type="button" className="btn btn-primary ask-launcher" disabled={!online}
       title={online ? "Ask the app a question" : "AI needs a connection"} onClick={() => setOpen(true)}>

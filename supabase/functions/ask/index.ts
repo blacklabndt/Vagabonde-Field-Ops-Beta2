@@ -34,6 +34,7 @@ import { isKind, localToUtc, checkRunAt, whenWords, labelFor, scheduleWords, can
 import { askLoop, systemPrompt, windowTurns, API_URL, API_VERSION } from "../_shared/askLoop.ts";
 import { learnPrompt, parseLearned, roomFor, learnedLines, forgetWords, LEARN_MODEL, LEARN_MAX_TOKENS, MAX_LEARNED, type LearnedRow } from "../_shared/askLearn.ts";
 import { knowledgeText, cleanContext, whereLines } from "../_shared/askKnowledge.ts";
+import { checkFile, fileWords, fileChars, MAX_FILES, type AskFile } from "../_shared/askFiles.ts";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -228,6 +229,9 @@ Deno.serve(async (req) => {
     // The form a draft proposes, or the send a send tool proposes, if one
     // did; the last call wins.
     let action: Record<string, unknown> | null = null;
+    // The files make_file proposed this answer — checked shapes only; the
+    // device builds the bytes and nothing is written here.
+    const files: AskFile[] = [];
     // The person's own words, for the one place an address may come from
     // that is not a contact on file. Computed once, and lazily: most
     // questions never send.
@@ -376,6 +380,11 @@ Deno.serve(async (req) => {
         const words = cancelWords(row.label, Date.parse(row.run_at));
         action = { kind: "cancel_scheduled", summary: words.summary, done: words.done, id: row.id };
         out = { ready: true, summary: words.summary };
+      } else if (name === "make_file") {
+        if (files.length >= MAX_FILES) throw new Error(`Five files is the most in one answer.`);
+        const file = checkFile(input);
+        files.push(file);
+        out = { ready: true, file: fileWords(file), approx_chars: fileChars(file), note: "The card offers Download and Save to Files; nothing more to do." };
       } else if (name === "list_learned") {
         out = learnedRows.map(r => ({
           id: r.id, note: r.note, said_by: r.profiles?.name ?? "(account removed)", role: r.profiles?.role ?? null, when: r.created_at
@@ -441,7 +450,11 @@ Deno.serve(async (req) => {
     // beside the old one, where the Admin's list shows both. Best effort:
     // nothing here can fail the answer, and a missed note is not an error.
     const learned = await learn(asUser, thread, result.answer, learnedRows, key, user.id).catch(() => []);
-    return json({ ...result, learned, ...(action ? { action } : {}) });
+    return json({
+      ...result, learned,
+      ...(action ? { action } : {}),
+      ...(files.length ? { files: files.map(f => ({ ...f, words: fileWords(f) })) } : {})
+    });
   } catch (e) {
     const message = (e as Error).message;
     await logError("ask", message, { user: userId, tool });

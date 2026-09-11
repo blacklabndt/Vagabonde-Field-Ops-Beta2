@@ -154,6 +154,7 @@ test("the system prompt names the person, the day in Grande Prairie and the rule
   assert.ok(full.indexOf("KNOWLEDGE HERE") < full.indexOf("LEARNED HERE"));
   assert.ok(full.indexOf("LEARNED HERE") < full.indexOf("Where the person is: job S-1."));
   assert.match(s, /Learning:/);
+  assert.match(s, /Files: make_file/);
 });
 
 test("wrapRecords says what the records are and that they are data", () => {

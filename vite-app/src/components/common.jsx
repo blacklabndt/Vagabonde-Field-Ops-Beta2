@@ -1,3 +1,4 @@
+import { csvCell } from "../askFiles.js";
 import React, { useState, useEffect, useRef, useCallback, useId } from "react";
 import { createPortal } from "react-dom";
 import { Db } from "../db.js";
@@ -964,11 +965,6 @@ export function QueuedPanel({ what, onDone }) {
 // A cell that begins with = + - @ or a tab is a formula to Excel, quotes or
 // not — a project named "=HYPERLINK(...)" would run when accounting opened
 // the export. A leading apostrophe makes it text, which is what it is.
-const csvCell = v => {
-  const s = String(v == null ? "" : v);
-  const safe = /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
-  return `"${safe.replace(/"/g, '""')}"`;
-};
 
 export function downloadCsv(filename, rows) {
   // The BOM is what makes Excel read this as UTF-8 — without it, accented

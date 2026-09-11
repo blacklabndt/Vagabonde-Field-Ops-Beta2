@@ -13,11 +13,14 @@ export function askTurns() { return turns.slice(); }
 
 // An answer may carry an action — the form a draft proposes — kept on the
 // turn for the card's buttons and, like the trace, never sent back.
-export function pushTurn(role, text, trace, action, learned) {
+export function pushTurn(role, text, trace, action, learned, files) {
   const turn = { role, text };
   if (trace && trace.length) turn.trace = trace.slice();
   if (action) turn.action = action;
   if (Array.isArray(learned) && learned.length) turn.learned = learned.map(n => ({ id: n.id, note: n.note }));
+  // A file's checked shape stays with the answer that made it, so Download
+  // and Save to Files work on any turn, not only the latest.
+  if (Array.isArray(files) && files.length) turn.files = files.slice();
   turns = [...turns, turn].slice(-ASK_KEEP);
 }
 

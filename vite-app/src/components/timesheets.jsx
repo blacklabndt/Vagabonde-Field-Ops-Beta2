@@ -6,6 +6,7 @@ import { Db } from "../db.js";
 import { sbClient } from "../config.js";
 import { Blueprint, Btn, TableScroll, TagX, ErrorBox, RowsPerPage, useRowsPerPage , Loading, PdfLink, StatusTag, downloadCsv, Dialog } from "./common.jsx";
 import { makeZip, safeFilename, saveBlob } from "../zip.js";
+import { loadXlsx, loadJsPdf } from "../cdnLibs.js";
 import { runInOrder, approvalProgressLine, approvalRunSummary } from "../approvalRun.js";
 
 // Timesheets — hours per person per pay period, built from ticket crew rows.
@@ -880,67 +881,7 @@ function Stat({ label, value, unit }) {
   );
 }
 
-// One place makes the CDN <script> tags. The versions are pinned, so the
-// bytes can be pinned too: `integrity` makes a tampered CDN response fail
-// to execute instead of running inside the signed-in app. The timeout is
-// for the request that neither loads nor errors — without it a stalled
-// fetch left "Exporting…" or an approval spinning forever, with the cached
-// promise poisoned so even a retry click did nothing.
-function cdnScript(src, integrity, onDone, onFail) {
-  const tag = document.createElement("script");
-  tag.src = src;
-  tag.integrity = integrity;
-  tag.crossOrigin = "anonymous";
-  const timer = setTimeout(() => { tag.remove(); onFail(); }, 30000);
-  tag.onload = () => { clearTimeout(timer); onDone(); };
-  tag.onerror = () => { clearTimeout(timer); onFail(); };
-  document.head.appendChild(tag);
-}
-
-// SheetJS is ~900 KB and only one button needs it, so it's fetched on the
-// first export rather than blocking every page load.
-let xlsxPromise = null;
-function loadXlsx() {
-  if (window.XLSX) return Promise.resolve(window.XLSX);
-  if (!xlsxPromise) {
-    xlsxPromise = new Promise((resolve, reject) => {
-      cdnScript(
-        "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js",
-        "sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw",
-        () => resolve(window.XLSX),
-        () => { xlsxPromise = null; reject(new Error("Couldn't load the spreadsheet library.")); }
-      );
-    });
-  }
-  return xlsxPromise;
-}
-
-// jsPDF and its table plugin, from the CDN on first approval — the same
-// bargain as SheetJS above, with the same recovery: a failed load clears
-// the promise so the next click retries instead of staying poisoned.
-let jspdfPromise = null;
-function loadJsPdf() {
-  if (window.jspdf && window.jspdf.jsPDF && window.jspdf.jsPDF.API.autoTable) {
-    return Promise.resolve(window.jspdf.jsPDF);
-  }
-  if (!jspdfPromise) {
-    jspdfPromise = new Promise((resolve, reject) => {
-      const fail = () => { jspdfPromise = null; reject(new Error("Couldn't load the PDF builder — check the connection and try again.")); };
-      cdnScript(
-        "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js",
-        "sha384-en/ztfPSRkGfME4KIm05joYXynqzUgbsG5nMrj/xEFAHXkeZfO3yMK8QQ+mP7p1/",
-        () => cdnScript(
-          "https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.4/dist/jspdf.plugin.autotable.min.js",
-          "sha384-Xl/CUCfJbzsngMp0CFxkmF0VW/8C160IsGujqeQlIhaGxKz2+JsIGORFqtCPeldF",
-          () => resolve(window.jspdf.jsPDF),
-          fail
-        ),
-        fail
-      );
-    });
-  }
-  return jspdfPromise;
-}
+// SheetJS and jsPDF come from cdnLibs.js, on demand, shared with Ask's files.
 
 // What approving one person's period actually is, in one place: the PDF built
 // from the figures the admin is looking at, then the row that points at it.

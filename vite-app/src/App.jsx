@@ -1813,6 +1813,7 @@ export function App() {
       )}
       {currentUser && (
         <AskLauncher onOpenJob={openJobByNumber} onAction={runAskAction}
+          canSaveFiles={tabList(currentUser.tabs).includes("files")}
           context={{
             screen,
             jobNumber: activeJob ? activeJob.id : null,

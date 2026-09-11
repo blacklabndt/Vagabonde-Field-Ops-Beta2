@@ -13,19 +13,20 @@ import { KINDS } from "../../supabase/functions/_shared/scheduledSends.ts";
 
 test("every tool sits behind a tab the app has", () => {
   const keys = new Set(TABS.map(t => t.key));
-  for (const t of ASK_TOOLS) assert.ok(keys.has(t.tab), `${t.name} names tab ${t.tab}`);
+  // "any" is a tool for anyone holding a tab at all (make_file).
+  for (const t of ASK_TOOLS) assert.ok(keys.has(t.tab) || t.tab === "any", `${t.name} names tab ${t.tab}`);
   assert.equal(new Set(ASK_TOOLS.map(t => t.name)).size, ASK_TOOLS.length);
 });
 
 test("toolsFor offers exactly the tools behind the tabs held, and the price roles for a ticket", () => {
-  assert.deepEqual(toolsFor(["tracker"]).map(t => t.name), ["tracker_stats", "ticket_aging", "search_tickets"]);
+  assert.deepEqual(toolsFor(["tracker"]).map(t => t.name), ["tracker_stats", "ticket_aging", "search_tickets", "make_file"]);
   assert.deepEqual(toolsFor(["board", "job", "jha", "ticket"], "Helper").map(t => t.name),
-    ["find_client", "find_job", "job_record", "draft_job", "draft_jha", "list_jhas", "list_tickets", "send_jha", "list_reports", "schedule_send", "list_scheduled", "cancel_scheduled", "reschedule_send", "list_learned", "forget_learned"]);
+    ["find_client", "find_job", "job_record", "draft_job", "draft_jha", "list_jhas", "list_tickets", "send_jha", "list_reports", "schedule_send", "list_scheduled", "cancel_scheduled", "reschedule_send", "make_file", "list_learned", "forget_learned"]);
   assert.ok(toolsFor(["ticket"], "Technician").some(t => t.name === "draft_ticket"));
   assert.ok(toolsFor(["ticket"], "Admin").some(t => t.name === "draft_ticket"));
   assert.ok(!toolsFor(["ticket"], "Coordinator").some(t => t.name === "draft_ticket"));
   assert.ok(!toolsFor(["ticket"]).some(t => t.name === "draft_ticket"));
-  assert.deepEqual(toolsFor(["chat"]), []);
+  assert.deepEqual(toolsFor(["chat"]).map(t => t.name), ["make_file"]);
   assert.deepEqual(toolsFor(null), []);
 });
 
@@ -53,6 +54,8 @@ test("the timer tools sit behind job, and the kinds are scheduledSends.ts's", ()
   assert.equal(traceLine("cancel_scheduled", { id: "x" }), "proposed cancelling a scheduled send");
   assert.equal(traceLine("reschedule_send", { id: "x", run_at: "2026-09-11 09:00" }), "proposed moving a scheduled send");
   assert.equal(traceLine("list_learned", {}), "read what it has learned");
+  assert.equal(traceLine("make_file", { name: "Unsigned tickets", kind: "csv" }), "made Unsigned tickets (csv)");
+  assert.equal(traceLine("make_file", {}), "made a file");
   assert.equal(traceLine("forget_learned", { id: "x" }), "proposed forgetting a learned note");
 });
 
@@ -86,4 +89,12 @@ test("a trace line says what was read or drafted, in words", () => {
   assert.equal(traceLine("job_record", { job_number: "S-10113" }), "read job S-10113's record");
   assert.equal(traceLine("draft_job", { client_name: "Pembina Pipeline" }), "drafted a job for Pembina Pipeline");
   assert.equal(traceLine("draft_jha", { job_number: "S-10113" }), "drafted a JHA on S-10113");
+});
+
+test("make_file is for anyone holding a tab, never an account with none, and its kinds are askFiles.ts's", async () => {
+  const { FILE_KINDS: shared } = await import("../../supabase/functions/_shared/askFiles.ts");
+  const { FILE_KINDS: tools } = await import("../../supabase/functions/_shared/askTools.ts");
+  assert.deepEqual(tools, [...shared]);
+  assert.deepEqual(toolsFor([]).map(t => t.name), []);
+  assert.ok(toolsFor(["files"]).some(t => t.name === "make_file"));
 });

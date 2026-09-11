@@ -14,6 +14,9 @@ test("an answer keeps what was learned, and the × drops one note from the turn 
   assert.equal("learned" in askTurns()[1], false);
   pushTurn("assistant", "Nothing.", [], null, []);
   assert.equal("learned" in askTurns()[2], false);
+  pushTurn("assistant", "Here.", [], null, [], [{ name: "t.csv", kind: "csv", words: "t.csv (1 rows)", table: { columns: ["a"], rows: [[1]] } }]);
+  assert.equal(askTurns()[3].files[0].name, "t.csv");
+  assert.equal("files" in askTurns()[2], false);
   forgetAskThread();
 });
 

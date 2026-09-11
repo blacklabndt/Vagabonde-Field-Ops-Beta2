@@ -77,7 +77,7 @@ test("every CDN script and hand-called API in the screens is a host the policy a
   const script = directive(policy, "script-src");
   const connect = directive(policy, "connect-src");
   const hostsIn = source => [...source.matchAll(/["'`](https:\/\/[^/"'`\s]+)\//g)].map(m => m[1]);
-  for (const p of ["vite-app/src/components/jobDetail.jsx", "vite-app/src/components/timesheets.jsx"]) {
+  for (const p of ["vite-app/src/components/jobDetail.jsx", "vite-app/src/cdnLibs.js"]) {
     const hosts = new Set(hostsIn(read(p)));
     assert.ok(hosts.size > 0, `${p} loads something from a CDN`);
     for (const h of hosts) assert.ok(script.includes(h), `${p} loads a script from ${h}, which script-src must allow`);

@@ -860,6 +860,12 @@ label.field-label-missing {
 .ask-error { padding: 0 12px 8px; color: #c9542f; font-size: 0.85rem; }
 .ask-proposal { margin-top: 8px; padding: 10px; border: 1px solid var(--color-accent); }
 .ask-proposal-to { margin-top: 4px; font-size: 12px; opacity: 0.8; word-break: break-all; }
+/* A file Ask made: its name and what is in it, then Download and Save to Files. */
+.ask-files { margin-top: 8px; display: grid; gap: 6px; }
+.ask-file { border: 1px solid var(--color-divider); padding: 8px 10px; font-size: 12px; }
+.ask-file-name { font-family: var(--font-heading); font-weight: 600; font-size: 13px; word-break: break-word; }
+.ask-file-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+.ask-file-saved { opacity: 0.75; }
 /* What an answer taught Ask: one line a note, the × beside it. */
 .ask-learned { margin-top: 6px; font-size: 12px; opacity: 0.8; display: grid; gap: 2px; }
 .ask-learned-note { display: flex; align-items: flex-start; gap: 6px; }

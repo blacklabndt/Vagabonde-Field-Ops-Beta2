@@ -37,6 +37,17 @@ export const PRICE_ROLES = ["Admin", "Technician"];
 // What a scheduled send may be; scheduledSends.ts's KINDS, and
 // askTools.test.mjs fails on drift.
 export const SEND_KINDS = ["jha", "report", "ticket_approval"];
+// The kinds make_file builds — askFiles.ts's list, twice because neither
+// may import the other; askTools.test.mjs fails on drift.
+export const FILE_KINDS = ["html", "css", "csv", "xlsx", "pdf"];
+const TABLE_SCHEMA = {
+  type: "object",
+  properties: {
+    columns: { type: "array", items: { type: "string" } },
+    rows: { type: "array", items: { type: "array", items: { type: ["string", "number", "null"] } } }
+  },
+  required: ["columns", "rows"], additionalProperties: false
+};
 
 const DATE = "a date as YYYY-MM-DD";
 
@@ -220,6 +231,29 @@ export const ASK_TOOLS: AskTool[] = [
     }
   },
   {
+    name: "make_file", tab: "any",
+    description: "Make a file for the person to download or save to the app's Files, from what the tools returned in this conversation. kind html or css: give text, the whole file. csv: give table { columns, rows }. xlsx: give sheets [{ name, columns, rows }], up to ten. pdf: give document { title, subtitle?, sections: [{ heading?, text?, table? }] }. name is the file's name, no path; the extension is added. Up to five files an answer and 2,000 rows a file; never invent rows — use the rows the tools gave, and if you left some out say so. Nothing is written anywhere: the card offers Download and Save to Files. Say in a sentence what the file holds.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        kind: { type: "string", enum: FILE_KINDS },
+        text: { type: "string", description: "html or css: the whole file" },
+        table: TABLE_SCHEMA,
+        sheets: { type: "array", items: { type: "object", properties: { name: { type: "string" }, ...TABLE_SCHEMA.properties }, required: ["columns", "rows"], additionalProperties: false } },
+        document: {
+          type: "object",
+          properties: {
+            title: { type: "string" }, subtitle: { type: "string" },
+            sections: { type: "array", items: { type: "object", properties: { heading: { type: "string" }, text: { type: "string" }, table: TABLE_SCHEMA }, additionalProperties: false } }
+          },
+          required: ["title", "sections"], additionalProperties: false
+        }
+      },
+      required: ["name", "kind"], additionalProperties: false
+    }
+  },
+  {
     name: "list_learned", tab: "board",
     description: "What Ask has learned from the crew about how the app works — kept on its own after conversations: id, the note, who said it and their role, when. Use it when asked what Ask remembers or has learned.",
     input_schema: { type: "object", properties: {}, additionalProperties: false }
@@ -231,9 +265,11 @@ export const ASK_TOOLS: AskTool[] = [
   }
 ];
 
+// A tool's tab is the screen it stands behind; "any" is a tool for
+// anyone who holds a tab at all (make_file), never for an account with none.
 export function toolsFor(tabs: readonly string[] | null | undefined, role?: string | null): AskTool[] {
   const held = new Set(tabs || []);
-  return ASK_TOOLS.filter(t => held.has(t.tab) && (!t.roles || t.roles.includes(role || "")));
+  return ASK_TOOLS.filter(t => (held.has(t.tab) || (t.tab === "any" && held.size > 0)) && (!t.roles || t.roles.includes(role || "")));
 }
 
 // The shape the Messages API takes: name, description, input_schema.
@@ -292,6 +328,7 @@ export function traceLine(name: string, input: Record<string, unknown>): string 
   if (name === "list_scheduled") return str(input.job_number) ? `listed the scheduled sends on ${str(input.job_number)}` : "listed the scheduled sends";
   if (name === "cancel_scheduled") return "proposed cancelling a scheduled send";
   if (name === "reschedule_send") return "proposed moving a scheduled send";
+  if (name === "make_file") return `made ${str(input.name) || "a file"}${str(input.kind) ? ` (${str(input.kind)})` : ""}`;
   if (name === "list_learned") return "read what it has learned";
   if (name === "forget_learned") return "proposed forgetting a learned note";
   return `read ${name}`;
