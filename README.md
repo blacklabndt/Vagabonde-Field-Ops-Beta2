@@ -598,7 +598,8 @@ vite-app/
                             in Ask's function the same way
     ticketAging.js          the tracker's aging tiles and By client view
     accountingExport.js     the two CSVs for accounting, GST per ticket
-    attention.js            the Needs attention strip's four questions
+    attention.js            the Needs attention strip's four questions (Ask's function
+                            holds a twin of the core; askTwins.test.mjs holds them together)
     *.test.mjs              `npm test` — the render-name scan, the Biome lint
                             (`biome.jsonc` at the repo root), Deno's type-check of
                             the functions, then node --test, no
@@ -678,7 +679,9 @@ supabase/
                             more from the crew; askFiles, the shape of a file it makes;
                             emailIn and chasePlan, twins of the tracker's own; dayCheck,
                             what a day's job still needs; hoursDose, a period's hours
-                            and dose in whole hundredths),
+                            and dose in whole hundredths; attention, Home's strip's
+                            questions, a twin; ticketCheck, what looks off about a
+                            draft ticket),
                             the three send bodies (mailJha,
                             mailReport, mailApproval — one email each, called by the
                             live function and by the scheduled-sends tick), webPush

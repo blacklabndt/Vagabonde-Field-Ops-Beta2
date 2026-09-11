@@ -651,6 +651,37 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   is an Admin's alone and is refused in words for anyone else.
   `SEND_KINDS` stays the three sends (schedule_send refuses the reminder
   kind), and KINDS is those plus reminder.
+  FIVE MORE (spec
+  `docs/superpowers/specs/2026-09-11-ask-five-more-design.md`), same
+  rules, no migration. `open_record(kind, id)` (tab job; job, ticket,
+  jha, report) reads the record as the caller and proposes an `open`
+  action — not a confirm: the card's button reads Open (`formLabel` in
+  askThread.js), the card closes, and App opens it with what it has
+  (`openJobByNumber`; a ticket through `openTicket`, the editor only
+  when the runner said `editor` — a Draft of this person's, or any for
+  an Admin — else Job detail). `check_ticket(ticket_id)` (tab ticket,
+  price roles) reads a DRAFT's ticket, lines, crew and the day's JHA as
+  the caller (another technician's refused unless Admin; a sent one
+  refused in words) and `_shared/ticketCheck.ts` (pure, in the guard
+  list; `SANE_QUANTITY_PER_UNIT`, `SANE_QUANTITY_DEFAULT` and
+  `SANE_CREW_HOURS` twinned from data.js, ticketCheck.test.mjs fails on
+  drift) lists what looks off in plain phrases — the editor's own
+  one-at-a-time questions asked at once; a line the card no longer
+  offers is NOT checked (the catalog's label expansion is db.js's).
+  `rate_card(client, search?)` (tab rates, price roles) picks the
+  schedule the way `_fetchPublishedRates` does and reads its lines as
+  the caller, saying whether it is the house card. `needs_attention`
+  (tab board, Admin) reads `backup_state()` and the strip's hundred
+  newest errors as the caller and runs Home's four questions through
+  `_shared/attention.ts` — `attention.js`'s core between `shared
+  core` markers (the dismissal helpers stay outside, the browser's),
+  held together by `askTwins.test.mjs`. `cancel_approval(ticket_id)`
+  (tab ticket) applies the withdraw RPC's rule before proposing
+  (Awaiting approval; the technician, an Admin or a Coordinator), the
+  card's confirm reads "Cancel approval", and App calls
+  `Db.withdrawTicketApproval` — the RPC the three buttons use, whose
+  rule is the gate — drops the job's `tickets.<id>` cache entry and
+  bumps `filedNonce`.
 - The screen is in the address bar: `vite-app/src/route.js` (pure, node-
   tested) spells `#/board`, `#/chat`, `#/job/S-10113` and
   `#/job/S-10113/ticket`; App.jsx pushes one history entry per screen
@@ -720,7 +751,8 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   cancel runs through `approvalRun.js`. Home's Needs attention strip asks
   `attention.js`'s four questions; its `KIND_WORDS` lives twice (attention.js
   and the admin-digest function, one row read by both) and attention.test.mjs
-  reads the function back and fails on drift. A dismissed strip is forgotten
+  reads the function back and fails on drift, and its core lives a third
+  time as `_shared/attention.ts` for Ask, held by askTwins.test.mjs. A dismissed strip is forgotten
   (`clearDismissedAttention`) only once both of Home's reads have answered
   with nothing to say — a blank before they answer, or after one failed, is
   "nothing could be read", and clearing on it wiped every dismissal at
@@ -1043,9 +1075,9 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   reads both files off disk, strips the types from the function's with
   Node's own stripper, folds the whitespace and compares them. Change one,
   change the other, in the same commit; an interface goes ABOVE the marker,
-  where the twin has nothing to match. Twenty shared modules — `backupSchedule.ts`,
+  where the twin has nothing to match. Twenty-two shared modules — `backupSchedule.ts`,
   `askTools.ts`, `askLoop.ts`, `askDrafts.ts`, `askSends.ts`, `scheduledSends.ts`, `askKnowledge.ts`, `askLearn.ts`, `askFiles.ts`,
-  `emailIn.ts`, `chasePlan.ts`, `dayCheck.ts`, `hoursDose.ts`,
+  `emailIn.ts`, `chasePlan.ts`, `dayCheck.ts`, `hoursDose.ts`, `attention.ts`, `ticketCheck.ts`,
   `backupTables.ts`, `backupManifest.ts`, `backupRun.ts`, `backupOauth.ts`,
   `drive.ts`, `gzip.ts` and `constantTime.ts` — are erasable TypeScript with
   no imports of their own (`backupManifest.ts` may name `backupSchedule.ts`,
