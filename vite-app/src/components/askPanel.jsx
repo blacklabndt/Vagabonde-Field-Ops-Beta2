@@ -5,7 +5,7 @@ import { askTurns, pushTurn, threadForSend, dropAction, dropLearned, isConfirmAc
 import { downloadFile, fileToUpload } from "../askFiles.js";
 
 // Ask: a square launcher at the bottom right of every screen (it says
-// "AI", per Kyle) and the card it opens. Not a dialog — no backdrop, the
+// "Claudia", per Kyle) and the card it opens. Not a dialog — no backdrop, the
 // screen stays usable — so the person can read the tracker while asking
 // about it. The thread is askThread.js's, in memory for the session; a
 // failed question stays in the box with the reason under it, and the turn
@@ -260,9 +260,9 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
   };
 
   return (
-    <div className={`ask-card${closing ? " closing" : ""}`} role="dialog" aria-label="AI">
+    <div className={`ask-card${closing ? " closing" : ""}`} role="dialog" aria-label="Claudia">
       <div className="ask-card-head">
-        <h3>AI</h3>
+        <h3>Claudia</h3>
         <button type="button" className="btn btn-secondary" style={{ padding: "4px 10px" }}
           onClick={onClose} aria-label="Close">×</button>
       </div>
@@ -390,8 +390,8 @@ export function AskLauncher({ onOpenJob, onAction, context, canSaveFiles }) {
   if (open) return <AskCard onClose={close} onOpenJob={onOpenJob} onAction={onAction} closing={closing} context={context} canSaveFiles={canSaveFiles} />;
   return (
     <button type="button" className="btn btn-primary ask-launcher" disabled={!online}
-      title={online ? "Ask the app a question" : "AI needs a connection"} onClick={() => setOpen(true)}>
-      AI
+      title={online ? "Ask the app a question" : "Claudia needs a connection"} onClick={() => setOpen(true)}>
+      Claudia
     </button>
   );
 }

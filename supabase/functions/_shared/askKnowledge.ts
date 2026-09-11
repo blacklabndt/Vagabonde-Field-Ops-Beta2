@@ -40,7 +40,7 @@ export const APP_KNOWLEDGE = [
   "Sending. JHAs, reports and ticket approvals are emailed from Job detail's own buttons, or through Ask, which asks for confirmation on its card before anything goes. A send can also be scheduled for a time and goes out then whether or not the app is open; Job detail lists what is waiting and the person's own devices are told when it went.",
   "Accounts. New accounts are created by an Admin on Users & access and receive a link to set their own password; a forgotten password is reset the same way. An account with work on file is locked rather than deleted.",
   "Help. Each screen shows a short introduction the first time an account opens it; 'No more tips' stops them for good. The Feature request button in the drawer mails the owner. The Animations switch in the drawer turns motion off.",
-  "Ask itself. Ask (the AI button, bottom right of every screen) answers from the tools behind the screens the person holds, never from anything else, and writes nothing on its own: a draft opens the app's own form, a send or a schedule waits for the card's confirm. It remembers the thread only until sign-out. The microphone dictates through the browser and stores nothing."
+  "Ask itself. Ask — the Claudia button, bottom right of every screen — answers from the tools behind the screens the person holds, never from anything else, and writes nothing on its own: a draft opens the app's own form, a send or a schedule waits for the card's confirm. It remembers the thread only until sign-out. The microphone dictates through the browser and stores nothing."
 ].join("\n");
 
 // The knowledge block the prompt carries: the prose above, then every

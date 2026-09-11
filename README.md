@@ -632,7 +632,7 @@ vite-app/
       queuePanel.jsx        The offline-queue badge and its what's-waiting panel
       helpTip.jsx           The screen's popup, one screen's entry from help.js
       featureRequest.jsx    The drawer's Feature request form
-      askPanel.jsx          Ask — the square "AI" launcher bottom-right, the card it
+      askPanel.jsx          Ask — the square "Claudia" launcher bottom-right, the card it
                             opens, and dictation through the browser's own recogniser
       flappy880.jsx         One of the two easter eggs
   e2e/                      Playwright against the live project — auth.setup.js signs

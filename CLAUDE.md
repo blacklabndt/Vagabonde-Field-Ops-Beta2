@@ -375,7 +375,7 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   carries z-index 100 (above the bar, banner and drawer; below the egg
   overlay at 200 and the toast at 300) — one rendered ahead of main once
   sat under the jobs table and took no clicks.
-- Ask (the square "AI" button bottom-right on every screen, `askPanel.jsx`) is
+- Ask (the square "Claudia" button bottom-right on every screen, `askPanel.jsx`) is
   the app-wide assistant, this slice over the tracker: the `ask` Edge
   Function opens the door on the caller's JWT, reads the caller's tabs,
   offers Claude (`ASK_MODEL` in `_shared/askLoop.ts`, Opus 5) only the
