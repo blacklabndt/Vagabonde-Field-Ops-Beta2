@@ -513,7 +513,17 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   the person who scheduled it. The tick claims each due row with a
   conditional UPDATE (queued → sending), sends through the shared
   module, writes sent or failed (and a function_errors row, where the
-  digest and Home's strip read it), never retries, and fails a row still
+  digest and Home's strip read it) — through `markStatus`, which tries
+  twice and NEVER throws, and whose answer is read: the email has already
+  gone by then, so a write that fails is logged as the record lost
+  (`sentUnrecorded`: "WAS SENT … Do not send it again") and never as a
+  failed send, and a delivery failure whose row could not be written says
+  both (`failureUnrecorded`). Counting a send as sent while the row stayed
+  `sending` was the lie: the strip and Ask read queued and failed rows
+  only, so it vanished until the stale sweep called it "check before
+  sending again". The tick's own answer carries `unrecorded` beside
+  `fired` and `failed` — those two are about the SEND, that one about the
+  ROW — and `ok` is false while any row was left behind. It never retries, and fails a row still
   `sending` after fifteen minutes with "did not report back — check
   before sending again", because twice is worse than once too few.
   Signed-in accounts may write `status` alone (column grant) and only
@@ -523,8 +533,19 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   role list, a ticket's price role and `ticketSendGate` — resolves
   recipients under askSends' rule, turns "YYYY-MM-DD HH:MM" in Grande
   Prairie's clock into an instant with `localToUtc` (DST-correct through
-  Intl; more than five minutes past or ninety days ahead refused) and
-  proposes), `list_scheduled`, `cancel_scheduled`. The card's confirm
+  Intl; a day the month has not got and an hour the clock skips are
+  refused in words, and the hour that happens twice takes the first —
+  Date.UTC rolled 2026-11-31 into December and the offset passes answered
+  01:30 for a 02:30 nobody could have; more than `MAX_PAST_MS` past or
+  ninety days ahead refused) and proposes), `list_scheduled`,
+  `cancel_scheduled`. `MAX_PAST_MS` is 30 s and is deliberately TIGHTER
+  than the insert policy's `run_at > now() - interval '1 minute'`: what is
+  proposed must still be insertable when the button is pressed, so
+  `tooLateToSchedule` in `scheduledSends.js` asks the same question on the
+  device before App acts — BEFORE a move cancels the row it is replacing,
+  because the cancel is a real delete and the insert can be refused — and
+  `reschedule_send` checks the EFFECTIVE time, new or kept (moving
+  yesterday's failed send to another address keeps yesterday's time). The card's confirm
   shape now covers four kinds (`isConfirmAction`, `confirmLabel`: Send /
   Schedule / Cancel it); App's `runAskAction` calls `Db.scheduleSend`
   (the RLS insert) or `Db.cancelScheduledSend` (the conditional update;

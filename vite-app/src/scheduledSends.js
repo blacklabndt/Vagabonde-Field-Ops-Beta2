@@ -12,6 +12,25 @@ export function whenWords(ms, zone = ZONE) {
   return `${day.replace(/\.$/, "").replace(/\.,/, ",")}, ${time}`;
 }
 
+// The floor the insert policy keeps (`run_at > now() - interval '1
+// minute'`), asked on THIS device at the moment the button is pressed.
+// A card can sit on screen for minutes, and moving a send is a cancel and
+// then an insert: an insert refused for its time would take the only copy
+// of the send with it. So the card is re-read against the clock BEFORE
+// anything is cancelled, and a send whose time has gone is refused with
+// the words that ask for a new one. The database is still the authority;
+// this only keeps us from destroying a row we cannot replace.
+// scheduledSends.client.test.mjs holds this to MAX_PAST_MS in the
+// function's own module, which is deliberately tighter than the minute.
+export const SCHEDULE_FLOOR_MS = 60_000;
+
+export function tooLateToSchedule(runAtIso, nowMs = Date.now()) {
+  const at = Date.parse(runAtIso);
+  if (!Number.isFinite(at)) return "That send has no time on it. Ask for a new time.";
+  if (at > nowMs - SCHEDULE_FLOOR_MS) return null;
+  return `${whenWords(at)} has already passed, so it cannot be scheduled. Ask for a time still to come.`;
+}
+
 // row: { label, to_list, run_at, status, error }. Answers the line the
 // strip shows, whether the row failed (Dismiss rather than Cancel), and
 // the error to show under it. A queued row whose time has passed is

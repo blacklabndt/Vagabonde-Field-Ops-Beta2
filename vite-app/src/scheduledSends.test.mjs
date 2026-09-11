@@ -6,9 +6,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 import {
   localToUtc, checkRunAt, whenWords, fireGate, isStuck, labelFor, scheduleWords, cancelWords, isKind,
   rescheduleWords, resultPushWords, splitList, reminderText, reminderWords, REMINDER_MAX, NO_DEVICE_WORDS,
+  sentUnrecorded, failureUnrecorded,
   STUCK_MS, MAX_AHEAD_MS, MAX_PAST_MS, KINDS
 } from "../../supabase/functions/_shared/scheduledSends.ts";
 
@@ -33,6 +36,41 @@ test("a local time becomes the instant, on either side of the clock change", () 
   assert.throws(() => localToUtc("tomorrow morning"), /YYYY-MM-DD HH:MM/);
   assert.throws(() => localToUtc("2026-13-40 25:61"), /not a real date/);
   assert.throws(() => localToUtc(null), /YYYY-MM-DD HH:MM/);
+});
+
+// Round 5, F2. Date.UTC normalises a day the month does not have, and the
+// two offset passes land an hour early on a time the clock skips — both
+// silently, and both inside the ninety days, so nothing else caught them.
+test("a day the month does not have is refused, not rolled into the next one", () => {
+  assert.throws(() => localToUtc("2026-11-31 07:00"), /not a real date/);
+  assert.throws(() => localToUtc("2026-02-30 07:00"), /not a real date/);
+  assert.throws(() => localToUtc("2027-02-29 07:00"), /not a real date/);
+  // A leap day that exists still works.
+  assert.equal(localToUtc("2028-02-29 07:00"), Date.UTC(2028, 1, 29, 14, 0));
+});
+
+test("an hour the clock skips is refused; the hour it repeats takes the first", () => {
+  // 8 March 2026, 02:00 MST becomes 03:00 MDT: 02:30 never happens, and the
+  // passes used to answer 01:30 — an hour before the person said.
+  assert.throws(() => localToUtc("2026-03-08 02:30"), /does not exist on that day/);
+  assert.equal(localToUtc("2026-03-08 01:30"), Date.UTC(2026, 2, 8, 8, 30));
+  assert.equal(localToUtc("2026-03-08 03:30"), Date.UTC(2026, 2, 8, 9, 30));
+  // 1 November 2026, 01:30 happens twice. The first is daylight time
+  // (07:30 UTC) — the one meant by "before the clocks go back".
+  assert.equal(localToUtc("2026-11-01 01:30"), Date.UTC(2026, 10, 1, 7, 30));
+});
+
+test("what may be proposed is tighter than what the insert policy accepts", () => {
+  // The policy is `run_at > now() - interval '1 minute'`. Proposing a time
+  // the database will refuse by the time the button is pressed is a card
+  // that cannot be acted on — and, for a move, a row cancelled and not
+  // replaced. Read the migration back so the two cannot drift apart.
+  const sql = readFileSync(new URL(
+    "../../supabase/migrations/20260911010317_a_reminder_is_a_timer_with_no_mail.sql", import.meta.url), "utf8");
+  const m = /run_at > now\(\) - interval '(\d+) minute'/.exec(sql);
+  assert.ok(m, "the insert policy still states its floor as an interval of whole minutes");
+  assert.ok(MAX_PAST_MS < Number(m[1]) * 60_000,
+    `MAX_PAST_MS (${MAX_PAST_MS}) must leave room inside the policy's ${m[1]} minute`);
 });
 
 test("a time already passed, or more than ninety days away, is refused in words", () => {
@@ -177,4 +215,77 @@ test("a reminder's text is one line of a few to three hundred characters, and it
   const c = cancelWords("Order film", at, "reminder");
   assert.equal(c.summary, 'Cancel the reminder "Order film" set for Fri, Sep 11, 07:00?');
   assert.equal(c.done, 'Cancelled: the reminder "Order film" will not fire at Fri, Sep 11, 07:00.');
+});
+
+// ── Round 5, F1: the record's write is not the send ──────────────────────
+// The email has gone by the time the row is marked. A write that fails
+// changes nothing about that, so the tick may not call the send failed —
+// and may never answer "sent, nothing to see". markStatus is lifted out of
+// the function itself, with its sleep handed in so the test is instant.
+const tick = readFileSync(new URL("../../supabase/functions/scheduled-sends/index.ts", import.meta.url), "utf8");
+const markStart = tick.indexOf("async function markStatus(");
+const markEnd = tick.indexOf("\n}", markStart) + 2;
+const makeMark = new Function("setTimeout",
+  `return (${stripTypeScriptTypes(tick.slice(markStart, markEnd))});`);
+const markStatus = makeMark((fn) => fn());
+
+const clientAnswering = (...answers) => {
+  const seen = [];
+  return {
+    seen,
+    from: () => ({
+      update(patch) { seen.push(patch); return this; },
+      eq() {
+        const a = answers[seen.length - 1] ?? { error: null };
+        if (a instanceof Error) return Promise.reject(a);
+        return Promise.resolve(a);
+      }
+    })
+  };
+};
+
+test("a status written first time answers nothing to report", async () => {
+  const db = clientAnswering({ error: null });
+  assert.equal(await markStatus(db, "s1", { status: "sent" }), null);
+  assert.equal(db.seen.length, 1);
+});
+
+test("a status refused once is written again before it is given up on", async () => {
+  const db = clientAnswering({ error: { message: "the gateway blinked" } }, { error: null });
+  assert.equal(await markStatus(db, "s1", { status: "sent" }), null);
+  assert.equal(db.seen.length, 2, "it tried twice");
+});
+
+test("a status refused twice answers the reason and never throws", async () => {
+  const db = clientAnswering({ error: { message: "column status does not exist" } }, { error: { message: "column status does not exist" } });
+  assert.equal(await markStatus(db, "s1", { status: "sent" }), "column status does not exist");
+  const thrown = clientAnswering(new Error("socket closed"), new Error("socket closed"));
+  assert.equal(await markStatus(thrown, "s1", { status: "failed", error: "x" }), "socket closed");
+});
+
+test("the tick asks what the final write answered, never assuming it landed", () => {
+  // The bug this replaces: `await admin.from(...).update({ status: "sent" })`
+  // with the error dropped, then fired++ and a success push, leaving the row
+  // `sending` for the stale sweep to call "check before sending again".
+  const body = tick.slice(tick.indexOf("await fire(admin, row, settingsOnce);"), tick.indexOf("return json({ ok: true"));
+  assert.ok(!/await admin\.from\("scheduled_sends"\)\.update\(\{ status: "(sent|failed)"/.test(body),
+    "the final status goes through markStatus, whose answer is read");
+  assert.match(body, /markStatus\(admin, row\.id, \{ status: "sent" \}\)/);
+  assert.match(body, /markStatus\(admin, row\.id, \{ status: "failed"/);
+  assert.match(body, /sentUnrecorded\(row\.label, wErr\)/);
+  // And the tick's own answer says so: `fired` and `failed` are about the
+  // send, `unrecorded` about the row, and ok is false while one is left.
+  const answer = tick.slice(tick.indexOf("return json({ ok:"), tick.indexOf("} catch (e) {", tick.indexOf("return json({ ok:")));
+  assert.match(answer, /ok: unrecorded === 0/);
+  assert.match(answer, /unrecorded,/);
+});
+
+test("a send that went and could not be recorded says so, and says not to send it again", () => {
+  const words = sentUnrecorded("Ticket T-10231", "the gateway blinked");
+  assert.match(words, /^Ticket T-10231 WAS SENT/);
+  assert.match(words, /Do not send it again\.$/);
+  assert.match(words, /the gateway blinked/);
+  const both = failureUnrecorded("JHA RT-Shop.pdf", "the PDF has gone", "the gateway blinked");
+  assert.match(both, /was not sent: the PDF has gone/);
+  assert.match(both, /could not be marked failed either: the gateway blinked/);
 });

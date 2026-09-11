@@ -37,10 +37,27 @@ export const READ_TABS: Record<Kind, readonly string[]> = {
 // than once too few.
 export const STUCK_MS = 15 * 60_000;
 export const STUCK_WORDS = "The send did not report back — check whether it arrived before sending again.";
-// How far ahead and how far behind a time may be set.
+// How far ahead and how far behind a time may be set. The floor is
+// DELIBERATELY tighter than the insert policy's `run_at > now() - interval
+// '1 minute'`: what the app is willing to propose must be something the
+// database will still accept when the person presses the button, and five
+// minutes of slack proposed a card whose insert was already refused at the
+// clock time it was drawn. Half a minute leaves the tap its room. The
+// database stays the authority; this only keeps us from offering what it
+// will refuse.
 export const MAX_AHEAD_MS = 90 * 86_400_000;
-export const MAX_PAST_MS = 5 * 60_000;
+export const MAX_PAST_MS = 30_000;
 export const ZONE = "America/Edmonton";
+
+// The words for a send that WENT and could not be marked. It must never be
+// sent again on the strength of the row, so the log says so in its own
+// sentence; the stale sweep will fail the row fifteen minutes later with
+// STUCK_WORDS, and this is what tells the office which of the two it was.
+export const sentUnrecorded = (label: string, why: string): string =>
+  `${label} WAS SENT, but the record could not be marked sent: ${why}. Do not send it again.`;
+// And one that did not go, where the failure itself could not be written.
+export const failureUnrecorded = (label: string, why: string, writeWhy: string): string =>
+  `${label} was not sent: ${why}. The row could not be marked failed either: ${writeWhy}.`;
 
 export interface Person { id: string; role: string; tab_access: string[] | null; deactivated_at: string | null }
 export interface ReportToSend { id: string; pdf_key: string | null; filename?: string | null }
@@ -56,9 +73,27 @@ export function localToUtc(local: unknown, zone = ZONE): number {
   const [y, mo, d, h, mi] = m.slice(1).map(Number);
   if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59) throw new Error("That is not a real date and time.");
   const wanted = Date.UTC(y, mo - 1, d, h, mi);
+  // A day the month does not have: Date.UTC rolls 2026-11-31 into the 1st of
+  // December without a word, and the card then shows a date nobody asked
+  // for — inside the ninety days, so no other guard catches it. Reading the
+  // parts back is the whole test.
+  const back = new Date(wanted);
+  if (back.getUTCFullYear() !== y || back.getUTCMonth() !== mo - 1 || back.getUTCDate() !== d) {
+    throw new Error("That is not a real date and time.");
+  }
   let guess = wanted;
   for (let i = 0; i < 2; i++) guess = wanted - (asLocalMs(guess, zone) - guess);
-  if (Number.isNaN(guess)) throw new Error("That is not a real date and time.");
+  if (!Number.isFinite(guess)) throw new Error("That is not a real date and time.");
+  // An hour the clock skips: 02:30 on the March morning does not exist, and
+  // the two passes land on 01:30 — an hour earlier than the person said,
+  // silently. Reading the instant back in the zone proves it is the
+  // wall-clock time that was asked for. (On the autumn morning an hour
+  // happens TWICE and both readings are true; the passes converge on the
+  // FIRST, still on daylight time, which is the one a person means by "the
+  // clocks go back tonight, remind me at 01:30".)
+  if (asLocalMs(guess, zone) !== wanted) {
+    throw new Error("That time does not exist on that day — the clocks go forward. Ask the person for another time.");
+  }
   return guess;
 }
 

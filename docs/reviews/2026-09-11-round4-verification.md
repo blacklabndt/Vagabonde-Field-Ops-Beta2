@@ -66,19 +66,19 @@ Run (Codex's sandbox, this worktree):
 
 NOT run, and why:
 
-- **Deno typecheck (`npm run typecheck`) — BLOCKED.** `npx deno@2.9.6`
-  could not be fetched (`EACCES`, `registry.npmjs.org/deno`); it is a
-  network refusal in the sandbox, not a type error. **This must pass before
-  `backup-run` is deployed.** The change is small and type-plain — one
-  `deadline: number` parameter, two numeric constants, two imports already
-  exported from `backupRun.ts` — but unverified is unverified.
+- **Deno typecheck (`npm run typecheck`) — blocked in both agents'
+  sandboxes** (`EACCES` fetching `deno@2.9.6` from `registry.npmjs.org`;
+  a network refusal, not a type error). **Kyle ran it himself on this
+  worktree before authorising the commit and reported it completed —
+  the gate is met.** Anyone re-running the gate from a sandbox will meet
+  the same download refusal; run it from Kyle's own shell.
 - Live probes: none needed. No migration, no RLS, no SQL.
 - The backup itself was not exercised against the live drive; the behaviour
   is covered by the tests above and by the cursor arithmetic they drive.
 
 ## Before deploying `backup-run`
 
-1. `npm run typecheck` — green.
+1. `npm run typecheck` — DONE, Kyle, 11 Sept.
 2. `npx supabase functions deploy backup-run --project-ref eielmvxzdwwprmmfamlq`
 3. Watch one tick: the panel's last-run sentence and `backup_runs.cursor`
    should show parts advancing as before. On a normal 1,000-row cap the new

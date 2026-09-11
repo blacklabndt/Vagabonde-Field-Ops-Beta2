@@ -8,6 +8,7 @@ import { forgetHeldDrafts } from "./chatDrafts.js";
 import { forgetAskThread } from "./askThread.js";
 import { runSendPool } from "./sendPool.js";
 import { CHASE_WORKERS, CHASE_INTERVAL_MS } from "./chasePlan.js";
+import { tooLateToSchedule } from "./scheduledSends.js";
 import { forgetDosimetryAsked } from "./dosimetryPrompt.js";
 import { QueueBadge, QueueDialog } from "./components/queuePanel.jsx";
 import { FeatureRequestDialog } from "./components/featureRequest.jsx";
@@ -1530,6 +1531,11 @@ export function App() {
     // gated again by the tick when it fires. A cancel is the conditional
     // update the Job detail strip makes.
     if (action.kind === "schedule_send") {
+      // The same question the move asks, for the same reason: a card left
+      // up until its time has gone meets the insert policy's floor, and a
+      // refusal in the policy's words is not one anybody can act on.
+      const late = tooLateToSchedule(action.run_at);
+      if (late) throw new Error(late);
       await Db.scheduleSend({
         kind: action.send_kind, recordId: action.record_id, jobId: action.job.id, label: action.label,
         to: action.to.join(","), message: action.message || "", runAt: action.run_at
@@ -1551,6 +1557,11 @@ export function App() {
     // here, and an insert that then fails leaves nothing queued rather
     // than two rows and two emails — the card says so, naming the fix.
     if (action.kind === "reschedule_send") {
+      // Asked before the cancel, not after: a card that has been sitting on
+      // screen, or a failed send moved to another address and so keeping
+      // yesterday's time, would be cancelled and then refused its insert.
+      const late = tooLateToSchedule(action.run_at);
+      if (late) throw new Error(`${late} Nothing was changed.`);
       await Db.cancelScheduledSend(action.id);
       try {
         await Db.scheduleSend({

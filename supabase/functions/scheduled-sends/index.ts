@@ -30,7 +30,7 @@ import { secretsMatch } from "../_shared/constantTime.ts";
 import { mailJha, JHA_MAIL_SELECT, type JhaMailRow } from "../_shared/mailJha.ts";
 import { mailReport, REPORT_MAIL_SELECT, type ReportMailRow } from "../_shared/mailReport.ts";
 import { mailApproval } from "../_shared/mailApproval.ts";
-import { fireGate, isKind, resultPushWords, STUCK_MS, STUCK_WORDS, NO_DEVICE_WORDS, NO_DEVICE_TOOK_IT, type Person } from "../_shared/scheduledSends.ts";
+import { fireGate, isKind, resultPushWords, sentUnrecorded, failureUnrecorded, STUCK_MS, STUCK_WORDS, NO_DEVICE_WORDS, NO_DEVICE_TOOK_IT, type Person } from "../_shared/scheduledSends.ts";
 import { sendPush, type PushSub } from "../_shared/webPush.ts";
 
 const json = (body: unknown, status = 200) =>
@@ -82,6 +82,12 @@ Deno.serve(async (req) => {
 
     let fired = 0;
     let failed = 0;
+    // Rows whose send is settled and whose ROW is not: the email went (or
+    // did not) and the status could not be written. They are counted apart
+    // because `fired` and `failed` are about the send, and a tick that
+    // answered ok with nothing else to say hid a row left `sending` for the
+    // stale sweep to call ambiguous fifteen minutes later.
+    let unrecorded = 0;
     // The settings row, read once per tick and only when an approval needs it.
     let settings: AppSettings | null = null;
     const settingsOnce = async () => { settings ??= await appSettings(); return settings; };
@@ -96,27 +102,59 @@ Deno.serve(async (req) => {
       if (!claimed || !claimed.length) continue;
       try {
         await fire(admin, row, settingsOnce);
-        await admin.from("scheduled_sends").update({ status: "sent" }).eq("id", row.id);
+        // The email has gone. Whether the row can be marked changes nothing
+        // about that, so a write that fails is reported as what it is — the
+        // record lost, never the send — and NEVER as a reason to send again.
+        const wErr = await markStatus(admin, row.id, { status: "sent" });
+        if (wErr) {
+          unrecorded++;
+          await logError("scheduled-sends", sentUnrecorded(row.label, wErr),
+            { id: row.id, kind: row.kind, record_id: row.record_id, job_id: row.job_id, set_by: row.set_by });
+        }
         fired++;
         // A reminder's push was the firing itself; a second "Sent" would
         // be noise on the same devices.
         if (row.kind !== "reminder") await tellScheduler(admin, row, null);
       } catch (e) {
         const message = (e as Error).message;
-        await admin.from("scheduled_sends").update({ status: "failed", error: message }).eq("id", row.id);
-        await logError("scheduled-sends", `${row.label} was not sent: ${message}`,
+        const wErr = await markStatus(admin, row.id, { status: "failed", error: message });
+        if (wErr) unrecorded++;
+        await logError("scheduled-sends",
+          wErr ? failureUnrecorded(row.label, message, wErr) : `${row.label} was not sent: ${message}`,
           { id: row.id, kind: row.kind, record_id: row.record_id, job_id: row.job_id, set_by: row.set_by });
         failed++;
         await tellScheduler(admin, row, message);
       }
     }
-    return json({ ok: true, fired, failed, stuck: stuckRows?.length ?? 0 });
+    // `ok` is about the tick, not about every row: a send whose row could
+    // not be written is named here as well as in function_errors, so the
+    // answer never reads as "all settled" when a row was left behind.
+    return json({ ok: unrecorded === 0, fired, failed, unrecorded, stuck: stuckRows?.length ?? 0 });
   } catch (e) {
     const message = (e as Error).message;
     await logError("scheduled-sends", message);
     return json({ error: message }, 500);
   }
 });
+
+// The row's final status, written with one second chance and NEVER thrown:
+// a throw from the success path would be caught by the branch that marks a
+// row failed, which would be the one lie this function must not tell — the
+// email has already gone. Answers null when the row was written, and the
+// reason it was not otherwise.
+async function markStatus(admin: SupabaseClient, id: string, patch: Record<string, string>): Promise<string | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const { error } = await admin.from("scheduled_sends").update(patch).eq("id", id);
+      if (!error) return null;
+      if (attempt) return error.message;
+    } catch (e) {
+      if (attempt) return (e as Error).message;
+    }
+    await new Promise(r => setTimeout(r, 1_000));
+  }
+  return "the row could not be written";
+}
 
 // One row: the person as they are now, the record as it is now, the gate,
 // the addresses checked again, and the same send the live button makes.

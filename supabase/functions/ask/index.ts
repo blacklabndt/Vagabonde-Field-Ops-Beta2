@@ -526,7 +526,11 @@ Deno.serve(async (req) => {
         if (wantsTo && row.kind === "ticket_approval") throw new Error("A ticket approval goes to the ticket's client rep; only its time can be moved.");
         const oldRunAt = Date.parse(row.run_at);
         const runAt = wantsTime ? localToUtc(input.run_at) : oldRunAt;
-        if (wantsTime) checkRunAt(runAt, Date.now());
+        // The EFFECTIVE time, new or kept: moving yesterday's failed send to
+        // another address keeps yesterday's time, which the insert policy
+        // refuses — and App cancels the old row before it inserts, so the
+        // refusal would land after the only copy was gone.
+        checkRunAt(runAt, Date.now());
         let to: string[];
         if (row.kind === "jha") to = (await jhaForSend(row.record_id, wantsTo ? input.recipients : null)).to;
         else if (row.kind === "report") to = (await reportForSend(row.record_id, wantsTo ? input.recipients : null)).to;
