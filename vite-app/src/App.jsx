@@ -1488,6 +1488,23 @@ export function App() {
       runChaseFromAsk(action.tickets || []);
       return action.done;
     }
+    // Opening a record is what the app already does for a job link or a
+    // tracker row: the job through openJobByNumber, a ticket through
+    // openTicket (the editor for a draft the runner said this person may
+    // edit, else Job detail, where the row is).
+    if (action.kind === "open") {
+      if (action.record === "ticket") openTicket({ id: action.id, job: action.job.job_number, status: action.editor ? "Draft" : (action.status || "") });
+      else openJobByNumber(action.job.job_number);
+      return;
+    }
+    // Withdrawing an approval is the definer RPC the three buttons use;
+    // its own-or-office rule is the gate, and zero rows is its own message.
+    if (action.kind === "cancel_approval") {
+      await Db.withdrawTicketApproval(action.ticket.id);
+      await OfflineCache.remove(`tickets.${action.job.id}`);
+      setFiledNonce(n => n + 1);
+      return action.done;
+    }
     if (action.kind === "send_jha") {
       await Db.sendJhaEmail({ jhaId: action.jha.id, to: action.to.join(", "), cc: "", message: action.message || "" });
       await OfflineCache.remove(`jhas.${action.job.id}`);

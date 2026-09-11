@@ -13,6 +13,8 @@ import { emailIn } from "./emailIn.js";
 import { emailIn as emailInTs } from "../../supabase/functions/_shared/emailIn.ts";
 import { planChase, CHASE_RECENT_DAYS, CHASE_WORKERS, CHASE_INTERVAL_MS } from "./chasePlan.js";
 import { planChase as planChaseTs, chaseWords, CHASE_LIST_LIMIT } from "../../supabase/functions/_shared/chasePlan.ts";
+import { attentionItems, agoPhrase } from "./attention.js";
+import { attentionItems as attentionItemsTs, agoPhrase as agoPhraseTs } from "../../supabase/functions/_shared/attention.ts";
 
 const CORE = /\/\/ ═══ shared core[^\n]*\n([\s\S]*?)\/\/ ═══ end shared core ═══/;
 const coreOf = file => {
@@ -74,4 +76,23 @@ test("the card's words name the due tickets and who is left alone and why; nothi
   assert.throws(() => chaseWords({ due: [], queried: [], recent: [], noEmail: [] }, " older than 14 days"), /Nothing to chase older than 14 days: no ticket is awaiting approval\./);
   const many = Array.from({ length: CHASE_LIST_LIMIT + 3 }, (_, i) => ({ id: `T-${i}`, to: "a@b.c" }));
   assert.match(chaseWords({ due: many, queried: [], recent: [], noEmail: [] }, "").summary, / and 3 more\?$/);
+});
+
+test("Home's attention questions are the same code on the board and in the function", () => {
+  const js = coreOf("./attention.js");
+  const ts = coreOf("../../supabase/functions/_shared/attention.ts");
+  assert.ok(js.includes("export function attentionItems"), "the core must hold attentionItems itself");
+  assert.ok(/attentionItems\(backupState: BackupState/.test(ts), "the function's copy is the typed one");
+  assert.equal(shapeOf(stripTypeScriptTypes(ts)), shapeOf(js));
+  const now = Date.UTC(2026, 8, 11, 12, 0);
+  const state = { connected: true, next_run_at: new Date(now - 8 * 3600000).toISOString(), last_run: { kind: "backup", status: "failed", finished_at: new Date(now - 2 * 3600000).toISOString() } };
+  const errors = [{ function_name: "backup-run", created_at: new Date(now - 60000).toISOString() }, { function_name: "ask", created_at: new Date(now - 3 * 86400000).toISOString() }];
+  const a = attentionItems(state, errors, now);
+  const b = attentionItemsTs(state, errors, now);
+  assert.deepEqual(b, a);
+  assert.deepEqual(a.map(i => i.key), ["failed-run", "overdue", "errors"]);
+  assert.equal(a[0].text, "Last backup failed 2 hours ago");
+  assert.equal(a[2].text, "1 background error since yesterday — backup-run (1)");
+  assert.equal(agoPhraseTs(90 * 60000), agoPhrase(90 * 60000));
+  assert.deepEqual(attentionItemsTs(null, null, now), []);
 });

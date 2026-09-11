@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { askTurns, pushTurn, threadForSend, forgetAskThread, dropAction, dropLearned, isConfirmAction, confirmLabel, jobLinks, mergeDictation, foldTranscripts, ASK_KEEP } from "./askThread.js";
+import { askTurns, pushTurn, threadForSend, forgetAskThread, dropAction, dropLearned, isConfirmAction, confirmLabel, formLabel, jobLinks, mergeDictation, foldTranscripts, ASK_KEEP } from "./askThread.js";
 
 test("an answer keeps what was learned, and the × drops one note from the turn alone", () => {
   forgetAskThread();
@@ -42,6 +42,12 @@ test("a proposal the card confirms in place is told from a draft by its kind, an
   assert.equal(isConfirmAction({ kind: "draft_organisation" }), false);
   assert.equal(confirmLabel({ kind: "chase" }), "Chase");
   assert.equal(confirmLabel({ kind: "set_reminder" }), "Set it");
+  assert.equal(isConfirmAction({ kind: "cancel_approval" }), true);
+  assert.equal(confirmLabel({ kind: "cancel_approval" }), "Cancel approval");
+  assert.equal(isConfirmAction({ kind: "open" }), false);
+  assert.equal(formLabel({ kind: "open" }), "Open");
+  assert.equal(formLabel({ kind: "draft_jha" }), "Open the form");
+  assert.equal(formLabel(null), "Open the form");
   assert.equal(confirmLabel(null), "");
 });
 

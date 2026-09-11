@@ -27,7 +27,9 @@
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { appSettings, corsHeaders } from "../_shared/mail.ts";
-import { toolsFor, toolDefinitions, traceLine, searchArgs, JHA_TEMPLATES, HAZARD_NAMES, PRICE_ROLES, EQUIPMENT_FILTERS } from "../_shared/askTools.ts";
+import { toolsFor, toolDefinitions, traceLine, searchArgs, JHA_TEMPLATES, HAZARD_NAMES, PRICE_ROLES, EQUIPMENT_FILTERS, OPEN_KINDS } from "../_shared/askTools.ts";
+import { ticketCheck } from "../_shared/ticketCheck.ts";
+import { attentionItems, type BackupState, type ErrorRow } from "../_shared/attention.ts";
 import { planChase, chaseWords } from "../_shared/chasePlan.ts";
 import { emailIn } from "../_shared/emailIn.ts";
 import { dayCheck, type DayJob } from "../_shared/dayCheck.ts";
@@ -107,6 +109,20 @@ interface DoseRow { profile_id: string; name: string | null; days: number | stri
 interface EquipmentRow {
   id: string; type: string; serial_number: string | null; calibration_due: string | null; status: string; assigned_name: string | null; total_count: number | string;
 }
+interface OpenTicketRow { id: string; status: string | null; technician_id: string | null; jobs: { id: string; job_number: string } | null }
+interface OpenRecordRow { id: string; jobs: { id: string; job_number: string } | null }
+interface CheckTicketRow {
+  id: string; status: string | null; technician_id: string | null; work_date: string | null; approved_at?: string | null;
+  client_contact: { name?: string | null } | null; jobs: { id: string; job_number: string } | null;
+}
+interface CheckLineRow { kind: string; label: string; unit: string | null; quantity: unknown; unit_rate: unknown }
+interface CheckCrewRow { straight_hours: unknown; ot_hours: unknown; solo_hours: unknown; solo_ot_hours: unknown; profiles: { name: string | null } | null }
+interface ScheduleRow { id: string; follows_default: boolean | null; published_at: string | null }
+interface RateLineRow { kind: string; label: string; unit: string | null; rate: number | string }
+const RT_WORDS: Record<string, string> = { rt_film: "film", rt_cr: "CR", rt_dr: "DR", custom_weld: "per weld" };
+// Home's strip reads this many of the newest errors (home.jsx's ERROR_SCAN).
+const ERROR_SCAN = 100;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // Unsigned tickets a chase reads at most — the tracker walks every page;
 // Ask reads one and says when there were more.
 const CHASE_READ_CAP = 1000;
@@ -658,6 +674,137 @@ Deno.serve(async (req) => {
           quarters_mr: { q1: row ? Number(row.q1) : 0, q2: row ? Number(row.q2) : 0, q3: row ? Number(row.q3) : 0, q4: row ? Number(row.q4) : 0 },
           note: "mR from the crew entries on billing tickets in the period; the quarters are the calendar quarters the days fall in."
         };
+      } else if (name === "open_record") {
+        // The record as the caller may read it, and its job; App does the
+        // opening with what it already has (openJobByNumber, openTicket).
+        const kind = String(input.kind ?? "");
+        const id = given(input.id);
+        if (!OPEN_KINDS.includes(kind)) throw new Error("kind must be job, ticket, jha or report.");
+        if (!id) throw new Error("Which one? Give the job number, the ticket number or the id.");
+        let job: { id: string; job_number: string };
+        let summary: string;
+        let status: string | null = null;
+        let editor = false;
+        let recId = id;
+        if (kind === "job") {
+          const j = await jobNumbered(id, false);
+          job = { id: j.id, job_number: j.job_number };
+          summary = `Open ${j.job_number}?`;
+        } else if (kind === "ticket") {
+          const { data, error } = await asUser.from("tickets").select("id, status, technician_id, jobs(id, job_number)").eq("id", id.toUpperCase()).maybeSingle();
+          if (error) throw new Error(error.message);
+          const row = data as unknown as OpenTicketRow | null;
+          if (!row || !row.jobs) throw new Error("No ticket with that number — use list_tickets to find it.");
+          job = row.jobs; status = row.status; recId = row.id;
+          editor = row.status === "Draft" && (row.technician_id === user.id || me.role === "Admin");
+          summary = editor ? `Open ${row.id} in the ticket editor?` : `Open ${row.jobs.job_number}, where ${row.id} is?`;
+        } else {
+          if (!UUID.test(id)) throw new Error(`That is not an id — use ${kind === "jha" ? "list_jhas" : "list_reports"} to find it.`);
+          const { data, error } = await asUser.from(kind === "jha" ? "jhas" : "reports").select("id, jobs(id, job_number)").eq("id", id).maybeSingle();
+          if (error) throw new Error(error.message);
+          const row = data as unknown as OpenRecordRow | null;
+          if (!row || !row.jobs) throw new Error(`No ${kind === "jha" ? "assessment" : "report"} with that id — use ${kind === "jha" ? "list_jhas" : "list_reports"} to find it.`);
+          job = row.jobs;
+          summary = `Open ${row.jobs.job_number}, where the ${kind === "jha" ? "JHA" : "report"} is?`;
+        }
+        action = { kind: "open", record: kind, id: recId, status, editor, job, summary };
+        out = { ready: true, summary };
+      } else if (name === "check_ticket") {
+        const id = given(input.ticket_id).toUpperCase();
+        const { data, error } = await asUser.from("tickets")
+          .select("id, status, technician_id, work_date, client_contact, jobs(id, job_number)").eq("id", id).maybeSingle();
+        if (error) throw new Error(error.message);
+        const row = data as unknown as CheckTicketRow | null;
+        if (!row || !row.jobs) throw new Error("No ticket with that number — use list_tickets to find it.");
+        if (row.status !== "Draft") {
+          throw new Error(`${row.id} is ${row.status} — ${row.status === "Awaiting approval" ? "cancel the approval (cancel_approval) to change it" : "it can no longer be changed"}.`);
+        }
+        // The editor's own rule: one technician never edits another's ticket.
+        if (row.technician_id !== user.id && me.role !== "Admin") throw new Error(`${row.id} is another technician's ticket — only its technician or an Admin can check or edit it.`);
+        const linesRes = await asUser.from("ticket_lines").select("kind, label, unit, quantity, unit_rate").eq("ticket_id", row.id);
+        if (linesRes.error) throw new Error(linesRes.error.message);
+        const crewRes = await asUser.from("ticket_crew").select("straight_hours, ot_hours, solo_hours, solo_ot_hours, profiles(name)").eq("ticket_id", row.id);
+        if (crewRes.error) throw new Error(crewRes.error.message);
+        let jhaCount = 0;
+        if (row.work_date) {
+          const jhaRes = await asUser.from("jhas").select("id").eq("job_id", row.jobs.id).eq("work_date", row.work_date).limit(1);
+          if (jhaRes.error) throw new Error(jhaRes.error.message);
+          jhaCount = (jhaRes.data ?? []).length;
+        }
+        const check = ticketCheck({
+          ticket: { id: row.id, status: row.status, work_date: row.work_date, client_contact: row.client_contact?.name ?? null },
+          lines: (linesRes.data ?? []) as CheckLineRow[],
+          crew: ((crewRes.data ?? []) as unknown as CheckCrewRow[]).map(c => ({
+            name: c.profiles?.name ?? "(name unknown)",
+            straight_hours: c.straight_hours, ot_hours: c.ot_hours, solo_hours: c.solo_hours, solo_ot_hours: c.solo_ot_hours
+          })),
+          jhaCount,
+          today: todayIn(Date.now())
+        });
+        out = { ...check, job_number: row.jobs.job_number };
+      } else if (name === "rate_card") {
+        const client = await resolveClient(given(input.client));
+        // _fetchPublishedRates' choice of schedule, made as the caller: the
+        // newest schedule; the house card when it follows the default; else
+        // the newest published one.
+        const { data: latestD, error: sErr } = await asUser.from("rate_schedules").select("id, follows_default, published_at")
+          .eq("client_id", client.id).order("effective_from", { ascending: false }).limit(1).maybeSingle();
+        if (sErr) throw new Error(sErr.message);
+        const latest = latestD as ScheduleRow | null;
+        let schedule: { id: string } | null = null;
+        let card = "its own card";
+        if (latest?.follows_default) {
+          const { data, error } = await asUser.from("rate_schedules").select("id").is("client_id", null)
+            .not("published_at", "is", null).order("effective_from", { ascending: false }).limit(1).maybeSingle();
+          if (error) throw new Error(error.message);
+          schedule = data as { id: string } | null;
+          card = "the house card";
+        } else if (latest?.published_at) {
+          schedule = { id: latest.id };
+        } else {
+          const { data, error } = await asUser.from("rate_schedules").select("id").eq("client_id", client.id)
+            .not("published_at", "is", null).order("effective_from", { ascending: false }).limit(1).maybeSingle();
+          if (error) throw new Error(error.message);
+          schedule = data as { id: string } | null;
+        }
+        if (!schedule) throw new Error(`${client.name} has no published rate schedule — Rate admin is where one is published.`);
+        const { data: linesD, error: lErr } = await asUser.from("rate_lines").select("kind, label, unit, rate").eq("schedule_id", schedule.id)
+          .order("position", { ascending: true, nullsFirst: false }).order("label");
+        if (lErr) throw new Error(lErr.message);
+        const q = given(input.search).toLowerCase();
+        const lines = ((linesD ?? []) as RateLineRow[]).filter(l => !q || l.label.toLowerCase().includes(q));
+        const of = (kinds: string[]) => lines.filter(l => kinds.includes(l.kind));
+        out = {
+          client: client.name, card,
+          welds: of(["rt_film", "rt_cr", "rt_dr", "custom_weld"]).map(l => ({ size: l.label, kind: RT_WORDS[l.kind] ?? l.kind, rate_per_weld: Number(l.rate) })),
+          methods: of(["method", "custom_method"]).map(l => ({ label: l.label, rate_per_weld: Number(l.rate) })),
+          charges: of(["expense", "custom_expense"]).map(l => ({ label: l.label, unit: l.unit || "ea", rate: Number(l.rate) })),
+          note: q && !lines.length ? `Nothing on the card matches "${q}".` : "Dollars; a size's three rates are film, CR and DR per weld."
+        };
+      } else if (name === "needs_attention") {
+        // Home's two reads, as the caller (an Admin's), through the strip's
+        // own questions (attention.ts, attention.js's twin).
+        const stateRes = await asUser.rpc("backup_state");
+        if (stateRes.error) throw new Error(stateRes.error.message);
+        const errRes = await asUser.from("function_errors").select("function_name, created_at").order("created_at", { ascending: false }).limit(ERROR_SCAN);
+        if (errRes.error) throw new Error(errRes.error.message);
+        const items = attentionItems(stateRes.data as BackupState | null, (errRes.data ?? []) as ErrorRow[], Date.now());
+        out = { items: items.map(i => ({ what: i.text, where: i.where })), nothing: items.length === 0 };
+      } else if (name === "cancel_approval") {
+        const id = given(input.ticket_id).toUpperCase();
+        const { data, error } = await asUser.from("tickets")
+          .select("id, status, technician_id, approved_at, jobs(id, job_number)").eq("id", id).maybeSingle();
+        if (error) throw new Error(error.message);
+        const row = data as unknown as CheckTicketRow | null;
+        if (!row || !row.jobs) throw new Error("No ticket with that number — use list_tickets to find it.");
+        // The RPC's own rule, applied before proposing; the RPC applies it
+        // again when App calls it.
+        if (row.status !== "Awaiting approval" || row.approved_at) throw new Error(`${row.id} is ${row.status} — only a ticket awaiting approval can have its approval cancelled.`);
+        if (row.technician_id !== user.id && !["Admin", "Coordinator"].includes(me.role ?? "")) throw new Error(`${row.id} is another technician's ticket — its technician, an Admin or a Coordinator can cancel the approval.`);
+        const summary = `Cancel ${row.id}'s approval? The rep's link stops working and the ticket goes back to a draft on ${row.jobs.job_number}.`;
+        const done = `Cancelled: ${row.id} is a draft again on ${row.jobs.job_number}. A new send makes a new link.`;
+        action = { kind: "cancel_approval", summary, done, ticket: { id: row.id }, job: { id: row.jobs.id, job_number: row.jobs.job_number } };
+        out = { ready: true, summary };
       } else if (name === "find_equipment") {
         const filter = EQUIPMENT_FILTERS.includes(given(input.filter)) ? given(input.filter) : "All";
         const { data, error } = await asUser.rpc("search_equipment", { filter_key: filter, page_num: 0, page_size: 50, search: given(input.search) });

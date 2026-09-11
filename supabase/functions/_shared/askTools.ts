@@ -45,6 +45,8 @@ export const FILE_KINDS = ["html", "css", "csv", "xlsx", "pdf"];
 // askTools.test.mjs reads that file and fails on drift.
 export const EQUIPMENT_TYPES = ["Exposure device", "Survey meter", "Dosimeter", "TLD / OSLD", "Crank", "Guide tube"];
 export const EQUIPMENT_FILTERS = ["All", ...EQUIPMENT_TYPES, "Due soon", "Overdue"];
+// What open_record can open — each lands on a screen Job detail owns.
+export const OPEN_KINDS = ["job", "ticket", "jha", "report"];
 const PERIOD_FIELDS = {
   start: { type: "string", description: "the first day, YYYY-MM-DD" },
   end: { type: "string", description: "the last day, YYYY-MM-DD; a year at most" },
@@ -340,6 +342,31 @@ export const ASK_TOOLS: AskTool[] = [
     name: "find_equipment", tab: "equipment",
     description: "Equipment on the fleet list: type, serial number, calibration due date, status and who holds it. search matches the serial or the holder's name; filter is All, one of the types, Due soon (calibration coming up) or Overdue. Up to fifty, in the screen's order.",
     input_schema: { type: "object", properties: { search: { type: "string" }, filter: { type: "string", enum: EQUIPMENT_FILTERS } }, additionalProperties: false }
+  },
+  {
+    name: "open_record", tab: "job",
+    description: "Open a record on screen: a job (Job detail), a ticket (the editor for a draft of this person's — or anyone's, for an Admin — else Job detail, where the row is), a JHA or a report (Job detail). kind is job, ticket, jha or report; id is the job number, the ticket number, or the id list_jhas or list_reports gave. The card's Open button does it. Say in a few words what will open.",
+    input_schema: { type: "object", properties: { kind: { type: "string", enum: OPEN_KINDS }, id: { type: "string" } }, required: ["kind", "id"], additionalProperties: false }
+  },
+  {
+    name: "check_ticket", tab: "ticket", roles: PRICE_ROLES,
+    description: "Check a draft billing ticket before it goes to the client rep: reads the ticket, its lines, its crew and whether a JHA was filed for that day, and lists what looks off — no client rep, no charges, a quantity of zero or one above the editor's sane ceiling for its unit, a line at $0, a $0 total, no crew or no hours, one person over 24 hours, no JHA that day, a work date in the future. Nothing is changed. Refused for a ticket already sent or approved, or another technician's unless Admin. Answer with the findings as a short list, or that it looks fine.",
+    input_schema: { type: "object", properties: { ticket_id: { type: "string", description: "the ticket number, e.g. T-10231" } }, required: ["ticket_id"], additionalProperties: false }
+  },
+  {
+    name: "rate_card", tab: "rates", roles: PRICE_ROLES,
+    description: "A client's published rate card — the lines the ticket editor offers for that client, with label, unit and rate: the weld sizes with their film, CR and DR rates, the per-weld methods, and the other charges. Says whether the client prices from the house card or its own. client is the client's name; search narrows by label (e.g. 'standby', 'mileage', '6').",
+    input_schema: { type: "object", properties: { client: { type: "string" }, search: { type: "string" } }, required: ["client"], additionalProperties: false }
+  },
+  {
+    name: "needs_attention", tab: "board", roles: ["Admin"],
+    description: "What Home's Needs attention strip would say right now, from the same records: a backup drive that needs reconnecting, a failed backup or restore or file check, a backup overdue, and a day's background errors by function — each with where to look. Empty means nothing needs attention.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "cancel_approval", tab: "ticket",
+    description: "Propose cancelling a sent approval so the ticket goes back to a draft and can be re-priced: the card asks the person to confirm with Cancel approval; nothing changes until they do. Only a ticket awaiting approval, and only its technician, an Admin or a Coordinator. The rep's link stops working; a new send makes a new one.",
+    input_schema: { type: "object", properties: { ticket_id: { type: "string" } }, required: ["ticket_id"], additionalProperties: false }
   }
 ];
 
@@ -423,6 +450,11 @@ export function traceLine(name: string, input: Record<string, unknown>): string 
   if (name === "set_reminder") return `proposed a reminder at ${str(input.run_at)}`;
   if (name === "my_hours") return `read ${str(input.person) ? `${str(input.person)}'s` : "own"} hours`;
   if (name === "my_dose") return `read ${str(input.person) ? `${str(input.person)}'s` : "own"} dose`;
+  if (name === "open_record") return `proposed opening ${str(input.kind) || "a record"} ${str(input.id)}`.trim();
+  if (name === "check_ticket") return `checked ${str(input.ticket_id)}`;
+  if (name === "rate_card") return `read ${str(input.client)}'s rate card${str(input.search) ? ` for "${str(input.search)}"` : ""}`;
+  if (name === "needs_attention") return "read what needs attention";
+  if (name === "cancel_approval") return `proposed cancelling ${str(input.ticket_id)}'s approval`;
   if (name === "find_equipment") {
     const f = str(input.filter);
     return `looked up equipment${str(input.search) ? ` "${str(input.search)}"` : ""}${f && f !== "All" ? ` (${f})` : ""}`;

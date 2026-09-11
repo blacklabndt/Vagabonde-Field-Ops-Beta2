@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Db } from "../db.js";
 import { Btn } from "./common.jsx";
-import { askTurns, pushTurn, threadForSend, dropAction, dropLearned, isConfirmAction, confirmLabel, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
+import { askTurns, pushTurn, threadForSend, dropAction, dropLearned, isConfirmAction, confirmLabel, formLabel, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
 import { downloadFile, fileToUpload } from "../askFiles.js";
 
 // Ask: a square launcher at the bottom right of every screen (it says
@@ -342,7 +342,7 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
                   <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                     {isConfirmAction(t.action)
                       ? <Btn variant="primary" disabled={sending} onClick={() => confirmSend(i, t.action)}>{sending ? "Working…" : confirmLabel(t.action)}</Btn>
-                      : <Btn variant="primary" onClick={() => { onClose(); onAction(t.action); }}>Open the form</Btn>}
+                      : <Btn variant="primary" onClick={() => { onClose(); onAction(t.action); }}>{formLabel(t.action)}</Btn>}
                     <Btn variant="secondary" disabled={sending} onClick={() => { dropAction(i); setTurns(askTurns()); }}>Not now</Btn>
                   </div>
                 </div>

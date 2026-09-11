@@ -1,27 +1,17 @@
-// What the office needs to be told, worked out from what the database
-// already records.
-//
-// A failed backup, a drive whose consent lapsed, a schedule nothing is
-// picking up and a run of background errors are all written down the
-// moment they happen — in backup_runs, in app_settings and in
-// function_errors — and all four are then only visible to somebody who
-// opens the Admin screen and looks. For a one-person office that can be
-// weeks. This is the reading of those records, kept pure so both the
-// people who need it can share the wording: Home's attention strip calls
-// it in the browser, and the admin-digest function repeats it in
-// TypeScript to decide whether there is an email to send.
-//
-// Every item is a fact and a next step, deliberately in two halves: the
-// fact belongs on the strip whatever screen you are on, and the step has
-// to name where to look, because Home has no way to switch tabs for you.
-//
-// The core between the markers lives twice: here for Home's strip and in
-// supabase/functions/_shared/attention.ts for Ask's needs_attention, the
-// function's copy annotated; askTwins.test.mjs reads both files off disk
-// and compares them the way backupSchedule's twin is held. The dismissal
-// helpers below the core are the browser's alone.
+// What the office needs to be told — vite-app/src/attention.js's core,
+// typed, for Ask's needs_attention, so the card says exactly what Home's
+// strip says. Pure, no imports (backupShared.test.mjs guards that);
+// askTwins.test.mjs holds the core to the browser's copy. Interfaces sit
+// above the marker, where the twin has nothing to match.
 
-// ═══ shared core (twin: supabase/functions/_shared/attention.ts) ═══
+export interface ErrorRow { function_name?: string | null; created_at?: string | null }
+export interface LastRun { kind: string; status?: string | null; finished_at?: string | null; started_at?: string | null }
+export interface BackupState {
+  connection_error?: string | null; connected?: boolean | null; next_run_at?: string | null; last_run?: LastRun | null;
+}
+export interface AttentionItem { key: string; sig: string; text: string; where: string }
+
+// ═══ shared core (twin: vite-app/src/attention.js) ═══
 // The error log's window. A day, so "since yesterday" means the same
 // thing at 06:00 and at 23:00 — a window pinned to midnight would go
 // quiet every morning with the night's failures still unread.
@@ -38,7 +28,7 @@ export const OVERDUE_GRACE_MS = 6 * 60 * 60 * 1000;
 // backup_runs holds restores as well as backups, and "Last backup failed"
 // is the wrong sentence for a restore that died. Same kinds the panel
 // names, same words.
-export const KIND_WORDS = {
+export const KIND_WORDS: Record<string, string> = {
   backup: "backup",
   before_restore: "safety backup",
   restore_all: "restore",
@@ -49,7 +39,7 @@ export const KIND_WORDS = {
 // Plain distance in the past. Hours below a day because "0 days ago" is
 // not English, and a failure an hour old reads very differently from one
 // three days old — which is the whole point of putting it on the strip.
-export function agoPhrase(ms) {
+export function agoPhrase(ms: number): string {
   const d = Math.max(0, Number(ms) || 0);
   if (d < 3600000) return "less than an hour ago";
   if (d < 86400000) {
@@ -62,7 +52,7 @@ export function agoPhrase(ms) {
 
 // Which functions have been failing, busiest first, so the line names the
 // one worth opening rather than listing the log alphabetically.
-function byFunction(rows) {
+function byFunction(rows: ErrorRow[]): string[] {
   const counts = new Map();
   for (const r of rows) {
     const name = String((r && r.function_name) || "unknown");
@@ -77,10 +67,10 @@ function byFunction(rows) {
 // refused or never made); errors is the most recent function_errors rows;
 // now is a millisecond clock. Returns [] when there is nothing to say,
 // which is what keeps the strip off the board on an ordinary morning.
-export function attentionItems(backupState, errors, now) {
+export function attentionItems(backupState: BackupState | null | undefined, errors: ErrorRow[] | null | undefined, now: number): AttentionItem[] {
   const at = Number(now) || Date.now();
-  const s = backupState || {};
-  const items = [];
+  const s: BackupState = backupState || {};
+  const items: AttentionItem[] = [];
 
   // First, because it is the one that stops everything else: an expired
   // consent means no backup will run at all until somebody reconnects.
@@ -167,48 +157,3 @@ export function attentionItems(backupState, errors, now) {
 }
 
 // ═══ end shared core ═══
-
-// The strip can be waved away, and stays down until the trouble itself
-// changes. "The same trouble" is this signature: the ordered keys of what is
-// showing, each with a small mark of its own identity (sig above) — a
-// different refusal, a later failure, one more error each read as different.
-// An empty string is "nothing to say", which must never match a stored
-// dismissal, or a calm morning after a dismissed night would stay hidden.
-export function attentionSignature(items) {
-  return (items || []).map(i => `${i.key}:${i.sig || ""}`).join("|");
-}
-
-// Kept in Store (localStorage), per account on this device — the same shape
-// as help.tipsOff.<id>, and for the same reason: a shared tablet must not let
-// one Admin's dismissal silence the next. Store outlives the device cache, so
-// signing out and back in keeps a dismissal; a genuinely new problem carries
-// a new signature and returns regardless.
-export function attentionDismissedKey(userId) {
-  return "attention.dismissed." + userId;
-}
-
-// Is this exact set of problems the one this account last waved away? Only a
-// real signature can match — no account and no signature are never suppressed.
-export function attentionSuppressed(store, userId, signature) {
-  if (!userId || !signature) return false;
-  return store.load(attentionDismissedKey(userId), "") === signature;
-}
-
-// Remember that this account has read this exact set of problems. A missing
-// account or an empty signature writes nothing — there is nothing to dismiss.
-export function dismissAttention(store, userId, signature) {
-  if (!userId || !signature) return;
-  store.save(attentionDismissedKey(userId), signature);
-}
-
-// Forget the dismissal: the trouble it was for has cleared, and the next
-// trouble is news whatever it says. The one refusal whose words never change
-// — the drive's "invalid_grant" — signs identically the day it comes back,
-// and a dismissal that outlived the clearing kept it hidden for ever, with
-// backups not running and Home silent. Home calls this only once its reads
-// have answered: before then, and when a read failed, an empty signature
-// means "nothing could be read", not "all clear".
-export function clearDismissedAttention(store, userId) {
-  if (!userId) return;
-  store.save(attentionDismissedKey(userId), "");
-}

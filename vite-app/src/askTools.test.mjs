@@ -24,7 +24,7 @@ test("toolsFor offers exactly the tools behind the tabs held, and the price role
   assert.ok(toolsFor(["tracker"], "Admin").some(t => t.name === "chase_unsigned"));
   assert.ok(!toolsFor(["tracker"], "Coordinator").some(t => t.name === "chase_unsigned"));
   assert.deepEqual(toolsFor(["board", "job", "jha", "ticket"], "Helper").map(t => t.name),
-    ["find_client", "find_job", "job_record", "draft_job", "draft_jha", "list_jhas", "list_tickets", "send_jha", "list_reports", "schedule_send", "list_scheduled", "cancel_scheduled", "reschedule_send", "make_file", "list_learned", "forget_learned", "day_check", "set_reminder", "my_hours", "my_dose"]);
+    ["find_client", "find_job", "job_record", "draft_job", "draft_jha", "list_jhas", "list_tickets", "send_jha", "list_reports", "schedule_send", "list_scheduled", "cancel_scheduled", "reschedule_send", "make_file", "list_learned", "forget_learned", "day_check", "set_reminder", "my_hours", "my_dose", "open_record", "cancel_approval"]);
   assert.ok(toolsFor(["ticket"], "Technician").some(t => t.name === "draft_ticket"));
   assert.ok(toolsFor(["ticket"], "Admin").some(t => t.name === "draft_ticket"));
   assert.ok(!toolsFor(["ticket"], "Coordinator").some(t => t.name === "draft_ticket"));
@@ -130,4 +130,25 @@ test("the six helpers sit behind their screens, and the equipment filters are th
   assert.equal(traceLine("find_equipment", {}), "looked up equipment");
   assert.equal(traceLine("find_equipment", { search: "SN-1", filter: "Overdue" }), 'looked up equipment "SN-1" (Overdue)');
   assert.equal(traceLine("find_equipment", { filter: "All" }), "looked up equipment");
+});
+
+test("the five more sit behind their screens and roles", async () => {
+  const { OPEN_KINDS } = await import("../../supabase/functions/_shared/askTools.ts");
+  assert.deepEqual(OPEN_KINDS, ["job", "ticket", "jha", "report"]);
+  assert.ok(toolsFor(["job"], "Helper").some(t => t.name === "open_record"));
+  assert.ok(toolsFor(["ticket"], "Technician").some(t => t.name === "check_ticket"));
+  assert.ok(!toolsFor(["ticket"], "Coordinator").some(t => t.name === "check_ticket"));
+  assert.ok(toolsFor(["rates"], "Admin").some(t => t.name === "rate_card"));
+  assert.ok(!toolsFor(["rates"], "Helper").some(t => t.name === "rate_card"));
+  assert.ok(toolsFor(["board"], "Admin").some(t => t.name === "needs_attention"));
+  assert.ok(!toolsFor(["board"], "Coordinator").some(t => t.name === "needs_attention"));
+  assert.ok(toolsFor(["ticket"], "Helper").some(t => t.name === "cancel_approval"));
+  assert.ok(!toolsFor(["job"], "Helper").some(t => t.name === "cancel_approval"));
+  assert.equal(traceLine("open_record", { kind: "ticket", id: "T-10231" }), "proposed opening ticket T-10231");
+  assert.equal(traceLine("open_record", {}), "proposed opening a record");
+  assert.equal(traceLine("check_ticket", { ticket_id: "T-10231" }), "checked T-10231");
+  assert.equal(traceLine("rate_card", { client: "Pembina" }), "read Pembina's rate card");
+  assert.equal(traceLine("rate_card", { client: "Pembina", search: "standby" }), 'read Pembina\'s rate card for "standby"');
+  assert.equal(traceLine("needs_attention", {}), "read what needs attention");
+  assert.equal(traceLine("cancel_approval", { ticket_id: "T-10231" }), "proposed cancelling T-10231's approval");
 });

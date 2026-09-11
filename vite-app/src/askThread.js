@@ -49,7 +49,7 @@ export function dropAction(index) {
 // A proposal the card confirms in place — a send, a scheduled send, a
 // cancel — as against a draft, which opens a form. The button's word is
 // the action's.
-export const CONFIRM_KINDS = ["send_jha", "send_ticket_approval", "schedule_send", "cancel_scheduled", "reschedule_send", "forget_learned", "chase", "set_reminder"];
+export const CONFIRM_KINDS = ["send_jha", "send_ticket_approval", "schedule_send", "cancel_scheduled", "reschedule_send", "forget_learned", "chase", "set_reminder", "cancel_approval"];
 export function isConfirmAction(action) {
   return !!action && CONFIRM_KINDS.includes(action.kind);
 }
@@ -61,7 +61,14 @@ export function confirmLabel(action) {
   if (action.kind === "forget_learned") return "Forget it";
   if (action.kind === "chase") return "Chase";
   if (action.kind === "set_reminder") return "Set it";
+  if (action.kind === "cancel_approval") return "Cancel approval";
   return "Send";
+}
+
+// The button on a proposal that is not a confirm: a draft opens the app's
+// form; an open action (open_record) opens the record itself.
+export function formLabel(action) {
+  return action && action.kind === "open" ? "Open" : "Open the form";
 }
 
 export function threadForSend() { return turns.map(t => ({ role: t.role, text: t.text })); }
