@@ -120,12 +120,12 @@ export const HELP = {
   mail: {
     heading: "Admin",
     body: [
-      "The settings the app needs to be fully working. Admin-only; a save applies at once.",
-      "Email: the Resend key, the sending addresses, and the base address approval links are built from. Without a verified sending address, every send goes out under the mail service's test sender, which delivers only to the inbox the account was opened with. Test before trusting it.",
-      "Invoices: the terms, GST number and remit-to block the field invoice prints. The number is the app's own, stamped when a ticket is invoiced.",
-      "The error panel lists recent failures from the server-side functions, the log Home's attention strip counts.",
-      "Archive builds a year or a date range as one zip. It reads every PDF and renders every invoice, so a busy year takes an hour. Clearing those jobs afterwards is gated three ways: the zip is checked against the build, the jobs are counted again just before the delete, and CLEAR has to be typed.",
-      "Automatic backup writes every record and every PDF to a drive of the business's own, on a schedule, server-side. It restores two ways: chosen jobs, which deletes and overwrites nothing, or everything, which empties the database first behind four gates."
+      "Set up email, invoice details and backups here. Only Admins can change these settings. Changes take effect when you save.",
+      "Email: connect the email service, choose the addresses clients see, and enter the app's web address for approval links. Until your business's sending address is verified, test emails can only reach the inbox used to open the email-service account. Save your settings, then send a test email.",
+      "Invoices: enter your payment terms, GST number and payment instructions. The app assigns an invoice number when you mark a ticket invoiced.",
+      "Recent errors show tasks the app could not finish. These are also counted in Home's Needs attention section.",
+      "Archive downloads a copy of jobs from a year or date range, including their documents and invoices, in one ZIP file. Large archives can take a while. Downloading does not delete anything. To remove those jobs afterwards, the app checks your downloaded copy, checks the jobs again, and asks you to type CLEAR.",
+      "Automatic backup saves records and PDFs to your business's connected drive, even when the app is closed. You can bring back selected jobs without replacing existing work. Restoring everything replaces the app's current records and requires extra confirmation."
     ]
   }
 };

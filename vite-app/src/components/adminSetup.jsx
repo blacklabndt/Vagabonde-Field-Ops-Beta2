@@ -99,8 +99,8 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
         <h2 style={{ fontSize: 34, margin: 0 }}>Admin</h2>
       </div>
       <p style={{ maxWidth: 760, marginTop: 0, fontSize: 14, color: "color-mix(in srgb, var(--color-text) 70%, transparent)" }}>
-        The keys and addresses the app needs to be fully working, and where each one comes from.
-        Everything here is Admin-only; save applies immediately, no restart needed.
+        Set up email, invoice details and backups for your business.
+        Only Admins can change these settings. Save your changes to apply them.
       </p>
 
       <ErrorBox>{error}</ErrorBox>
@@ -122,11 +122,10 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
         <Blueprint style={{ padding: "18px 20px", borderColor: "var(--color-accent-700)", minWidth: 0 }}>
           <div style={SECTION_TITLE}>Archive</div>
           <div style={SECTION_HELP}>
-            Every job raised in a year or a date range, as one zip filed client → month → job: the job's details
-            as a text file, its hazard assessments and reports as the PDFs on file, and each ticket's field invoice.
-            Building changes nothing. Once the zip on this computer has been checked against what was built, the
-            dialog offers to clear those jobs from the app to start fresh — the only bulk delete there is, so it is
-            kept off Home and behind a typed confirmation.
+            Download jobs from a year or date range in one ZIP file, organised by client, month and job.
+            It includes job details, hazard assessments, reports and invoices. Downloading does not delete anything.
+            If you also want to remove those jobs from the app, you must first let the app check the downloaded
+            file, then type the confirmation word shown.
           </div>
           <select className="input" aria-label="Archive" value="" style={{ width: "auto", minHeight: 40 }}
             onChange={e => { if (e.target.value) setArchiveMode(e.target.value); }}>
@@ -145,13 +144,13 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
           <div style={SECTION_TITLE}>Email — reports &amp; billing approvals</div>
           <div style={SECTION_HELP}>
             Sent through <a href="https://resend.com" target="_blank" rel="noreferrer">Resend</a>.
-            Create a free account (3,000 emails/month), then <strong>API Keys → Create API Key</strong> with
-            sending access, and paste it here — that alone sends test emails to the Resend account&rsquo;s
-            own inbox, today. To email clients for real: <strong>Domains → Add Domain</strong>, add the DNS
-            records Resend shows you at your domain host, wait for it to verify, then fill in the two
-            sending addresses below — they must be on that verified domain (a personal
-            gmail/hotmail address can never send, and filling these too early turns off
-            the testing mode that can).
+            Create an account, then choose <strong>API Keys → Create API Key</strong> with sending access.
+            An API key is the connection code that lets this app use your email account. Paste it below.
+            You can then test sending to the inbox you used to sign up for Resend.
+            To send to clients, choose <strong>Domains → Add Domain</strong> in Resend and follow its
+            instructions to verify your business&rsquo;s email domain (the part after @).
+            Your website or email administrator can help with this step. Once verified, enter the two
+            sending addresses below. Use your business domain, not a personal Gmail or Hotmail address.
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <Field label="Resend API key">
@@ -189,12 +188,11 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
         </Blueprint>
 
         <Blueprint style={{ padding: "18px 20px", minWidth: 0 }}>
-          <div style={SECTION_TITLE}>Approval links — the app&rsquo;s public address</div>
+          <div style={SECTION_TITLE}>Client approval links</div>
           <div style={SECTION_HELP}>
-            A billing approval email carries a link the client&rsquo;s rep taps to sign. That link
-            points at the address below — the URL this app is hosted at, with no path on the end.
-            Left blank, links fall back to a plain, unstyled page that still works but looks like a
-            technical document rather than an invoice.
+            Clients use a link in their approval email to review and sign a ticket.
+            Enter this app&rsquo;s web address below, using the example shown beneath the box.
+            An app address must be configured before approval emails can be sent.
           </div>
           <Field label="App address">
             <input className="input" value={form.approvalBaseUrl}
@@ -215,13 +213,12 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
         <Blueprint style={{ padding: "18px 20px", minWidth: 0 }}>
           <div style={SECTION_TITLE}>Invoices</div>
           <div style={SECTION_HELP}>
-            What the field invoice prints besides the charges. A ticket takes its invoice number
-            the moment it is marked invoiced on the billing tracker &mdash; the numbers start at 1000,
-            run in order, and are never reused, so a ticket pulled back and re-invoiced keeps the
-            number the client already has. Anything left blank here simply doesn&rsquo;t print.
+            Add the payment details clients should see on each invoice. Leave a field blank to omit it.
+            The app assigns an invoice number when you mark a ticket invoiced in the billing tracker.
+            If you undo that step and invoice the ticket again, it keeps the same number.
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <Field label="Terms">
+            <Field label="Payment terms">
               <input className="input" value={form.invoiceTerms}
                 onChange={e => set("invoiceTerms", e.target.value)}
                 placeholder="Net 30 days — printed under the total"
@@ -233,7 +230,7 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
                 placeholder="123456789 RT0001 — printed under the company name"
                 style={{ width: "100%" }} />
             </Field>
-            <Field label="Remit to">
+            <Field label="Payment instructions">
               <textarea className="input" rows={4} value={form.invoiceRemitTo}
                 onChange={e => set("invoiceRemitTo", e.target.value)}
                 placeholder={"Where the money goes — printed under the total, line breaks kept.\nVagaboNDE Inc.\nPO Box 000, Grande Prairie, AB"}
@@ -243,11 +240,11 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
         </Blueprint>
 
         <Blueprint style={{ padding: "18px 20px", minWidth: 0 }}>
-          <div style={SECTION_TITLE}>Team chat GIFs</div>
+          <div style={SECTION_TITLE}>Chat GIFs and Ask assistant</div>
           <div style={SECTION_HELP}>
             The chat&rsquo;s GIF picker searches <a href="https://klipy.com" target="_blank" rel="noreferrer">KLIPY</a>.
-            Sign up for their free developer account, create an app, and paste its API key here.
-            Entirely optional — without it, chat works fine and the GIF button explains itself.
+            To enable GIF search, create an account and an app on KLIPY, then paste the API key
+            (connection code) it gives you below. This is optional; chat messages work without it.
           </div>
           <Field label="KLIPY API key">
             <input className="input" type="password" value={form.klipyApiKey}
@@ -257,7 +254,8 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
           <p className="body-s" style={{ marginTop: 14 }}>
             Ask &mdash; the button at the bottom right of every screen &mdash; answers questions
             with Claude, through <a href="https://console.anthropic.com" target="_blank" rel="noreferrer">Anthropic</a>.
-            Each question costs a fraction of a cent.
+            Paste an Anthropic API key (connection code) below to enable Ask.
+            Anthropic charges your account for its use.
           </p>
           <Field label="Anthropic API key">
             <input className="input" type="password" value={form.anthropicApiKey}
@@ -274,8 +272,8 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
         <Blueprint style={{ padding: "18px 20px", minWidth: 0 }}>
           <div style={SECTION_TITLE}>Send a test email</div>
           <div style={SECTION_HELP}>
-            Goes through the same path as a real report, so a delivered test means the email setup is
-            done. Save the settings first.
+            Save your settings, then send a test to an inbox you can check.
+            Confirm it arrives before using the app to email clients.
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <input className="input" value={testTo} onChange={e => setTestTo(e.target.value)}
@@ -467,10 +465,10 @@ function RecentErrorsPanel() {
         <div style={{ ...SECTION_TITLE, marginBottom: 0 }}>Recent background errors</div>
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {names.length > 1 && (
-            <select className="input" aria-label="Which function" value={fn}
+            <select className="input" aria-label="Which task" value={fn}
               style={{ width: "auto", minHeight: 34, padding: "4px 8px", fontSize: 13 }}
               onChange={e => { setFn(e.target.value); load(e.target.value); }}>
-              <option value="">All functions</option>
+              <option value="">All tasks</option>
               {names.map(n => <option key={n} value={n}>{n}</option>)}
             </select>
           )}
@@ -479,11 +477,12 @@ function RecentErrorsPanel() {
         </span>
       </div>
       <div style={{ fontSize: 12, color: "color-mix(in srgb, var(--color-text) 60%, transparent)", marginBottom: 14 }}>
-        Failures in report emails, ticket approvals, PDF rendering, and account removal — logged here so they don't go unnoticed.
+        Tasks the app could not finish, such as sending emails, creating PDFs or removing accounts.
+        The details below can help the person supporting your app investigate. Clearing this list does not fix the cause.
       </div>
       <ErrorBox>{err}</ErrorBox>
       {!loading && !errors.length && !err && (
-        <div style={{ fontSize: 13, color: "color-mix(in srgb, var(--color-text) 55%, transparent)" }}>Nothing logged — everything's been going through cleanly.</div>
+        <div style={{ fontSize: 13, color: "color-mix(in srgb, var(--color-text) 55%, transparent)" }}>No errors recorded.</div>
       )}
       {errors.length > 0 && (
         <div style={{ fontSize: 12, color: "color-mix(in srgb, var(--color-text) 55%, transparent)", marginBottom: 8 }}>
