@@ -1141,11 +1141,11 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   reads both files off disk, strips the types from the function's with
   Node's own stripper, folds the whitespace and compares them. Change one,
   change the other, in the same commit; an interface goes ABOVE the marker,
-  where the twin has nothing to match. Twenty-two shared modules — `backupSchedule.ts`,
+  where the twin has nothing to match. Twenty-three shared modules — `backupSchedule.ts`,
   `askTools.ts`, `askLoop.ts`, `askDrafts.ts`, `askSends.ts`, `scheduledSends.ts`, `askKnowledge.ts`, `askLearn.ts`, `askFiles.ts`,
   `emailIn.ts`, `chasePlan.ts`, `dayCheck.ts`, `hoursDose.ts`, `attention.ts`, `ticketCheck.ts`,
   `backupTables.ts`, `backupManifest.ts`, `backupRun.ts`, `backupOauth.ts`,
-  `drive.ts`, `gzip.ts` and `constantTime.ts` — are erasable TypeScript with
+  `drive.ts`, `gzip.ts`, `constantTime.ts` and `activeAdmin.ts` — are erasable TypeScript with
   no imports of their own (`backupManifest.ts` may name `backupSchedule.ts`,
   `backupOauth.ts` may name `constantTime.ts`, `scheduledSends.ts` may
   name `askSends.ts`, and nothing else), because
@@ -1265,6 +1265,26 @@ session has set `app.confirm_total_wipe = 'yes'`.
   account out of the API, not only the menu. delete-user locks (Auth ban +
   `profiles.deactivated_at` + no tabs) an account with work on file instead
   of deleting it, because the foreign keys keep history's names.
+- An Edge Function that switches to service authority asks
+  `requireActiveAdmin` in `_shared/adminGate.ts`, never the rank alone. The
+  decision is `adminRefusal` in `_shared/activeAdmin.ts` (pure, import-free,
+  in the guard list) and its order is the point: the read's own error first
+  (fail closed, 503 and words that say to try again — `const { data }` used
+  to discard it, so a database blink read as "no profile" and then as an
+  ordinary refusal), then `deactivated_at`, then at least one tab, then
+  Admin last so a locked Admin and a locked Helper hear the same sentence.
+  Every door selects `ADMIN_SELECT`, because a `select("role")` that forgot
+  the other two columns is how this was written the first time. Six doors
+  come through it: `requireAdmin` in backupCommon (and so `backupDoor` and
+  the three backup functions), create-user, delete-user, unlock-user,
+  password-reset, mail-test. Two states made it reachable — delete-user
+  locks the profile BEFORE it bans the Auth user and returns
+  `banFailed: true` when the ban does not land, and stripping every tab is a
+  revocation that needs nothing to fail at all. **unlock-user also refuses
+  its own caller** (`userId === callerId`, before the ban is lifted): an
+  unlock is the one act that undoes a removal permanently, so it does not
+  rest on a single check. delete-user has always refused its own caller;
+  that asymmetry is what hid it. `activeAdmin.test.mjs` holds all of it.
 - Filing a report needs the `upload` tab, never the `job` tab
   (20260904135107 §7): reports_insert and the storage `reports write`
   policy name upload alone, so a Helper — who holds job — cannot file a

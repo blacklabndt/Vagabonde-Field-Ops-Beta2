@@ -10,6 +10,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendSetPasswordLink } from "../_shared/setPassword.ts";
+import { requireActiveAdmin } from "../_shared/adminGate.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -25,25 +26,19 @@ Deno.serve(async (req) => {
   // Who is asking comes before anything is read from them: the parse below
   // throws on a malformed body, and the catch at the bottom writes that to
   // function_errors — a log an anonymous POST must not be able to fill.
-  const authHeader = req.headers.get("Authorization") ?? "";
-  const asUser = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    { global: { headers: { Authorization: authHeader } } }
-  );
-  const { data: { user } } = await asUser.auth.getUser();
-  if (!user) return json({ error: "Not signed in" }, 401);
+  // The whole question is adminGate's: signed in, a profile that is there,
+  // unlocked, holding a tab, and an Admin. The rank alone let a locked
+  // account through for as long as Auth still accepted its session — and
+  // the deactivation test below is the TARGET's, which never protected
+  // against a caller who had been removed.
+  const who = await requireActiveAdmin(req, "Only an Admin can send a set-password link");
+  if (who instanceof Response) return who;
 
   try {
     const { userId } = await req.json();
     // A guard against a client bug, so it should never fire — but whoever
     // reads it pressed a button, and a variable name tells them nothing.
     if (!userId) throw new Error("This request didn't say which account to send the link to. Reload the app and try again.");
-
-    const { data: callerProfile } = await asUser.from("profiles").select("role").eq("id", user.id).single();
-    if (!callerProfile || callerProfile.role !== "Admin") {
-      return json({ error: "Only an Admin can send a set-password link" }, 403);
-    }
 
     const admin = createClient(
       Deno.env.get("SUPABASE_URL")!,

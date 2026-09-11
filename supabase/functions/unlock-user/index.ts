@@ -18,6 +18,7 @@
 // Role dropdown's job.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { requireActiveAdmin } from "../_shared/adminGate.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -33,14 +34,14 @@ Deno.serve(async (req) => {
   // Who is asking comes before anything is read from them: the parse below
   // throws on a malformed body, and the catch at the bottom writes that to
   // function_errors — a log an anonymous POST must not be able to fill.
-  const authHeader = req.headers.get("Authorization") ?? "";
-  const asUser = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    { global: { headers: { Authorization: authHeader } } }
-  );
-  const { data: { user } } = await asUser.auth.getUser();
-  if (!user) return json({ error: "Not signed in" }, 401);
+  // The whole question is adminGate's: signed in, a profile that is there,
+  // unlocked, holding a tab, and an Admin. The rank alone let a locked
+  // account through for as long as Auth still accepted its session, and
+  // this is the function where that mattered most — see the self-unlock
+  // refusal below.
+  const who = await requireActiveAdmin(req, "Only an Admin can unlock an account");
+  if (who instanceof Response) return who;
+  const { userId: callerId } = who;
 
   try {
     const { userId } = await req.json();
@@ -48,11 +49,15 @@ Deno.serve(async (req) => {
     // reads it pressed a button, and a variable name tells them nothing.
     if (!userId) throw new Error("This request didn't say which account to unlock. Reload the app and try again.");
 
-    // Only an Admin may unlock an account — checked against the caller's own
-    // profile, read through RLS so this can't be spoofed by a non-admin JWT.
-    const { data: callerProfile } = await asUser.from("profiles").select("role").eq("id", user.id).single();
-    if (!callerProfile || callerProfile.role !== "Admin") {
-      return json({ error: "Only an Admin can unlock an account" }, 403);
+    // Nobody unlocks themselves. The gate above should already have refused
+    // a locked caller, but these are two different failures and either one
+    // alone is enough: an unlock is the one act that would UNDO a removal
+    // permanently — the ban lifted, the stamp cleared and the tabs written
+    // back from the role preset — so it does not rest on a single check.
+    // delete-user has refused its own caller from the start; this function
+    // went without, and the asymmetry is what hid it.
+    if (userId === callerId) {
+      return json({ error: "You can't unlock your own account. Ask another Admin to do it." }, 400);
     }
 
     const admin = createClient(

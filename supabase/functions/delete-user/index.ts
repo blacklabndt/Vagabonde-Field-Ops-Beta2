@@ -9,6 +9,7 @@
 // profile and the underlying auth account.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { requireActiveAdmin } from "../_shared/adminGate.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -20,17 +21,13 @@ Deno.serve(async (req) => {
 
   // Who is asking comes before anything is read from them: the parse below
   // throws on a malformed body, and the catch at the bottom writes that to
-  // function_errors — a log an anonymous POST must not be able to fill.
-  const authHeader = req.headers.get("Authorization") ?? "";
-  const asUser = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    { global: { headers: { Authorization: authHeader } } }
-  );
-  const { data: { user } } = await asUser.auth.getUser();
-  if (!user) return new Response(JSON.stringify({ error: "Not signed in" }), {
-    status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" }
-  });
+  // function_errors — a log an anonymous POST must not be able to fill. The
+  // whole question is adminGate's: signed in, a profile that is there,
+  // unlocked, holding a tab, and an Admin. The rank alone let a locked
+  // account through for as long as Auth still accepted its session.
+  const who = await requireActiveAdmin(req, "Only an Admin can remove an account");
+  if (who instanceof Response) return who;
+  const { userId: callerId } = who;
 
   try {
     const { userId } = await req.json();
@@ -38,15 +35,7 @@ Deno.serve(async (req) => {
     // reads it pressed a button, and a variable name tells them nothing.
     if (!userId) throw new Error("This request didn't say which account to remove. Reload the app and try again.");
 
-    // Only an Admin may remove an account — checked against the caller's own
-    // profile, read through RLS so this can't be spoofed by a non-admin JWT.
-    const { data: callerProfile } = await asUser.from("profiles").select("role").eq("id", user.id).single();
-    if (!callerProfile || callerProfile.role !== "Admin") {
-      return new Response(JSON.stringify({ error: "Only an Admin can remove an account" }), {
-        status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" }
-      });
-    }
-    if (userId === user.id) {
+    if (userId === callerId) {
       return new Response(JSON.stringify({ error: "You can't remove your own account" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }
       });

@@ -937,7 +937,7 @@ test("the shared modules read nothing from the world around them", () => {
   // this file outright; the assertion is here so the reason is named.
   for (const f of ["backupTables.ts", "backupManifest.ts", "drive.ts", "backupOauth.ts", "askTools.ts", "askLoop.ts", "askDrafts.ts", "askSends.ts", "scheduledSends.ts", "askKnowledge.ts", "askLearn.ts", "askFiles.ts",
     "emailIn.ts", "chasePlan.ts", "dayCheck.ts", "hoursDose.ts", "attention.ts", "ticketCheck.ts",
-    "backupRun.ts", "backupSchedule.ts", "gzip.ts", "constantTime.ts"]) {
+    "backupRun.ts", "backupSchedule.ts", "gzip.ts", "constantTime.ts", "activeAdmin.ts"]) {
     const src = read(`supabase/functions/_shared/${f}`);
     // Every import statement, however it is wrapped: the specifier is the
     // first quoted string after "from", or straight after "import" for a

@@ -15,6 +15,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendSetPasswordLink } from "../_shared/setPassword.ts";
+import { requireActiveAdmin } from "../_shared/adminGate.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -34,14 +35,11 @@ Deno.serve(async (req) => {
   // Who is asking comes before anything is read from them: the parse and the
   // checks below throw on junk, and the catch at the bottom writes that to
   // function_errors — a log an anonymous POST must not be able to fill.
-  const authHeader = req.headers.get("Authorization") ?? "";
-  const asUser = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    { global: { headers: { Authorization: authHeader } } }
-  );
-  const { data: { user } } = await asUser.auth.getUser();
-  if (!user) return json({ error: "Not signed in" }, 401);
+  // The whole question is adminGate's: signed in, a profile that is there,
+  // unlocked, holding a tab, and an Admin. The rank alone let a locked
+  // account through for as long as Auth still accepted its session.
+  const who = await requireActiveAdmin(req, "Only an Admin can create an account");
+  if (who instanceof Response) return who;
 
   try {
     const { email, password, name, role, cert, invite } = await req.json();
@@ -54,13 +52,6 @@ Deno.serve(async (req) => {
     const secret = invite ? crypto.randomUUID() + crypto.randomUUID() : password;
     if (!secret) throw new Error("No password came through, and this account wasn't set to be emailed a set-password link. Type a temporary password, or tick “Email them a link to set their own password”.");
     if (!VALID_ROLES.includes(role)) throw new Error("That isn't a role this app knows. Pick one of: " + VALID_ROLES.join(", ") + ".");
-
-    // Only an Admin may create an account — checked against the caller's
-    // own profile, read through RLS, exactly as delete-user does it.
-    const { data: callerProfile } = await asUser.from("profiles").select("role").eq("id", user.id).single();
-    if (!callerProfile || callerProfile.role !== "Admin") {
-      return json({ error: "Only an Admin can create an account" }, 403);
-    }
 
     const admin = createClient(
       Deno.env.get("SUPABASE_URL")!,

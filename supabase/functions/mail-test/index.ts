@@ -10,8 +10,8 @@
 // email — the response says which sender was used so the screen can
 // explain that.
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendMail, appSettings, corsHeaders, wrapEmail, esc, recipients } from "../_shared/mail.ts";
+import { requireActiveAdmin } from "../_shared/adminGate.ts";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -22,28 +22,27 @@ Deno.serve(async (req) => {
   // Who is asking comes before anything is read from them — the address check
   // below answers a stranger with a description of what it wanted, and this
   // family of functions all settles the caller first.
-  const authHeader = req.headers.get("Authorization") ?? "";
-  const asUser = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    { global: { headers: { Authorization: authHeader } } }
-  );
-  const { data: { user } } = await asUser.auth.getUser();
-  if (!user) return json({ error: "Not signed in" }, 401);
+  // The whole question is adminGate's: signed in, a profile that is there,
+  // unlocked, holding a tab, and an Admin. The rank alone let a locked
+  // account through for as long as Auth still accepted its session.
+  const who = await requireActiveAdmin(req, "Only an Admin can send a test email");
+  if (who instanceof Response) return who;
 
   try {
     const { to } = await req.json();
     const toList = recipients(to, "to");
 
-    const { data: callerProfile } = await asUser.from("profiles").select("role, name").eq("id", user.id).single();
-    if (!callerProfile || callerProfile.role !== "Admin") {
-      return json({ error: "Only an Admin can send a test email" }, 403);
-    }
+    // Only the name, and only for the sentence in the email — the gate has
+    // already decided whether this call happens at all. A name that could
+    // not be read is not a reason to refuse a test email.
+    const { data: me } = await who.asUser.from("profiles")
+      .select("name").eq("id", who.userId).maybeSingle();
+    const sentBy = (me as { name?: string | null } | null)?.name ?? "an Admin";
 
     const settings = await appSettings();
     const html = wrapEmail(`
 <h2 style="margin:0 0 10px;font-size:18px">Email is working</h2>
-<p>This is a test from VagaboNDE Field Ops, sent by ${esc(callerProfile.name)} from the Admin screen.</p>
+<p>This is a test from VagaboNDE Field Ops, sent by ${esc(sentBy)} from the Admin screen.</p>
 <p>It went out from <strong>${esc(settings.fromReports)}</strong> — if that is still Resend's onboarding address, the sending domain isn't verified yet and real recipients can't receive mail; once the domain is verified in Resend and the addresses are set, tests and real sends go anywhere.</p>`);
 
     await sendMail({

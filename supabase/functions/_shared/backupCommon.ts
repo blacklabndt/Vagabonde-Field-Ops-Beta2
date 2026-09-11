@@ -16,6 +16,7 @@ import { FILES_INDEX_NAME, RETRIES, parseFileIndex, retryDelayMs, worthAnotherGo
 import type { FileRecord } from "./backupRun.ts";
 import { gunzip } from "./gzip.ts";
 import { secretsMatch } from "./constantTime.ts";
+import { requireActiveAdmin } from "./adminGate.ts";
 
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -40,24 +41,13 @@ export const adminClient = (): SupabaseClient => createClient(
 // to function_errors — a log an anonymous POST must not be able to fill.
 //
 // Returns a Response when the caller is refused, and the caller's id when
-// they are not. Checked against their own profile through RLS, the way
-// delete-user does it, so a non-admin JWT cannot claim a rank.
+// they are not. The whole question lives in adminGate.ts now: this read the
+// rank alone, which admitted an account whose lock had been written but
+// whose Auth ban had not landed, and one whose tabs had all been taken.
 export async function requireAdmin(
   req: Request, refusal = "Only an Admin can set up the backup"
 ): Promise<{ userId: string } | Response> {
-  const asUser = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    { global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } } }
-  );
-  const { data: { user } } = await asUser.auth.getUser();
-  if (!user) return json({ error: "Not signed in" }, 401);
-
-  const { data: profile } = await asUser.from("profiles").select("role").eq("id", user.id).single();
-  if (!profile || profile.role !== "Admin") {
-    return json({ error: refusal }, 403);
-  }
-  return { userId: user.id };
+  return await requireActiveAdmin(req, refusal);
 }
 
 // The value the database signs its own calls with. It lives in
