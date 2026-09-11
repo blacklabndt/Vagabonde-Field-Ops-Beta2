@@ -157,6 +157,61 @@ const CHASE_READ_CAP = 1000;
 const given = (v: unknown, max = 200): string => String(v ?? "").trim().slice(0, max);
 // Words safe inside a PostgREST or() filter: the characters it reads as
 // syntax, and LIKE's own wildcards, become spaces.
+// What a question may weigh. Twenty-four turns of four thousand characters
+// is the conversation the loop will actually use, about 100 KB; 128 KiB
+// leaves room for the context block and the JSON around it and refuses
+// anything that could only be an attempt to spend the isolate's memory.
+const MAX_BODY_BYTES = 128 * 1024;
+const TOO_BIG = "That question is too long to send. Start a new conversation and ask again.";
+
+// The body, read with a ceiling — approve-ticket's shape, because the same
+// lesson applies: a Content-Length is whatever the caller typed, so the
+// bytes are counted as they arrive. Answers null when the ceiling is met.
+async function readBounded(req: Request, limit: number): Promise<string | null> {
+  const reader = req.body?.getReader();
+  if (!reader) return "";
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    size += value.length;
+    if (size > limit) { await reader.cancel().catch(() => {}); return null; }
+    parts.push(value);
+  }
+  const all = new Uint8Array(size);
+  let at = 0;
+  for (const p of parts) { all.set(p, at); at += p.length; }
+  return new TextDecoder().decode(all);
+}
+
+const ASK_TROUBLE = "Ask couldn't finish that one. Try again, and tell the office if it keeps happening.";
+
+// Whether a refusal was written to be READ by the person who asked.
+//
+// Two kinds of message reach the top-level catch. The sentences this
+// function raises itself are the answer — a gate refusing a send, a date
+// that is not a date, another technician's ticket — and a person can act on
+// every one of them. A message from PostgREST or Postgres is not: it names
+// columns, constraints and functions, and somebody who can make one appear
+// can map the schema an error at a time.
+//
+// This is allow-by-default and says so. Deny-by-default is the better shape
+// and it is a bigger change than this round: it needs every one of the
+// ninety-odd raise sites in this file to mark itself as ours, and a
+// half-marked file is worse than an honest filter. What is here refuses the
+// shapes a database actually produces — PostgREST's own codes, the standard
+// Postgres wordings, a SQLSTATE, and anything far longer than a sentence —
+// and the real words always go to function_errors either way, so nothing is
+// lost by masking too much.
+const DB_SHAPE = /PGRST\d|SQLSTATE|\bcolumn\b.*\bdoes not exist|\brelation\b.*\bdoes not exist|\bfunction\b.*\bdoes not exist|violates .*constraint|permission denied for|invalid input syntax|duplicate key value|null value in column|could not (?:connect|serialize)|deadlock detected|statement timeout|canceling statement/i;
+
+export function plainRefusal(message: string): boolean {
+  if (!message || message.length > 300) return false;
+  return !DB_SHAPE.test(message);
+}
+
 const likeSafe = (v: string): string => v.replace(/[%_,()\\]/g, " ").replace(/\s+/g, " ").trim();
 const later = (a: string | null, b: string | null): string | null => (!a ? (b || null) : !b ? a : (Date.parse(a) >= Date.parse(b) ? a : b));
 
@@ -180,7 +235,20 @@ Deno.serve(async (req) => {
     const tools = toolsFor(me.tab_access, me.role);
     if (!tools.length) return json({ answer: "Ask can't reach anything on the tabs you hold yet.", trace: [] });
 
-    const body = (await req.json().catch(() => null)) as { thread?: unknown; context?: unknown } | null;
+    // The body is measured before it is parsed. `req.json()` buffers the
+    // whole thing first and the windowing that bounds a conversation —
+    // twenty-four turns of four thousand characters — happens after that, so
+    // until here the only limit on what an account could send was the
+    // platform's. A megabyte of JSON costs the isolate its memory before a
+    // single rule of ours has run. Content-Length is a claim, so the stream
+    // is counted as well and stops at the same ceiling.
+    const claimed = Number(req.headers.get("content-length") ?? "0");
+    if (Number.isFinite(claimed) && claimed > MAX_BODY_BYTES) return json({ error: TOO_BIG }, 413);
+    const raw = await readBounded(req, MAX_BODY_BYTES);
+    if (raw === null) return json({ error: TOO_BIG }, 413);
+    let parsed: { thread?: unknown; context?: unknown } | null = null;
+    try { parsed = JSON.parse(raw) as { thread?: unknown; context?: unknown }; } catch { parsed = null; }
+    const body = parsed;
     const thread = body?.thread;
     if (!Array.isArray(thread) || !thread.length) return json({ error: "Ask needs a question" }, 400);
     // Where the person is — the screen, the open job and ticket, the
@@ -918,8 +986,17 @@ Deno.serve(async (req) => {
     });
   } catch (e) {
     const message = (e as Error).message;
+    // The office gets what happened; the browser gets something a person can
+    // act on. Two kinds of message end up here and only one of them was
+    // written to be read: the sentences this function raises itself — a gate
+    // refusing a send, a date that is not a date, a ticket that is another
+    // technician's — are the answer, and `plainRefusal` lets them through.
+    // A PostgREST or Postgres message is not: it names columns, constraints
+    // and functions, and a caller who can make one appear can map the schema
+    // an error at a time. It goes to function_errors, where the digest and
+    // Home's strip read it, and the person is told to try again.
     await logError("ask", message, { user: userId, tool });
-    return json({ error: message }, 400);
+    return json({ error: plainRefusal(message) ? message : ASK_TROUBLE }, 400);
   }
 });
 

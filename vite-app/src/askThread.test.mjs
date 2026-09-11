@@ -62,6 +62,76 @@ test("the words for a refused note never carry the database's own", () => {
     "a correction that failed and a note that failed are each recorded");
 });
 
+test("a refusal a person can act on reaches them; a database's words never do", () => {
+  // S6, the top level. Every error in the ask function funnels through one
+  // catch, and it used to return `e.message` whole — so a caller who could
+  // provoke a PostgREST error read column names, constraint names and
+  // function signatures out of the reply, one error at a time.
+  //
+  // The real regex is lifted out of the function rather than copied here: a
+  // copy would pass this test for ever while the shipped one drifted.
+  const src = readFileSync(new URL("../../supabase/functions/ask/index.ts", import.meta.url), "utf8");
+  const line = src.match(/^const DB_SHAPE = (\/.+\/[a-z]*);$/m);
+  assert.ok(line, "DB_SHAPE is a single-line regex literal the test can lift");
+  const body = line[1].slice(1, line[1].lastIndexOf("/"));
+  const flags = line[1].slice(line[1].lastIndexOf("/") + 1);
+  const shape = new RegExp(body, flags);
+  const plain = (m) => Boolean(m) && m.length <= 300 && !shape.test(m);
+
+  // Ours. Written for whoever pressed the button, and they pass.
+  for (const m of [
+    "That ticket is another technician's.",
+    "That account has already taught Ask as much as it can hold (40 notes). Delete one before adding another.",
+    "2026-11-31 is not a day November has.",
+    "Ask has no key. An Admin can add one on the Admin screen.",
+    "That send is already gone.",
+    "You do not have the tab that would let Ask read tickets."
+  ]) assert.equal(plain(m), true, `ours should reach the person: ${m}`);
+
+  // The database's. Every one of these names something the caller should
+  // not learn from a reply.
+  for (const m of [
+    'column tickets.approval_token does not exist',
+    'new row for relation "ask_learned" violates check constraint "ask_learned_note_check"',
+    'permission denied for table profiles',
+    'invalid input syntax for type uuid: "x"',
+    'duplicate key value violates unique constraint "tickets_client_key_key"',
+    'null value in column "profile_id" of relation "ticket_crew" violates not-null constraint',
+    'Could not find the function public.replace_learned(uuid, text) in the schema cache (PGRST202)',
+    'canceling statement due to statement timeout',
+    'deadlock detected',
+    'relation "private.internal_config" does not exist'
+  ]) assert.equal(plain(m), false, `the database's should be masked: ${m}`);
+
+  // And the catch actually uses it, with the real words still logged.
+  const tail = src.slice(src.lastIndexOf("} catch (e) {"));
+  assert.match(tail, /await logError\("ask", message/, "the office still gets what happened");
+  assert.match(tail, /plainRefusal\(message\) \? message : ASK_TROUBLE/,
+    "and the browser gets the fixed sentence unless the words were ours");
+  assert.doesNotMatch(tail, /error: message \}/, "never the raw message");
+});
+
+test("a question too heavy to be a question is refused before it is parsed", () => {
+  // S5: `await req.json()` read the whole body into the isolate's memory
+  // before anything judged it, so one signed-in account could spend the
+  // function's memory with a single request.
+  const src = readFileSync(new URL("../../supabase/functions/ask/index.ts", import.meta.url), "utf8");
+  const at = src.indexOf("const claimed = Number(req.headers.get(\"content-length\")");
+  assert.ok(at > 0, "the entry point weighs the body");
+  const entry = src.slice(at, at + 600);
+  assert.match(entry, /readBounded\(req, MAX_BODY_BYTES\)/, "and counts the bytes as they arrive");
+  assert.match(entry, /413/, "over the ceiling is refused with a status that says why");
+
+  // The header is a claim, not a measurement — the reader is the gate.
+  const reader = src.slice(src.indexOf("async function readBounded("), src.indexOf("const ASK_TROUBLE"));
+  assert.match(reader, /size > limit/, "the ceiling is met on the bytes themselves");
+  assert.match(reader, /reader\.cancel\(\)/, "and the rest is never read");
+
+  // A body that is not JSON is a refusal, not a crash.
+  assert.match(src.slice(at, at + 900), /catch \{ parsed = null/,
+    "unparseable is an answer, not a 500");
+});
+
 test("a proposal the card confirms in place is told from a draft by its kind, and the button says what it does", () => {
   assert.equal(isConfirmAction({ kind: "send_jha" }), true);
   assert.equal(isConfirmAction({ kind: "send_ticket_approval" }), true);
