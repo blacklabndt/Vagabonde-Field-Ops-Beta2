@@ -24,7 +24,9 @@ export function todayIn(nowMs: number, zone = ZONE): string {
 }
 
 export function isDay(v: unknown): v is string {
-  return typeof v === "string" && DAY.test(v) && !Number.isNaN(Date.parse(v));
+  if (typeof v !== "string" || !DAY.test(v)) return false;
+  const date = new Date(v);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === v;
 }
 
 const ymd = (day: string): [number, number, number] => {

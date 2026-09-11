@@ -1,5 +1,5 @@
 import { sbClient, VAPID_PUBLIC_KEY } from "./config.js";
-import { money, todayLocal, localDate, dayMonth, ticketDateStamp, primaryContact, ageInDays, storageKeySafe, STANDARD_RATE_LINES, nonNegative, lineTotal, decimalString, ticketStatusWriteRefusal, gstRateOf } from "./data.js";
+import { money, todayLocal, localDate, dayMonth, ticketDateStamp, primaryContact, ageInDays, storageKeySafe, STANDARD_RATE_LINES, nonNegative, lineTotal, decimalString, ticketStatusWriteRefusal, gstRateOf, billableNumber, storedNumber } from "./data.js";
 import { OfflineCache } from "./offlineCache.js";
 import { Toasts } from "./toastBus.js";
 import { OfflineQueue, isNetworkError } from "./offlineQueue.js";
@@ -274,6 +274,18 @@ async function cached(key, fetcher) {
 // Rates and quantities both come off the ticket screen, so they are floored
 // together on the way in — and the total is recomputed from the floored
 // figures, never from what the caller worked out.
+//
+// It floors and does not round, and it does not refuse: the precision a
+// line already carries is preserved verbatim. A ticket holds lines the rate
+// card no longer offers — linesToForm hands them back as orphans, rate and
+// all, and buildLines writes them back — so a rate filed at three decimals
+// arrives here through no fault of the person saving. Refusing it made the
+// ticket unsaveable by anybody, including the offline replay, with the
+// figure read-only on the screen; rounding it would rewrite a bill the
+// client has already been shown. The arithmetic takes any scale now
+// (lineTotal, exact decimal), so neither is needed. Precision is still
+// capped where a person TYPES a figure — NumField's decimals, and
+// billableNumber at the rate-card write below.
 const cleanLine = l => ({
   kind: l.kind, label: l.label, unit: l.unit,
   quantity: nonNegative(l.quantity), unit_rate: nonNegative(l.unit_rate)
@@ -413,13 +425,21 @@ function shapeJobTicket(t) {
 const JOB_TICKET_COLUMNS = "id, job_id, work_date, status, total, created_at, technician_id, profiles(name)";
 
 // Everything the archive's job text file says about a ticket, in one row.
-const ARCHIVE_TICKET_COLUMNS = "id, work_date, status, total, delays, client_contact, contractor_contact, approved_at, approved_by_email, approval_sent_at, approval_sent_to, invoiced_at, queried_at, query_text, query_by, profiles(name), ticket_lines(kind, label, unit, quantity, unit_rate, line_order)";
+// gst_rate is the rate this ticket was actually billed at, reserved on its
+// first approval attempt or first invoicing. The archive is the record of
+// what was billed, so it prints that and not the client's rate today — a
+// client made exempt this year must not re-rate last year's folder.
+const ARCHIVE_TICKET_COLUMNS = "id, work_date, status, total, gst_rate, delays, client_contact, contractor_contact, approved_at, approved_by_email, approval_sent_at, approval_sent_to, invoiced_at, queried_at, query_text, query_by, profiles(name), ticket_lines(kind, label, unit, quantity, unit_rate, line_order)";
 function shapeArchiveTicket(t) {
   // line_order is the column the invoice prints by; PostgREST hands embedded
   // rows over in heap order, so the archive has to put them back in it.
   const lines = [...(t.ticket_lines || [])].sort((a, b) => Number(a.line_order || 0) - Number(b.line_order || 0));
   return {
-    id: t.id, workDate: t.work_date, status: t.status, total: Number(t.total || 0), delays: t.delays || "",
+    id: t.id, workDate: t.work_date, status: t.status, total: Number(t.total || 0),
+    // Null on a ticket from before the snapshot existed: archiveGstRate reads
+    // that absence as the job's client rate, the way it always did.
+    gstRate: t.gst_rate == null ? null : Number(t.gst_rate),
+    delays: t.delays || "",
     clientContact: t.client_contact ? t.client_contact.name : "",
     contractorContact: t.contractor_contact ? t.contractor_contact.name : "",
     approvedAt: t.approved_at, approvedBy: t.approved_by_email || "",
@@ -2518,11 +2538,14 @@ export const Db = {
       const { error } = await sbClient.from("ticket_crew").upsert(
         crew.map(c => ({
           ticket_id: ticketId, profile_id: c.profileId, crew_role: c.role || "Technician",
-          // Hours and mileage bill exactly like a quantity does, and dose is a
-          // physical reading — none of them go below zero.
-          straight_hours: nonNegative(c.straight), ot_hours: nonNegative(c.ot),
-          solo_hours: nonNegative(c.solo), solo_ot_hours: nonNegative(c.soloOt),
-          dose_mr: nonNegative(c.dose), mileage_km: nonNegative(c.mileage)
+          // None of them go below zero, and none of them is written at a
+          // precision the column cannot hold: hours and dose to hundredths,
+          // mileage to tenths, which is what Postgres would round them to
+          // anyway. Rounded and not refused, unlike a billing quantity —
+          // storedNumber in data.js says why.
+          straight_hours: storedNumber(c.straight, 2), ot_hours: storedNumber(c.ot, 2),
+          solo_hours: storedNumber(c.solo, 2), solo_ot_hours: storedNumber(c.soloOt, 2),
+          dose_mr: storedNumber(c.dose, 2), mileage_km: storedNumber(c.mileage, 1)
         })),
         { onConflict: "ticket_id,profile_id" }
       );
@@ -2730,10 +2753,21 @@ export const Db = {
       job: t.job_number || "", project: t.project || "", client: t.client_name || "",
       chasedAt: t.chased_at || null, invoicedAt: t.invoiced_at || null,
       queriedAt: t.queried_at || null, queryText: t.query_text || "", queryBy: t.query_by || "",
-      // Not money: the client's tax rate, their id, and the number an
-      // invoice went out under, for the tracker and the accounting export.
-      // Absent on a database before 20260906 — the export reads absence as
-      // the ordinary 5% and a blank cell.
+      // Not money: the tax rate this ticket is billed at, the client's id,
+      // and the number an invoice went out under, for the tracker and the
+      // accounting export. Absent on a database before 20260906 — the export
+      // reads absence as the ordinary 5% and a blank cell.
+      //
+      // `client_gst_rate` is the RPC's column name and no longer the whole
+      // truth about what is in it: the GST snapshot migration redefines
+      // search_tickets to return coalesce(t.gst_rate, c.gst_rate), so this is
+      // the rate RESERVED ON THE TICKET where there is one and the client's
+      // rate today only where there is not. The name is kept because
+      // renaming an RPC's output column breaks every reader of it at once;
+      // what it means is here. Before that migration is applied it is the
+      // client's rate in every case, which is the behaviour the snapshot
+      // exists to end — so the tracker and the CSV re-rate a signed ticket
+      // after a client is made exempt until the migration lands.
       gstRate: t.client_gst_rate == null ? null : Number(t.client_gst_rate),
       clientId: t.client_id || null,
       // undefined when the column is not on this database at all (the RPC
@@ -3192,7 +3226,7 @@ export const Db = {
   // One ticket with its lines, for reopening a draft in the billing screen.
   async getTicket(ticketId) {
     const { data, error } = await sbClient.from("tickets")
-      .select("id, job_id, technician_id, work_date, status, total, delays, client_contact, contractor_contact, ticket_lines(kind, label, unit, quantity, unit_rate)")
+      .select("id, job_id, technician_id, work_date, status, total, gst_rate, delays, client_contact, contractor_contact, ticket_lines(kind, label, unit, quantity, unit_rate)")
       .eq("id", ticketId).single();
     if (error) throw error;
     rememberTicketPart(ticketId, { lines: data.ticket_lines || [], delays: data.delays });
@@ -3521,13 +3555,13 @@ export const Db = {
   // database rejects one outright; clamping here means the field just refuses
   // to go below zero instead of surfacing a constraint violation.
   async setRateLine(id, rate) {
-    const { error } = await sbClient.from("rate_lines").update({ rate: nonNegative(rate) }).eq("id", id);
+    const { error } = await sbClient.from("rate_lines").update({ rate: billableNumber(rate, 2, "Rate") }).eq("id", id);
     if (error) throw error;
   },
 
   async addRateLine({ scheduleId, kind, label, unit, rate, position = null }) {
     const { data, error } = await sbClient.from("rate_lines")
-      .insert({ schedule_id: scheduleId, kind, label, unit, rate: nonNegative(rate), position }).select().single();
+      .insert({ schedule_id: scheduleId, kind, label, unit, rate: billableNumber(rate, 2, "Rate"), position }).select().single();
     if (error) throw error;
     return data;
   },

@@ -5,6 +5,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { todayIn, isDay, payPeriodFor, quarterFor, periodFrom, periodWords, sumHours, MAX_PERIOD_MS } from "../../supabase/functions/_shared/hoursDose.ts";
 
+test("periods refuse nonexistent dates before a database read", () => {
+  const fallback = { start: "2026-09-01", end: "2026-09-15" };
+  for (const day of ["2026-02-29", "2026-02-30", "2026-02-31", "2026-04-31"]) {
+    assert.equal(isDay(day), false, day);
+    assert.throws(() => periodFrom(day, "2026-05-01", fallback), /both start and end/);
+  }
+  assert.equal(isDay("2028-02-29"), true);
+});
+
 test("today is Grande Prairie's date, not UTC's", () => {
   // 2026-09-11 03:30 UTC is still 10 Sept in Alberta.
   assert.equal(todayIn(Date.UTC(2026, 8, 11, 3, 30)), "2026-09-10");

@@ -1,0 +1,5 @@
+﻿[
+ {"id":"quantity-wobble","quantity":"0.5005","unit_rate":"100","stored":"50.05"},
+ {"id":"candidate-without-mismatch","quantity":"1","unit_rate":"1.001","stored":"1.00"},
+ {"id":"rate-wobble","quantity":"1000","unit_rate":"0.575","stored":"575.00"}
+]

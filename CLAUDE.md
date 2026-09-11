@@ -1,5 +1,40 @@
 # VagaboNDE Field Ops — Beta 2
 
+## Pending: review fixes need the tax migration before deployment
+
+The Codex review fixes are in this worktree. Before deploying the app or
+approval functions, apply `supabase/handover/draft-ticket-gst-snapshot.sql`,
+run `supabase/handover/probes-ticket-gst-snapshot.sql`, then file the applied
+SQL under migrations with the applier's version. The draft has NOT been
+applied from this session. No historical GST rates are backfilled.
+
+The first approval attempt reserves `tickets.gst_rate` through the service-only
+`freeze_ticket_gst` RPC before rendering/sending; retries, withdrawals and
+un-invoicing keep it. First invoicing stamps any remaining null. A failed mail
+keeps the reserved rate but does not mark approval sent. Invoice, tracker/CSV
+and reopened-ticket readers prefer the snapshot; null legacy rows retain the
+client-rate fallback. Column UPDATE grants protect the snapshot; a restrictive
+INSERT policy keeps client-created tickets null.
+
+Invoice, tracker/CSV, the reopened ticket editor and the ARCHIVE all read the
+snapshot first: `archiveGstRate` in archive.js gives Job details.txt each
+ticket's own rate, so the summary and the invoice HTML beside it cannot
+disagree after a client is re-rated.
+
+Numeric inputs allow three decimal places by default and two for money;
+`step` still only decides whole versus fractional input. `billableNumber`
+also rejects excess precision at rate/ticket writes, including old queued
+drafts. The crew boxes ask for two, because hours and dose are
+numeric(6,2)/(8,2) and mileage numeric(8,1): `storedNumber` rounds them to
+what the column holds at the write rather than refusing, since crew rows are
+the timesheet and never a bill, and a queued replay carrying somebody's pay
+has to land. Ask hours now walks crew IDs to an empty page; backup table reads
+also stop only on an empty page while honoring the part row budget. Ask's
+calendar-date validation rejects rolled-over dates.
+
+Verification and the remaining deployment steps are in
+`docs/reviews/2026-09-11-beta2-fixes.md`.
+
 RT weld-inspection field app for a crew in Grande Prairie, AB. Beta 2 opened
 on 7 Sept 2026 from Beta 1's last commit (7cb2b93, repo
 `Vagabonde-Field-Ops-Beta1`, now the frozen release); it deploys to the SAME

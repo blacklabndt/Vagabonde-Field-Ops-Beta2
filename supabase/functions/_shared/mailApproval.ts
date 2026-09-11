@@ -33,6 +33,12 @@ const money = (n: number) =>
 export async function mailApproval(
   admin: SupabaseClient, ticketId: string, to: string, cc: string | undefined, sentBy: string, settings: AppSettings
 ): Promise<{ ok: true }> {
+  // Reserve once, before rendering or sending. Concurrent sends and retries
+  // must use the same rate even if an Admin edits the client meanwhile.
+  // A failed email keeps this reservation but never marks approval sent.
+  const { error: gstErr } = await admin.rpc("freeze_ticket_gst", { p_ticket_id: ticketId });
+  if (gstErr) throw new Error(`The ticket's tax rate could not be saved: ${gstErr.message}`);
+
   // 30 days to sign. Long enough to survive a rep's holiday, short enough
   // that a stale forwarded email stops opening a ticket nobody has signed.
   const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");

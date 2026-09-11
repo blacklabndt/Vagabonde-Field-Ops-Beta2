@@ -309,6 +309,123 @@ export const nonNegative = value => {
   return Number.isFinite(n) && n > 0 ? n : 0;
 };
 
+// Persist the same precision the invoice prices. Refuse excess digits from
+// an older offline draft or programmatic save instead of silently changing
+// its bill. Allow only the insignificant residue of floating-point sums.
+export const billableNumber = (value, decimals, label) => {
+  const n = nonNegative(value);
+  const rounded = Number(n.toFixed(decimals));
+  if (Math.abs(n - rounded) > Number.EPSILON * Math.max(1, n) * 2) {
+    throw new Error(`${label} allows at most ${decimals} decimal places — correct the value before saving.`);
+  }
+  return rounded;
+};
+
+// ═══ shared core: exact decimal arithmetic ═══════════════════════════════
+// Postgres numeric is exact decimal and its round() goes half away from
+// zero. A double is neither. Anything that has to agree with the database
+// to the cent therefore works on the DIGITS of the number as written, and
+// never on the value a float happens to hold: 0.575 is really
+// 0.5749999999999999556 in a double, so `Math.round(rate * 100)` read a
+// legitimate three-decimal rate as 0.57 and put a 1,000-unit line five
+// dollars under the trigger's own round(quantity * unit_rate, 2). The old
+// formula was right only while every rate had two decimals and every
+// quantity three — an assumption nothing in the database enforces, since
+// ticket_lines.quantity and unit_rate are bare `numeric`.
+//
+// This block is a TWIN: the same text lives in vite-app/src/data.js and in
+// supabase/functions/_shared/invoice.ts, which cannot import each other.
+// billingTwins.test.mjs reads both off disk, strips the types from the
+// function's copy and compares them. Change one, change the other, in the
+// same commit.
+
+// A written number as an exact integer mantissa and the scale it sits at:
+// "0.575" is 575 at scale 3. Exponent notation counts, because String()
+// writes a small enough number that way (5e-7) and reading the digits
+// alone would drop the exponent and price the line a millionfold wrong.
+// Anything that is not a plain number answers null, and the callers read
+// that as zero — the same thing the float formula did with a NaN.
+const decimalParts = (value) => {
+  const m = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(String(value ?? "").trim());
+  if (!m || (!m[2] && !m[3])) return null;
+  const digits = (m[2] || "") + (m[3] || "");
+  let scale = (m[3] || "").length - Number(m[4] || 0);
+  let mantissa = BigInt(digits) * (m[1] === "-" ? -1n : 1n);
+  // A negative scale is a number whose digits do not carry their own
+  // trailing zeros (1e3): hand them to the mantissa, so every pair below
+  // multiplies and rounds at a scale of zero or more.
+  if (scale < 0) { mantissa *= 10n ** BigInt(-scale); scale = 0; }
+  return { mantissa, scale };
+};
+
+// `mantissa` at `scale`, rounded to `decimals`, half away from zero — the
+// rule Postgres round() follows, and the reason toFixed is not it:
+// (2.675).toFixed(2) is "2.67", because the double is a hair under the
+// half and toFixed is honest about it. The column is not.
+const roundScaled = (mantissa, scale, decimals) => {
+  if (scale <= decimals) return mantissa * 10n ** BigInt(decimals - scale);
+  const drop = 10n ** BigInt(scale - decimals);
+  const neg = mantissa < 0n;
+  const abs = neg ? -mantissa : mantissa;
+  const whole = abs / drop;
+  const up = (abs % drop) * 2n >= drop ? whole + 1n : whole;
+  return neg ? -up : up;
+};
+
+// quantity × rate in whole cents, exactly as round(quantity * unit_rate, 2)
+// computes it in the database — at any scale on either side. A rate
+// carrying a third decimal is a rate somebody agreed to, not a figure to
+// flatten on the way to the bill.
+const exactCents = (quantity, unitRate) => {
+  const q = decimalParts(quantity), r = decimalParts(unitRate);
+  if (!q || !r) return 0;
+  return Number(roundScaled(q.mantissa * r.mantissa, q.scale + r.scale, 2));
+};
+
+// A number rounded to `decimals` the way the column itself would round it.
+// Exported from both copies although only the app's has a caller today
+// (storedNumber): the twin is compared as text, so the two must say the
+// same word here, and a rounder the invoice cannot reach is a rounder
+// somebody writes a second time.
+export const exactRound = (value, decimals) => {
+  const p = decimalParts(value);
+  if (!p) return 0;
+  return Number(roundScaled(p.mantissa, p.scale, decimals)) / 10 ** decimals;
+};
+
+// A percentage of a whole-cent subtotal, in whole cents. The tax line, and
+// the last float in the money path: `Math.round(cents * (rate / 100))`
+// divides in binary first, and rate/100 is inexact for most rates, so a
+// product landing on an exact half cent can fall the wrong side of it.
+// $50.00 at 0.03% is 1.5 cents exactly, which is 2; the float said 1.
+// Dividing by a hundred is two more decimal places on the product, and the
+// answer is whole cents, so it rounds at zero.
+export const exactPercentCents = (subtotalCents, ratePercent) => {
+  const s = decimalParts(subtotalCents), r = decimalParts(ratePercent);
+  if (!s || !r) return 0;
+  return Number(roundScaled(s.mantissa * r.mantissa, s.scale + r.scale + 2, 0));
+};
+// ═══ end shared core ═════════════════════════════════════════════════════
+
+// What the column will actually hold. The crew's hours and dose are
+// numeric(6,2) and numeric(8,2), mileage numeric(8,1): Postgres rounds a
+// longer figure on the way in, so the app rounds it the same way and the
+// screen stops showing a figure the database did not keep.
+//
+// It rounds where billableNumber refuses, and the difference is deliberate.
+// A billing quantity is the client's money and a third decimal there means
+// the invoice and the stored total disagree, so it is refused. Crew hours are
+// the timesheet and the dose record — billing is per truck, not per
+// technician, and nothing here reaches a bill — so a recovery copy or a
+// queued replay made before the boxes capped their decimals must still land
+// rather than stranding somebody's pay in the outbox.
+// Rounded the way the COLUMN rounds, not the way toFixed does: 2.675 hours
+// is 2.68 in numeric(6,2) and "2.67" to toFixed, and 12.35 km is 12.4 in
+// numeric(8,1) and "12.3" to toFixed. A tenth of a kilometre is nobody's
+// pay, but a function whose whole job is to say what the column will hold
+// must not be the one place in the app that rounds by a different rule.
+export const storedNumber = (value, decimals) => exactRound(nonNegative(value), decimals);
+
 // What a typed number means. "1,5" is one and a half; "1,200" is twelve
 // hundred — on this crew's keyboards a comma before exactly three trailing
 // digits is a thousands separator, and reading it as the decimal point
@@ -340,12 +457,15 @@ export const decimalString = value => {
 // the triggers, after the audit found half an hour at a $9.25 rate could
 // not be saved: the stored total rounded to 4.63 while the balance check
 // summed the exact 4.625, and the database refused its own arithmetic.
-// Whole cents times thousandths of a unit, in integers: the float product of
-// 1.5 and 60.05 is 90.07499999999999, which rounds a cent below the
-// round(quantity * unit_rate, 2) the trigger stores in tickets.total. A
-// quantity is at most thousandths (CATALOG_STEP: halves and tenths).
-export const lineTotal = (quantity, unitRate) =>
-  Math.round(Math.round(Number(quantity || 0) * 1000) * Math.round(Number(unitRate || 0) * 100) / 1000) / 100;
+// Exact decimal, in integer cents, at whatever scale the two figures carry:
+// the float product of 1.5 and 60.05 is 90.07499999999999, which rounds a
+// cent below the round(quantity * unit_rate, 2) the trigger stores in
+// tickets.total. It used to scale the rate to whole cents first, which was
+// right only while every rate had two decimals — a line filed at 0.575
+// billed as 0.57 and put a 1,000-unit line five dollars under the stored
+// figure. `exactCents` in the shared core above says how, and invoice.ts
+// carries the same block so the printed bill cannot disagree with it.
+export const lineTotal = (quantity, unitRate) => exactCents(quantity, unitRate) / 100;
 
 // What a day's work can plausibly hold, per unit of the rate card. None of
 // these is a limit — a ticket may legitimately carry any of them — they are
@@ -424,7 +544,7 @@ export const gstLabel = ratePercent => {
 // Mirrored in supabase/functions/_shared/invoice.ts. The two must agree to
 // the cent or the app and the client's copy quote different totals.
 export const gstOn = (subtotal, ratePercent = GST_RATE_DEFAULT) =>
-  Math.round(Math.round(subtotal * 100) * (gstRateOf(ratePercent) / 100)) / 100;
+  exactPercentCents(Math.round(subtotal * 100), gstRateOf(ratePercent)) / 100;
 
 // Storage object keys are stricter than filenames: the API refuses
 // non-ASCII outright ("Invalid key"), % breaks the request before it

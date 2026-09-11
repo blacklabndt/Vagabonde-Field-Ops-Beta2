@@ -154,6 +154,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
   // "Start empty" does on a reopened draft — see discardRecovered.
   const skipWipWrite = useRef(false);
   const [ticketId, setTicketId] = useState(ticket || "");
+  const [ticketGstRate, setTicketGstRate] = useState(null);
   // A reopened draft has to finish loading before its zeros can be trusted as
   // zeros rather than as "not read yet".
   const [loadingTicket, setLoadingTicket] = useState(!!ticket);
@@ -373,6 +374,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
         return;
       }
       draftRows.current = row.ticket_lines || [];
+      setTicketGstRate(row.gst_rate ?? null);
       const { welds, others, orphans } = linesToForm(row.ticket_lines, true, rates);
       setWeldLines(welds);
       setOtherLines(others);
@@ -640,11 +642,9 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
   const orphanCents = orphanLines.reduce((s, l) => s + Math.round(lineTotal(l.quantity, l.unit_rate) * 100), 0);
   const orphanDollars = orphanCents / 100;
   const total = (centsOf(weldRows) + centsOf(otherRows) + orphanCents) / 100;
-  // This client's own GST rate, which is 5% for almost everyone and zero for
-  // the exempt ones. Read off the job because that is where the client is;
-  // gstRateOf reads a job with no rate on it — one cached before the column
-  // existed — as 5%, never as exempt.
-  const gstRate = gstRateOf(job && job.clientGstRate);
+  // A withdrawn/reopened ticket retains the rate reserved for its first
+  // approval attempt. Unsnapshotted drafts still use the client's rate.
+  const gstRate = gstRateOf(ticketGstRate ?? (job && job.clientGstRate));
   const gst = gstOn(total, gstRate);
   // The figure with the tax on it — what the rep signs for. Worked out once,
   // in integer cents, because the totals block and the bar at the foot of the
@@ -1323,12 +1323,17 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
                   )}
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                  {/* Two places, not three: these columns are numeric(6,2),
+                      so a third digit is rounded away by the database and the
+                      figure on the screen stops being the figure on the
+                      timesheet. The quarter hour (2.25) still types. Dose is
+                      numeric(8,2) and asks the same. */}
                   <Field label="Reg hrs">
-                    <NumField step="0.5" style={{ textAlign: "right" }} value={c.straight}
+                    <NumField step="0.5" decimals={2} style={{ textAlign: "right" }} value={c.straight}
                       onChange={v => setCrewField(c.profileId, "straight", v)} />
                   </Field>
                   <Field label="OT hrs">
-                    <NumField step="0.5" style={{ textAlign: "right" }} value={c.ot}
+                    <NumField step="0.5" decimals={2} style={{ textAlign: "right" }} value={c.ot}
                       onChange={v => setCrewField(c.profileId, "ot", v)} />
                   </Field>
                   {/* Solo hours are hours worked without an assistant; a
@@ -1337,16 +1342,16 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
                       the longest form in the app. */}
                   {c.role !== "Helper" && (<>
                     <Field label="Solo reg hrs">
-                      <NumField step="0.5" style={{ textAlign: "right" }} value={c.solo}
+                      <NumField step="0.5" decimals={2} style={{ textAlign: "right" }} value={c.solo}
                         onChange={v => setCrewField(c.profileId, "solo", v)} />
                     </Field>
                     <Field label="Solo OT hrs">
-                      <NumField step="0.5" style={{ textAlign: "right" }} value={c.soloOt}
+                      <NumField step="0.5" decimals={2} style={{ textAlign: "right" }} value={c.soloOt}
                         onChange={v => setCrewField(c.profileId, "soloOt", v)} />
                     </Field>
                   </>)}
                   <Field label="Dose mR">
-                    <NumField step="0.1" style={{ textAlign: "right" }} value={c.dose}
+                    <NumField step="0.1" decimals={2} style={{ textAlign: "right" }} value={c.dose}
                       onChange={v => setCrewField(c.profileId, "dose", v)} />
                   </Field>
                   {c.isSub && (

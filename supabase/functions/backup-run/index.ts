@@ -800,13 +800,14 @@ async function stepTables(
   let exhausted = false;
 
   while (rows.length < MAX_PART_ROWS) {
-    let q = db.from(table).select("*").limit(PAGE_ROWS);
+    const pageSize = Math.min(PAGE_ROWS, MAX_PART_ROWS - rows.length);
+    let q = db.from(table).select("*").limit(pageSize);
     if (cursorColumn) {
       q = q.order(cursorColumn);
       if (lastKey !== null) q = q.gt(cursorColumn, lastKey);
     } else {
       for (const k of keys) q = q.order(k);
-      q = q.range(offset, offset + PAGE_ROWS - 1);
+      q = q.range(offset, offset + pageSize - 1);
     }
     const { data, error } = await q;
     if (error) throw error;
@@ -814,7 +815,9 @@ async function stepTables(
     rows.push(...page);
     if (cursorColumn && page.length) lastKey = String(page[page.length - 1][cursorColumn]);
     offset += page.length;
-    if (page.length < PAGE_ROWS) { exhausted = true; break; }
+    // A short page may be the server's max-rows cap, not exhaustion.
+    // Only an empty response proves this table has no more records.
+    if (!page.length) { exhausted = true; break; }
   }
 
   if (table === "profiles") await addAuthEmails(db, rows);

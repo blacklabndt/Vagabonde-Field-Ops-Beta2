@@ -860,7 +860,7 @@ export function Toast({ message, tone = "ok", onDone, duration = 2600, action = 
 // the old minus/e key blocking, and refuses rather than filters: a stray key
 // that was dropped left the surviving digits closed up into a different,
 // plausible number, which is how "1e6" reached a line as 16.
-export function NumField({ value, onChange, step, style, ...rest }) {
+export function NumField({ value, onChange, step, decimals = 3, style, ...rest }) {
   const [text, setText] = useState(() => String(value == null ? 0 : value));
   const [editing, setEditing] = useState(false);
 
@@ -889,7 +889,7 @@ export function NumField({ value, onChange, step, style, ...rest }) {
         // controlled value back on the element, so the refused key simply
         // never appears. Nothing half-typed is ever shown as a figure the
         // line is not billing.
-        if (!acceptsNumberText(raw, step)) return;
+        if (!acceptsNumberText(raw, step, decimals)) return;
         setText(raw);
         // Floored on the way out: a value can still arrive by paste from
         // code that does not go through this box.

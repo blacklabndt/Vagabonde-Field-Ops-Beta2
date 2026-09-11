@@ -28,7 +28,7 @@ export const isWholeStep = step => {
   return Number.isInteger(n);
 };
 
-export function acceptsNumberText(text, step) {
+export function acceptsNumberText(text, step, decimals = 3) {
   const s = String(text == null ? "" : text);
   if (s === "") return true;
   // A minus sign, a letter, an exponent, a space, an emoji: refused whole,
@@ -44,5 +44,6 @@ export function acceptsNumberText(text, step) {
   const norm = decimalString(s);
   // A whole-unit box tolerates the trailing point a lone grouping comma
   // leaves behind ("1," on the way to "1,200") but never a fractional digit.
-  return whole ? /^\d*\.?$/.test(norm) : /^\d*\.?\d*$/.test(norm);
+  return whole ? /^\d*\.?$/.test(norm)
+    : /^\d*\.?\d*$/.test(norm) && (norm.split(".")[1] || "").length <= decimals;
 }

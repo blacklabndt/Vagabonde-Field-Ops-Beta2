@@ -95,6 +95,14 @@ const dollars = c => c / 100;
 // charge a cent under the ticket total on the line above it, in the
 // permanent record.
 const lineAmount = (qty, rate) => lineTotal(qty, rate);
+// The rate a ticket was billed at: its own snapshot, reserved when it first
+// went out for signing or was first invoiced, and the client's rate today
+// only for a ticket filed before that column existed. Exported because the
+// archived summary and the archived invoice HTML must answer this the same
+// way — the invoice's copy is gstPercentOf in _shared/invoice.ts, and a zero
+// on either side is a real exemption, never a missing figure.
+export const archiveGstRate = (ticket, job) =>
+  gstRateOf(ticket && ticket.gstRate != null ? ticket.gstRate : (job ? job.clientGstRate : null));
 const hrs = n => String(Math.round((Number(n) || 0) * 100) / 100);
 const fmtWhen = iso => {
   if (!iso) return "";
@@ -166,12 +174,16 @@ export function jobDetailsText({ job, record = {}, tickets = [], jhas = [], repo
 
   out.push("", `TICKETS (${tickets.length})`);
   if (!tickets.length) out.push("  none");
-  // The client's own GST rate, which is zero for an exempt client. A job
-  // archived out of an older backup has no rate on it and is read as the
-  // ordinary 5% — the archive is the record of what was billed, and 5% is
-  // what was billed before any client had a rate of their own.
-  const gstRate = gstRateOf(job.clientGstRate);
   for (const t of tickets) {
+    // Per TICKET, not per job: the rate reserved on the ticket when it went
+    // out for signing is what the client was billed, and an exemption granted
+    // since must not re-rate the folder. archiveGstRate falls back to the
+    // client's rate for a ticket filed before the snapshot column existed,
+    // and gstRateOf reads a job archived out of an older backup — no rate on
+    // it at all — as the ordinary 5%, which is what was billed before any
+    // client had a rate of their own. The invoice HTML beside this file is
+    // rendered from the same snapshot, so the two cannot disagree.
+    const gstRate = archiveGstRate(t, job);
     const sub = cents(t.total);
     const gst = cents(gstOn(dollars(sub), gstRate));
     out.push(`  ${t.id} · ${t.workDate || ""} · ${t.status} · ${money(dollars(sub))} before GST · ${gstRate === 0 ? "GST exempt" : `GST ${money(dollars(gst))}`} · total ${money(dollars(sub + gst))}`);

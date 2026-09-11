@@ -30,9 +30,10 @@ export function gstRateOf(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) && n >= 0 && n <= 100 ? n : GST_RATE_DEFAULT;
 }
-// The percent the document charges, off the client's row.
+// A sent/invoiced ticket keeps its rate. Legacy rows remain null and retain
+// the old client-rate fallback; zero is a real snapshot, never "missing".
 export const gstPercentOf = (d: InvoiceData) =>
-  gstRateOf(d.job && d.job.clients ? (d.job.clients as { gst_rate?: unknown }).gst_rate : null);
+  gstRateOf(d.ticket?.gst_rate ?? (d.job && d.job.clients ? (d.job.clients as { gst_rate?: unknown }).gst_rate : null));
 // "GST @ 5%", or "GST exempt" — a zero rate is a fact about the client, not
 // a line to print as 0%.
 export const gstLabelOf = (d: InvoiceData) => { const p = gstPercentOf(d); return p === 0 ? "GST exempt" : "GST @ " + p + "%"; };
@@ -70,6 +71,7 @@ export interface InvoiceData {
     // mark_tickets_invoiced alone; null until a ticket is marked invoiced.
     invoice_number?: number | null;
     invoiced_at?: string | null;
+    gst_rate?: number | string | null;
   };
   job: {
     job_number?: string; project?: string; lsd?: string; afe?: string;
@@ -141,16 +143,103 @@ const sigImage = (v: string | null | undefined) =>
     ? `<img class="sigimg" src="${v}" alt="Signature">`
     : "";
 
+// Above the marker, where the twin has nothing to match: the app's copy is
+// JavaScript and carries no interface of its own.
+interface DecimalParts { mantissa: bigint; scale: number }
+
+// ═══ shared core: exact decimal arithmetic ═══════════════════════════════
+// Postgres numeric is exact decimal and its round() goes half away from
+// zero. A double is neither. Anything that has to agree with the database
+// to the cent therefore works on the DIGITS of the number as written, and
+// never on the value a float happens to hold: 0.575 is really
+// 0.5749999999999999556 in a double, so `Math.round(rate * 100)` read a
+// legitimate three-decimal rate as 0.57 and put a 1,000-unit line five
+// dollars under the trigger's own round(quantity * unit_rate, 2). The old
+// formula was right only while every rate had two decimals and every
+// quantity three — an assumption nothing in the database enforces, since
+// ticket_lines.quantity and unit_rate are bare `numeric`.
+//
+// This block is a TWIN: the same text lives in vite-app/src/data.js and in
+// supabase/functions/_shared/invoice.ts, which cannot import each other.
+// billingTwins.test.mjs reads both off disk, strips the types from the
+// function's copy and compares them. Change one, change the other, in the
+// same commit.
+
+// A written number as an exact integer mantissa and the scale it sits at:
+// "0.575" is 575 at scale 3. Exponent notation counts, because String()
+// writes a small enough number that way (5e-7) and reading the digits
+// alone would drop the exponent and price the line a millionfold wrong.
+// Anything that is not a plain number answers null, and the callers read
+// that as zero — the same thing the float formula did with a NaN.
+const decimalParts = (value: unknown): DecimalParts | null => {
+  const m = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(String(value ?? "").trim());
+  if (!m || (!m[2] && !m[3])) return null;
+  const digits = (m[2] || "") + (m[3] || "");
+  let scale = (m[3] || "").length - Number(m[4] || 0);
+  let mantissa = BigInt(digits) * (m[1] === "-" ? -1n : 1n);
+  // A negative scale is a number whose digits do not carry their own
+  // trailing zeros (1e3): hand them to the mantissa, so every pair below
+  // multiplies and rounds at a scale of zero or more.
+  if (scale < 0) { mantissa *= 10n ** BigInt(-scale); scale = 0; }
+  return { mantissa, scale };
+};
+
+// `mantissa` at `scale`, rounded to `decimals`, half away from zero — the
+// rule Postgres round() follows, and the reason toFixed is not it:
+// (2.675).toFixed(2) is "2.67", because the double is a hair under the
+// half and toFixed is honest about it. The column is not.
+const roundScaled = (mantissa: bigint, scale: number, decimals: number): bigint => {
+  if (scale <= decimals) return mantissa * 10n ** BigInt(decimals - scale);
+  const drop = 10n ** BigInt(scale - decimals);
+  const neg = mantissa < 0n;
+  const abs = neg ? -mantissa : mantissa;
+  const whole = abs / drop;
+  const up = (abs % drop) * 2n >= drop ? whole + 1n : whole;
+  return neg ? -up : up;
+};
+
+// quantity × rate in whole cents, exactly as round(quantity * unit_rate, 2)
+// computes it in the database — at any scale on either side. A rate
+// carrying a third decimal is a rate somebody agreed to, not a figure to
+// flatten on the way to the bill.
+const exactCents = (quantity: unknown, unitRate: unknown): number => {
+  const q = decimalParts(quantity), r = decimalParts(unitRate);
+  if (!q || !r) return 0;
+  return Number(roundScaled(q.mantissa * r.mantissa, q.scale + r.scale, 2));
+};
+
+// A number rounded to `decimals` the way the column itself would round it.
+// Exported from both copies although only the app's has a caller today
+// (storedNumber): the twin is compared as text, so the two must say the
+// same word here, and a rounder the invoice cannot reach is a rounder
+// somebody writes a second time.
+export const exactRound = (value: unknown, decimals: number): number => {
+  const p = decimalParts(value);
+  if (!p) return 0;
+  return Number(roundScaled(p.mantissa, p.scale, decimals)) / 10 ** decimals;
+};
+
+// A percentage of a whole-cent subtotal, in whole cents. The tax line, and
+// the last float in the money path: `Math.round(cents * (rate / 100))`
+// divides in binary first, and rate/100 is inexact for most rates, so a
+// product landing on an exact half cent can fall the wrong side of it.
+// $50.00 at 0.03% is 1.5 cents exactly, which is 2; the float said 1.
+// Dividing by a hundred is two more decimal places on the product, and the
+// answer is whole cents, so it rounds at zero.
+export const exactPercentCents = (subtotalCents: unknown, ratePercent: unknown): number => {
+  const s = decimalParts(subtotalCents), r = decimalParts(ratePercent);
+  if (!s || !r) return 0;
+  return Number(roundScaled(s.mantissa * r.mantissa, s.scale + r.scale + 2, 0));
+};
+// ═══ end shared core ═════════════════════════════════════════════════════
+
 // A line's billable amount, in cents: its product rounded to the cent — the
 // same formula the database stores (sync_ticket_total, migration
 // 20260818140051), so the printed line totals sum to exactly the printed
-// subtotal, and both match the stored ticket total to the cent.
-// Whole cents times thousandths of a unit, in integers: the float product of
-// 1.5 and 60.05 is 90.07499999999999, which rounds a cent below the
-// round(quantity * unit_rate, 2) the trigger stores in tickets.total — the
-// same arithmetic as lineTotal in the app's data.js.
-export const lineCents = (l: InvoiceLine) =>
-  Math.round(Math.round(Number(l.quantity || 0) * 1000) * Math.round(Number(l.unit_rate || 0) * 100) / 1000);
+// subtotal, and both match the stored ticket total to the cent. Exact
+// decimal, at whatever scale the two figures carry — the same arithmetic as
+// lineTotal in the app's data.js, which carries the block above verbatim.
+export const lineCents = (l: InvoiceLine) => exactCents(l.quantity, l.unit_rate);
 
 // Subtotal, GST and grand total, all in integer cents — floats drift, cents
 // don't. GST is rounded on the cent subtotal, mirroring gstOn in
@@ -164,7 +253,7 @@ export const lineCents = (l: InvoiceLine) =>
 export function invoiceTotals(d: InvoiceData) {
   const subtotal = (d.lines || []).reduce((s, l) => s + lineCents(l), 0);
   // The client's own rate, so an exempt client's bill carries no GST.
-  const gst = Math.round(subtotal * (gstPercentOf(d) / 100));
+  const gst = exactPercentCents(subtotal, gstPercentOf(d));
   return { subtotal, gst, grand: subtotal + gst };
 }
 

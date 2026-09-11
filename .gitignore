@@ -4,6 +4,7 @@ dist/
 dev-dist/
 
 # Local tool state.
+.npm-cache/
 .wrangler/
 supabase/.temp/
 

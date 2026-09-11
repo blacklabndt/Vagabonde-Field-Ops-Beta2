@@ -34,7 +34,7 @@ interface CrewReadRow {
 // Everything the invoice prints, and nothing else.
 const TICKET_INVOICE_SELECT =
   "id, work_date, total, status, delays, client_contact, approved_at, approved_by_email, approved_signature, approval_sent_to, " +
-  "invoice_number, invoiced_at, " +
+  "invoice_number, invoiced_at, gst_rate, " +
   "jobs(job_number, project, lsd, afe, area, clients(name, gst_rate), contractors(name)), " +
   "ticket_lines(kind, label, unit, quantity, unit_rate)";
 

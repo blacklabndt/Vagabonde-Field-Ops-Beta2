@@ -102,9 +102,32 @@ interface DayJhaRow { id: string; job_id: string; sent_at: string | null }
 interface DayTicketRow { id: string; job_id: string; status: string | null; approval_sent_at: string | null }
 interface DayReportRow { id: string; job_id: string; sent_at: string | null }
 interface HoursRow {
+  id: string;
   straight_hours: unknown; ot_hours: unknown; solo_hours: unknown; solo_ot_hours: unknown; mileage_km: unknown;
   tickets: { work_date: string; jobs: { job_number: string } | null } | null;
 }
+// What my_hours will read before it stops and says so. The period is
+// whatever was asked for — "my hours since 2020" is a question somebody
+// will ask — and walking a whole career inside one invocation is how a
+// function times out with nothing to show.
+//
+// TWO budgets, because either one alone is unbounded in the other's
+// direction. Rows alone: a gateway capping pages at one hands back 25,000
+// single-row requests, and the invocation dies long before it can say it
+// was partial — the warning is the whole point of stopping, so a stop
+// nobody hears is not a stop. Requests alone: a page of ten thousand would
+// blow the row budget by a factor of ten. Whichever is reached first ends
+// the walk, and both end it the same way.
+//
+// 25,000 crew rows is years of a busy technician's work; 40 requests is
+// more than the row budget needs at a full page (25) and few enough that a
+// server handing back short pages runs out of TURNS rather than out of
+// time. It bounds the number of round trips and nothing else — a slow
+// server can still spend the invocation inside forty of them, and no
+// count here is a promise about the clock.
+const HOURS_PAGE_ROWS = 1000;
+const HOURS_MAX_ROWS = 25000;
+const HOURS_MAX_REQUESTS = 40;
 interface DoseRow { profile_id: string; name: string | null; days: number | string; total_mr: number | string; q1: number | string; q2: number | string; q3: number | string; q4: number | string }
 interface EquipmentRow {
   id: string; type: string; serial_number: string | null; calibration_due: string | null; status: string; assigned_name: string | null; total_count: number | string;
@@ -653,15 +676,46 @@ Deno.serve(async (req) => {
       } else if (name === "my_hours") {
         const who = await whose(input.person);
         const period = periodFrom(input.start, input.end, payPeriodFor(todayIn(Date.now())));
-        const { data, error } = await asUser.from("ticket_crew")
-          .select("straight_hours, ot_hours, solo_hours, solo_ot_hours, mileage_km, tickets!inner(work_date, jobs(job_number))")
-          .eq("profile_id", who.id).gte("tickets.work_date", period.start).lte("tickets.work_date", period.end).limit(1000);
-        if (error) throw new Error(error.message);
-        const rows: CrewRow[] = ((data ?? []) as unknown as HoursRow[]).map(r => ({
-          job_number: r.tickets?.jobs?.job_number ?? "(job unknown)", work_date: r.tickets?.work_date ?? "",
-          straight_hours: r.straight_hours, ot_hours: r.ot_hours, solo_hours: r.solo_hours, solo_ot_hours: r.solo_ot_hours, mileage_km: r.mileage_km
-        }));
-        out = { person: who.name, period: periodWords(period), ...sumHours(rows), note: "Hours in whole numbers and hundredths; solo hours are timesheet-only and never billed." };
+        const rows: CrewRow[] = [];
+        let after: string | null = null;
+        let partial = false;
+        // Exhaust by key, not by a guessed server cap: a short response
+        // may be PostgREST's max-rows setting rather than the end of a year.
+        // Bounded all the same, and the bound is why the answer below is
+        // labelled rather than trimmed: the walk is ordered by id, which is
+        // a uuid, so what a stopped walk holds is SOME of the period and
+        // not its first weeks. Handing that back as a period total would be
+        // a figure somebody checks their pay against.
+        for (let request = 1; ; request++) {
+          // Asked for no more than the budget has left, so the last page
+          // cannot carry the total past it: a server capping at 300 read
+          // 25,200 rows where the ceiling said 25,000, because the check
+          // came after the push and the page was whatever the server felt
+          // like sending.
+          let query = asUser.from("ticket_crew")
+            .select("id, straight_hours, ot_hours, solo_hours, solo_ot_hours, mileage_km, tickets!inner(work_date, jobs(job_number))")
+            .eq("profile_id", who.id).gte("tickets.work_date", period.start).lte("tickets.work_date", period.end)
+            .order("id").limit(Math.min(HOURS_PAGE_ROWS, HOURS_MAX_ROWS - rows.length));
+          if (after !== null) query = query.gt("id", after);
+          const { data, error } = await query;
+          if (error) throw new Error(error.message);
+          const page = (data ?? []) as unknown as HoursRow[];
+          if (!page.length) break;
+          rows.push(...page.map(r => ({
+            job_number: r.tickets?.jobs?.job_number ?? "(job unknown)", work_date: r.tickets?.work_date ?? "",
+            straight_hours: r.straight_hours, ot_hours: r.ot_hours, solo_hours: r.solo_hours, solo_ot_hours: r.solo_ot_hours, mileage_km: r.mileage_km
+          })));
+          after = page[page.length - 1].id;
+          if (rows.length >= HOURS_MAX_ROWS || request >= HOURS_MAX_REQUESTS) { partial = true; break; }
+        }
+        const hoursNote = "Hours in whole numbers and hundredths; solo hours are timesheet-only and never billed.";
+        out = {
+          person: who.name, period: periodWords(period), ...sumHours(rows),
+          rows_read: rows.length, partial,
+          note: partial
+            ? `PARTIAL — this stopped after ${rows.length} crew rows, so the figures cover only part of ${periodWords(period)} and are NOT a total for it. The rows were read in id order, which is not the order the days fall in, so this is not the first part of the period either. Say so, and ask for a shorter period. ${hoursNote}`
+            : hoursNote
+        };
       } else if (name === "my_dose") {
         const who = await whose(input.person);
         const period = periodFrom(input.start, input.end, quarterFor(todayIn(Date.now())));

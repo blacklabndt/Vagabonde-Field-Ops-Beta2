@@ -8,7 +8,18 @@
 import "fake-indexeddb/auto";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { jobFolderPaths, monthFolderOf, uniqueName, csvCell, jobDetailsText, archiveZipName, verifyZip, buildArchive, mapLimit, archiveDrift, archiveIds } from "./archive.js";
+import { jobFolderPaths, monthFolderOf, uniqueName, csvCell, jobDetailsText, archiveZipName, verifyZip, buildArchive, mapLimit, archiveDrift, archiveIds, archiveGstRate } from "./archive.js";
+import { readFileSync as readSource } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
+// The invoice's own answer, to hold the summary in Job details.txt against
+// the invoice HTML filed beside it in the same folder. Loaded the way
+// invoiceSnapshot.test.mjs loads it — invoice.ts imports mail.ts, which
+// reads Deno.env, so the arithmetic is sliced off and stripped rather than
+// imported.
+const invoice = await import("data:text/javascript;base64," + Buffer.from(stripTypeScriptTypes(
+  readSource(new URL("../../supabase/functions/_shared/invoice.ts", import.meta.url), "utf8")
+    .split("export const invoiceCss")[0].replace(/^import .*;\r?\n/gm, "")
+)).toString("base64"));
 import { makeZip, crc32 } from "./zip.js";
 import { OfflineCache } from "./offlineCache.js";
 
@@ -56,6 +67,41 @@ test("csv cells are quoted and never formulas", () => {
 test("the zip is named for what it holds", () => {
   assert.equal(archiveZipName("year", "2025-01-01", "2025-12-31"), "Archive 2025.zip");
   assert.equal(archiveZipName("range", "2025-01-01", "2025-06-30"), "Archive 2025-01-01 to 2025-06-30.zip");
+});
+
+// The archive is the permanent record of what was billed. A client made
+// exempt after the fact must not re-rate the folder, and the summary line in
+// Job details.txt must not disagree with the invoice HTML beside it — the
+// two were free to, while the summary read the client's rate today and the
+// invoice read the ticket's own snapshot.
+test("an archived ticket keeps the rate it was billed at, and the summary agrees with the invoice", () => {
+  // Billed at 5%, and the client has since been made exempt.
+  const job = { id: "S-1004", client: "Athabasca Oil", status: "Active", clientGstRate: 0 };
+  const ticket = {
+    id: "KK-0818-26-01", workDate: "2026-08-18", status: "Invoiced", total: 1234.5, gstRate: 5,
+    lines: [{ kind: "weld", label: '2" NPS weld', quantity: 3, unit: "ea", unit_rate: 45 }]
+  };
+  assert.equal(archiveGstRate(ticket, job), 5, "the ticket's own rate, not the client's today");
+
+  const txt = jobDetailsText({ job, tickets: [ticket] });
+  assert.match(txt, /\$1,234\.50 before GST · GST \$61\.73 · total \$1,296\.23/);
+  assert.doesNotMatch(txt, /GST exempt/, "an exemption granted since does not reach last year's bill");
+
+  // The same ticket through the invoice's own arithmetic — the document
+  // rendered into Invoices/ in this very folder — to the cent.
+  const bill = { ticket: { gst_rate: 5 }, job: { clients: { gst_rate: 0 } }, lines: ticket.lines };
+  const totals = invoice.invoiceTotals({ ...bill, lines: [{ ...ticket.lines[0], quantity: 1234.5, unit_rate: 1 }] });
+  assert.equal(totals.subtotal, 123450);
+  assert.equal(totals.gst, 6173);
+  assert.equal(totals.grand, 129623);
+  assert.equal(invoice.gstLabelOf(bill), "GST @ 5%");
+});
+
+test("a ticket filed before the snapshot existed still reads the client's rate", () => {
+  const job = { clientGstRate: 0 };
+  assert.equal(archiveGstRate({ id: "T-1", gstRate: null }, job), 0, "an exempt client's legacy ticket");
+  assert.equal(archiveGstRate({ id: "T-2" }, {}), 5, "a job out of an older backup carries no rate at all");
+  assert.equal(archiveGstRate({ id: "T-3", gstRate: 0 }, { clientGstRate: 5 }), 0, "zero is a snapshot, not a gap");
 });
 
 test("the job text file carries the record, the money and the crew", () => {

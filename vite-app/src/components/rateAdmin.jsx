@@ -737,7 +737,7 @@ export function RateAdminScreen() {
                     <tr><td colSpan={5} style={{ color: "color-mix(in srgb, var(--color-text) 55%, transparent)" }}>
                       <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                         <span>GST on their tickets</span>
-                        <NumField value={clientGst} step="0.01" onChange={setClientGst}
+                        <NumField value={clientGst} step="0.01" decimals={2} onChange={setClientGst}
                           aria-label={`GST rate for ${client.name}, in percent`}
                           style={{ width: 78 }} />
                         <span>%</span>
@@ -913,7 +913,7 @@ export function RateAdminScreen() {
 // The money boxes on this screen: NumField's floor at zero, in cents, at the
 // width the rate columns are laid out for.
 function RateInput({ value, onChange }) {
-  return <NumField style={{ width: 78 }} step="0.01" value={value} onChange={onChange} />;
+  return <NumField style={{ width: 78 }} step="0.01" decimals={2} value={value} onChange={onChange} />;
 }
 
 // Every rate change ever made to this client's schedule, newest first —
@@ -1173,7 +1173,7 @@ function NewClientDialog({ clients, onClose, onCreated }) {
           — is entered as 0 here rather than having the GST line deleted off
           each of their tickets afterwards. */}
       <Field label="GST %">
-        <NumField value={form.gstRate} step="0.01" style={{ width: 78 }} disabled={!!made}
+        <NumField value={form.gstRate} step="0.01" decimals={2} style={{ width: 78 }} disabled={!!made}
           onChange={v => set("gstRate", typedGstRate(v))} />
       </Field>
       <div style={{ fontSize: 12, color: "color-mix(in srgb, var(--color-text) 60%, transparent)", marginTop: -6, marginBottom: 8 }}>

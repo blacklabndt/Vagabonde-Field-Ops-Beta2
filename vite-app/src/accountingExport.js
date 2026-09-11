@@ -17,7 +17,7 @@
 // problem, not this module's — and this module's job is to hand it the text
 // unaltered, which the tests pin.
 
-import { gstRateOf, GST_RATE_DEFAULT, lineTotal } from "./data.js";
+import { gstRateOf, GST_RATE_DEFAULT, lineTotal, exactPercentCents } from "./data.js";
 
 export const TICKET_COLUMNS = [
   "Client", "Client id", "Job", "Project", "Work date", "Ticket", "Status",
@@ -44,7 +44,7 @@ export const LINE_COLUMNS = [
 // an absent one means (5%, never 0 — guessing exempt is the guess that
 // undercharges).
 export const gstCentsOn = (subtotalCents, ratePercent = GST_RATE_DEFAULT) =>
-  Math.round(subtotalCents * (gstRateOf(ratePercent) / 100));
+  exactPercentCents(subtotalCents, gstRateOf(ratePercent));
 
 // Cents as an accounting package reads them: 4 becomes "0.04", and nothing at
 // all stays an empty cell. Null is not zero here — search_tickets hands a role

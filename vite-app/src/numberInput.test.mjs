@@ -10,6 +10,20 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { acceptsNumberText, isWholeStep } from "./numberInput.js";
 
+test("fractional quantities stop at thousandths without treating step as an increment", () => {
+  assert.equal(acceptsNumberText("1.2345", 0.1), false);
+  assert.equal(acceptsNumberText("1.234", 0.1), true);
+  assert.equal(acceptsNumberText("2.25", 0.5), true);
+});
+
+test("money has an explicit two-place limit, including decimal commas", () => {
+  assert.equal(acceptsNumberText("1.234", 0.01, 2), false);
+  assert.equal(acceptsNumberText("0,125", 0.01, 2), false);
+  assert.equal(acceptsNumberText("1.23", 0.01, 2), true);
+  assert.equal(acceptsNumberText("1,200.25", 0.01, 2), true);
+  assert.equal(acceptsNumberText("1.", 0.01, 2), true);
+});
+
 test("an exponent is refused, not swallowed", () => {
   // The old filter dropped the "e" and left 16 behind, which is a different
   // number that looks like a plausible one.
