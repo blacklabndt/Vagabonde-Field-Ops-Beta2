@@ -132,6 +132,28 @@ No migration, no RLS change, no live probe: nothing in the database moved.
 
 The build is green BEFORE the commit, which is the rule.
 
+## Status at the end of the session: COMMITTED, NOT DEPLOYED
+
+Three commits on `room/37dbe6165f-beta-2-review`, working tree clean:
+
+- `c7a5961` — this fix
+- `fa3e48a` — the Admin wording (Codex's, kept separate: it ships the Worker
+  and the app, this one ships eight functions)
+- `b274dd8` — the repaired diagnostics (S2/S3/S4, 3 passing; the S1 cases
+  were dropped, superseded by `activeAdmin.test.mjs`)
+
+**Nothing is deployed.** The gate is green and both live Admins were read
+first and hold all fifteen tabs, so the tab rule locks nobody out; the only
+outstanding thing is the deploy itself.
+
+A note for whoever picks this up, because it cost an hour: Codex relayed
+Kyle's deploy authorisation several times and it never arrived in Claude's
+transcript — this session's own history records the Claudex relay dropping
+messages between the two agents earlier the same day. A relayed
+authorisation is not consent Claude may act on, so the deploy was held. If
+the relay is still dropping messages, have Kyle run the commands himself
+rather than going round again.
+
 ## Deploy order, when the gate is green and Kyle says so
 
 Every function that imports the gate, directly or through backupCommon:
