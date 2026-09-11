@@ -73,7 +73,10 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
   Nothing is waiting there now. The latest is
-  `20260910213858_a_send_can_wait_for_its_time.sql` — the
+  `20260910225905_ask_learns_the_app.sql` — `ask_learned`, Ask's one
+  crew memory of how the app works (staff read; insert own; delete own
+  or Admin; no update; note 3–300 chars). Seven probes beside it. Before
+  it, `20260910213858_a_send_can_wait_for_its_time.sql` — the
   `scheduled_sends` table (Ask's timers), its policies and the
   `scheduled-sends-tick` cron job (every five minutes, x-internal-secret,
   admin-digest's shape; DEPLOY THE FUNCTION FIRST). Probes beside it, run
@@ -539,6 +542,33 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   data, so "this job" needs no question back and "what is this screen
   for" is answered in the popup's own words. Nothing about a record comes
   from the knowledge; that is still the tools'.
+  And Ask LEARNS how the app works from conversations, on its own, by
+  Kyle's decision (spec
+  `docs/superpowers/specs/2026-09-10-ask-learns-the-app-design.md`) —
+  the one place the ask function writes: `ask_learned`, as the caller,
+  in the caller's name, and nothing else. After each answer it makes one
+  Haiku 4.5 call (`LEARN_MODEL` in `_shared/askLearn.ts`, pure, in
+  the guard list) over the conversation's own text plus the answer —
+  never a tool result — and the notes it has, asking for JSON `add` (at
+  most three, 3–300 chars) and `replace` (an existing id); `parseLearned`
+  reads it strictly and a malformed reply learns nothing; `roomFor`
+  holds the cap of 200. A replace is a delete then an insert; a delete
+  refused by RLS (not the speaker, not an Admin) is a silent zero rows and
+  the corrected note lands beside the old one. The extractor is awaited
+  (about a second) because the response carries `learned` for the
+  card; it is best effort and never fails the answer or logs. In the
+  prompt the notes come after the built-in knowledge as data
+  (`learnedLines`): an Admin's as fact, anyone else's as "a crew member
+  said", the knowledge winning where they disagree; the speaker's role
+  is joined from profiles at read time, so a demoted account's notes lose
+  their weight. Visible and undoable everywhere: the card shows
+  "Learned: …" with an × (`Db.forgetLearned`, `dropLearned`),
+  `list_learned` / `forget_learned` (tab board; the sixth confirm
+  kind, "Forget it") are Ask's, and the Admin screen's "What Ask has
+  learned" panel lists every note with Delete — the oversight the
+  no-confirm learning rests on. What it may not learn: anything about a
+  person, a job, a ticket, a client, a figure; nothing a note says grants
+  anything.
 - The screen is in the address bar: `vite-app/src/route.js` (pure, node-
   tested) spells `#/board`, `#/chat`, `#/job/S-10113` and
   `#/job/S-10113/ticket`; App.jsx pushes one history entry per screen
@@ -931,8 +961,8 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   reads both files off disk, strips the types from the function's with
   Node's own stripper, folds the whitespace and compares them. Change one,
   change the other, in the same commit; an interface goes ABOVE the marker,
-  where the twin has nothing to match. Fourteen shared modules — `backupSchedule.ts`,
-  `askTools.ts`, `askLoop.ts`, `askDrafts.ts`, `askSends.ts`, `scheduledSends.ts`, `askKnowledge.ts`,
+  where the twin has nothing to match. Fifteen shared modules — `backupSchedule.ts`,
+  `askTools.ts`, `askLoop.ts`, `askDrafts.ts`, `askSends.ts`, `scheduledSends.ts`, `askKnowledge.ts`, `askLearn.ts`,
   `backupTables.ts`, `backupManifest.ts`, `backupRun.ts`, `backupOauth.ts`,
   `drive.ts`, `gzip.ts` and `constantTime.ts` — are erasable TypeScript with
   no imports of their own (`backupManifest.ts` may name `backupSchedule.ts`,
