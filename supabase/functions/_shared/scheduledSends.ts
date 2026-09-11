@@ -18,6 +18,16 @@ import { jhaSendGate, ticketSendGate, JHA_SEND_ROLES, type JhaToSend, type Ticke
 // A reminder is the fourth kind: a timer with no mail, fired as a push to
 // the person's own devices (scheduled-sends' reminder branch); its label is
 // the text, its record_id and to_list are empty, its job optional.
+// A refusal written to be READ by whoever asked — see askSends.ts. These
+// also reach the scheduled-sends tick, where they are written to the row and
+// to function_errors as the reason a send did not go; marking them changes
+// nothing there and keeps them readable in Ask.
+function refuse(words: string): Error {
+  const e = new Error(words);
+  (e as Error & { plain?: boolean }).plain = true;
+  return e;
+}
+
 export const KINDS = ["jha", "report", "ticket_approval", "reminder"] as const;
 export type Kind = typeof KINDS[number];
 export function isKind(v: unknown): v is Kind { return typeof v === "string" && (KINDS as readonly string[]).includes(v); }
@@ -69,9 +79,9 @@ export interface SendWords { summary: string; done: string }
 // right. A nonsense string is refused in words.
 export function localToUtc(local: unknown, zone = ZONE): number {
   const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})$/.exec(String(local ?? "").trim());
-  if (!m) throw new Error("The time must be given as YYYY-MM-DD HH:MM in Grande Prairie's clock.");
+  if (!m) throw refuse("The time must be given as YYYY-MM-DD HH:MM in Grande Prairie's clock.");
   const [y, mo, d, h, mi] = m.slice(1).map(Number);
-  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59) throw new Error("That is not a real date and time.");
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59) throw refuse("That is not a real date and time.");
   const wanted = Date.UTC(y, mo - 1, d, h, mi);
   // A day the month does not have: Date.UTC rolls 2026-11-31 into the 1st of
   // December without a word, and the card then shows a date nobody asked
@@ -79,11 +89,11 @@ export function localToUtc(local: unknown, zone = ZONE): number {
   // parts back is the whole test.
   const back = new Date(wanted);
   if (back.getUTCFullYear() !== y || back.getUTCMonth() !== mo - 1 || back.getUTCDate() !== d) {
-    throw new Error("That is not a real date and time.");
+    throw refuse("That is not a real date and time.");
   }
   let guess = wanted;
   for (let i = 0; i < 2; i++) guess = wanted - (asLocalMs(guess, zone) - guess);
-  if (!Number.isFinite(guess)) throw new Error("That is not a real date and time.");
+  if (!Number.isFinite(guess)) throw refuse("That is not a real date and time.");
   // An hour the clock skips: 02:30 on the March morning does not exist, and
   // the two passes land on 01:30 — an hour earlier than the person said,
   // silently. Reading the instant back in the zone proves it is the
@@ -92,7 +102,7 @@ export function localToUtc(local: unknown, zone = ZONE): number {
   // FIRST, still on daylight time, which is the one a person means by "the
   // clocks go back tonight, remind me at 01:30".)
   if (asLocalMs(guess, zone) !== wanted) {
-    throw new Error("That time does not exist on that day — the clocks go forward. Ask the person for another time.");
+    throw refuse("That time does not exist on that day — the clocks go forward. Ask the person for another time.");
   }
   return guess;
 }
@@ -107,8 +117,8 @@ function asLocalMs(ms: number, zone: string): number {
 }
 
 export function checkRunAt(ms: number, nowMs: number): void {
-  if (ms < nowMs - MAX_PAST_MS) throw new Error(`${whenWords(ms)} has already passed. Ask the person for a time still to come, or send it now.`);
-  if (ms > nowMs + MAX_AHEAD_MS) throw new Error(`${whenWords(ms)} is more than ninety days away — ask the person to schedule it nearer the time.`);
+  if (ms < nowMs - MAX_PAST_MS) throw refuse(`${whenWords(ms)} has already passed. Ask the person for a time still to come, or send it now.`);
+  if (ms > nowMs + MAX_AHEAD_MS) throw refuse(`${whenWords(ms)} is more than ninety days away — ask the person to schedule it nearer the time.`);
 }
 
 // "Fri, Sep 11, 07:00" in Grande Prairie's clock.
@@ -123,9 +133,9 @@ export function whenWords(ms: number, zone = ZONE): string {
 // scheduled it and the record as it stands now.
 export function fireGate(kind: Kind, person: Person, record: Record<string, unknown>): void {
   const tabs = person.tab_access ?? [];
-  if (person.deactivated_at || !tabs.length) throw new Error("The account that scheduled this send is locked.");
+  if (person.deactivated_at || !tabs.length) throw refuse("The account that scheduled this send is locked.");
   const needs = READ_TABS[kind];
-  if (needs.length && !needs.some(t => tabs.includes(t))) throw new Error("The account that scheduled this send no longer holds a tab that can read the record.");
+  if (needs.length && !needs.some(t => tabs.includes(t))) throw refuse("The account that scheduled this send no longer holds a tab that can read the record.");
   // A reminder has no record and no recipient: an active account is the
   // whole gate.
   if (kind === "reminder") return;
@@ -133,8 +143,8 @@ export function fireGate(kind: Kind, person: Person, record: Record<string, unkn
     jhaSendGate(record as unknown as JhaToSend, { id: person.id, role: person.role });
   } else if (kind === "report") {
     const r = record as unknown as ReportToSend;
-    if (!r.pdf_key) throw new Error("This report has no PDF on file — nothing was sent.");
-    if (!REPORT_SEND_ROLES.includes(person.role)) throw new Error("Only a Technician, Coordinator or Admin can email a report.");
+    if (!r.pdf_key) throw refuse("This report has no PDF on file — nothing was sent.");
+    if (!REPORT_SEND_ROLES.includes(person.role)) throw refuse("Only a Technician, Coordinator or Admin can email a report.");
   } else {
     ticketSendGate(record as unknown as TicketToSend, { id: person.id, role: person.role });
   }
@@ -237,8 +247,8 @@ export function cancelWords(label: string, runAtMs: number, kind?: string): Send
 export const REMINDER_MAX = 300;
 export function reminderText(v: unknown): string {
   const text = String(v ?? "").replace(/\s+/g, " ").trim();
-  if (text.length < 3) throw new Error("A reminder needs a few words — what should it say?");
-  if (text.length > REMINDER_MAX) throw new Error(`A reminder is at most ${REMINDER_MAX} characters — shorten it.`);
+  if (text.length < 3) throw refuse("A reminder needs a few words — what should it say?");
+  if (text.length > REMINDER_MAX) throw refuse(`A reminder is at most ${REMINDER_MAX} characters — shorten it.`);
   return text;
 }
 

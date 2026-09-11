@@ -188,28 +188,35 @@ async function readBounded(req: Request, limit: number): Promise<string | null> 
 
 const ASK_TROUBLE = "Ask couldn't finish that one. Try again, and tell the office if it keeps happening.";
 
-// Whether a refusal was written to be READ by the person who asked.
+// A refusal written to be READ by the person who asked.
 //
-// Two kinds of message reach the top-level catch. The sentences this
-// function raises itself are the answer — a gate refusing a send, a date
-// that is not a date, another technician's ticket — and a person can act on
-// every one of them. A message from PostgREST or Postgres is not: it names
-// columns, constraints and functions, and somebody who can make one appear
-// can map the schema an error at a time.
+// Two kinds of failure reach the top-level catch. The sentences this
+// function and the ask modules raise themselves are the answer — a gate
+// refusing a send, a date that is not a date, another technician's ticket —
+// and a person can act on every one. A message from PostgREST, Postgres or
+// Anthropic is not: it names columns, constraints, functions and accounts,
+// and somebody who can make one appear can map the schema an error at a
+// time.
 //
-// This is allow-by-default and says so. Deny-by-default is the better shape
-// and it is a bigger change than this round: it needs every one of the
-// ninety-odd raise sites in this file to mark itself as ours, and a
-// half-marked file is worse than an honest filter. What is here refuses the
-// shapes a database actually produces — PostgREST's own codes, the standard
-// Postgres wordings, a SQLSTATE, and anything far longer than a sentence —
-// and the real words always go to function_errors either way, so nothing is
-// lost by masking too much.
-const DB_SHAPE = /PGRST\d|SQLSTATE|\bcolumn\b.*\bdoes not exist|\brelation\b.*\bdoes not exist|\bfunction\b.*\bdoes not exist|violates .*constraint|permission denied for|invalid input syntax|duplicate key value|null value in column|could not (?:connect|serialize)|deadlock detected|statement timeout|canceling statement/i;
+// The two are told apart by MARKING, not by reading the words. Every
+// sentence of ours is raised through `refuse`, which flags the error; the
+// catch shows a flagged error's own words and replaces everything else with
+// one fixed sentence. So the default for anything unmarked — a supabase-js
+// error, a provider's body, a TypeError from a bad shape, anything a later
+// edit adds without thinking about it — is masked. That is the point of
+// doing it this way round: the failure mode of forgetting is silence, not
+// disclosure.
+//
+// Nothing is lost by masking: the real words go to function_errors either
+// way, where the digest and Home's strip read them.
+function refuse(words: string): Error {
+  const e = new Error(words);
+  (e as Error & { plain?: boolean }).plain = true;
+  return e;
+}
 
-export function plainRefusal(message: string): boolean {
-  if (!message || message.length > 300) return false;
-  return !DB_SHAPE.test(message);
+export function plainRefusal(e: unknown): boolean {
+  return (e as { plain?: boolean } | null)?.plain === true;
 }
 
 const likeSafe = (v: string): string => v.replace(/[%_,()\\]/g, " ").replace(/\s+/g, " ").trim();
@@ -284,22 +291,22 @@ Deno.serve(async (req) => {
     // A draft needs one client: an exact name first, else the one hit, else
     // the model is told what to ask.
     const resolveClient = async (name: string) => {
-      if (!name) throw new Error("Which client? Ask the person.");
+      if (!name) throw refuse("Which client? Ask the person.");
       const hits = (await findClients(name)).map(r => ({ id: r.org_id, name: r.name }));
       const exact = hits.filter(h => h.name.toLowerCase() === name.toLowerCase());
       if (exact.length === 1) return exact[0];
       if (hits.length === 1) return hits[0];
-      if (!hits.length) throw new Error(`No client called "${name}" is in the directory. Ask the person which client it is; a new client is added on Home's New job form.`);
-      throw new Error(`More than one client matches "${name}": ${hits.map(h => h.name).join(", ")}. Ask the person which.`);
+      if (!hits.length) throw refuse(`No client called "${name}" is in the directory. Ask the person which client it is; a new client is added on Home's New job form.`);
+      throw refuse(`More than one client matches "${name}": ${hits.map(h => h.name).join(", ")}. Ask the person which.`);
     };
     // A job by number; a draft wants an Active one, a listing any.
     const jobNumbered = async (number: string, activeOnly: boolean) => {
-      if (!number) throw new Error("Which job? Ask the person for the job number.");
+      if (!number) throw refuse("Which job? Ask the person for the job number.");
       const { data, error } = await asUser.from("jobs").select("id, job_number, project, status, clients(name)").eq("job_number", number).maybeSingle();
       if (error) throw new Error(error.message);
       const j = data as unknown as ActiveJob | null;
-      if (!j) throw new Error(`No job numbered ${number}. Use find_job to look it up.`);
-      if (activeOnly && j.status === "Complete") throw new Error(`Job ${number} is complete; nothing new can be raised on it.`);
+      if (!j) throw refuse(`No job numbered ${number}. Use find_job to look it up.`);
+      if (activeOnly && j.status === "Complete") throw refuse(`Job ${number} is complete; nothing new can be raised on it.`);
       return { id: j.id, job_number: j.job_number, project: j.project, client_name: j.clients?.name ?? null, status: j.status };
     };
     const activeJob = (number: string) => jobNumbered(number, true);
@@ -311,19 +318,19 @@ Deno.serve(async (req) => {
       return (data ?? []) as DirHit[];
     };
     const resolveOrg = async (name: string) => {
-      if (!name) throw new Error("Which organisation? Ask the person.");
+      if (!name) throw refuse("Which organisation? Ask the person.");
       const hits = (await findOrgs(name)).map(r => ({ type: r.org_type, id: r.org_id, name: r.name }));
       const exact = hits.filter(h => h.name.toLowerCase() === name.toLowerCase());
       if (exact.length === 1) return exact[0];
       if (hits.length === 1) return hits[0];
-      if (!hits.length) throw new Error(`No client or contractor called "${name}" is in the directory. Ask the person which it is, or propose it with draft_organisation.`);
-      throw new Error(`More than one organisation matches "${name}": ${hits.map(h => `${h.name} (${h.type})`).join(", ")}. Ask the person which.`);
+      if (!hits.length) throw refuse(`No client or contractor called "${name}" is in the directory. Ask the person which it is, or propose it with draft_organisation.`);
+      throw refuse(`More than one organisation matches "${name}": ${hits.map(h => `${h.name} (${h.type})`).join(", ")}. Ask the person which.`);
     };
     // Another crew member by name — an Admin's question alone, checked by
     // the caller; the read is the profiles list every staff account has.
     const findPerson = async (name: string) => {
       const pat = likeSafe(name);
-      if (!pat) throw new Error("Which person? Ask for a name.");
+      if (!pat) throw refuse("Which person? Ask for a name.");
       const { data, error } = await asUser.from("profiles").select("id, name, first_name, last_name")
         .is("deactivated_at", null)
         .or(`name.ilike.%${pat}%,first_name.ilike.%${pat}%,last_name.ilike.%${pat}%`).order("name").limit(10);
@@ -332,14 +339,14 @@ Deno.serve(async (req) => {
       const exact = hits.filter(h => h.name.toLowerCase() === name.toLowerCase());
       if (exact.length === 1) return exact[0];
       if (hits.length === 1) return hits[0];
-      if (!hits.length) throw new Error(`Nobody on the crew is called "${name}". Ask the person who they mean.`);
-      throw new Error(`More than one person matches "${name}": ${hits.map(h => h.name).join(", ")}. Ask which.`);
+      if (!hits.length) throw refuse(`Nobody on the crew is called "${name}". Ask the person who they mean.`);
+      throw refuse(`More than one person matches "${name}": ${hits.map(h => h.name).join(", ")}. Ask which.`);
     };
     // Whose hours or dose: the caller's own, or — for an Admin — a named person's.
     const whose = async (person: unknown) => {
       const name = given(person);
       if (!name) return { id: user.id, name: me.name || "you", own: true };
-      if (me.role !== "Admin") throw new Error("Only an Admin can ask about someone else's hours or dose — this person may ask about their own.");
+      if (me.role !== "Admin") throw refuse("Only an Admin can ask about someone else's hours or dose — this person may ask about their own.");
       return { ...(await findPerson(name)), own: false };
     };
     // The contacts on file for these organisations, primary first.
@@ -353,13 +360,13 @@ Deno.serve(async (req) => {
       return (data ?? []) as ContactRow[];
     };
     const jobRecord = async (number: string) => {
-      if (!number) throw new Error("Which job? Ask the person for the job number.");
+      if (!number) throw refuse("Which job? Ask the person for the job number.");
       const { data, error } = await asUser.from("jobs")
         .select("id, job_number, project, lsd, afe, status, client_id, contractor_id, client_contact_id, contractor_contact_id, clients(name), contractors(name)")
         .eq("job_number", number).maybeSingle();
       if (error) throw new Error(error.message);
       const j = data as unknown as JobRecordRow | null;
-      if (!j) throw new Error(`No job numbered ${number}.`);
+      if (!j) throw refuse(`No job numbered ${number}.`);
       const list = await contactsFor([j.client_id, j.contractor_id]);
       const named = (id: string | null) => list.find(c => c.id === id) ?? null;
       return {
@@ -383,7 +390,7 @@ Deno.serve(async (req) => {
         .eq("id", jhaId).maybeSingle();
       if (error) throw new Error(error.message);
       const row = data as unknown as JhaSendRow | null;
-      if (!row || !row.jobs) throw new Error("No assessment with that id — use list_jhas to find it.");
+      if (!row || !row.jobs) throw refuse("No assessment with that id — use list_jhas to find it.");
       jhaSendGate(row, who);
       const to = recipients === null ? [] : resolveRecipients(recipients, await contactsFor([row.jobs.client_id, row.jobs.contractor_id]), saidByPerson());
       return { row, job: { id: row.jobs.id, job_number: row.jobs.job_number }, to };
@@ -394,10 +401,10 @@ Deno.serve(async (req) => {
         .eq("id", reportId).maybeSingle();
       if (error) throw new Error(error.message);
       const row = data as unknown as ReportSendRow | null;
-      if (!row || !row.jobs) throw new Error("No report with that id — use list_reports to find it.");
+      if (!row || !row.jobs) throw refuse("No report with that id — use list_reports to find it.");
       // send-report's gate.
-      if (!row.pdf_key) throw new Error("This report has no PDF on file — upload it first.");
-      if (!REPORT_SEND_ROLES.includes(who.role)) throw new Error("Only a Technician, Coordinator or Admin can email a report.");
+      if (!row.pdf_key) throw refuse("This report has no PDF on file — upload it first.");
+      if (!REPORT_SEND_ROLES.includes(who.role)) throw refuse("Only a Technician, Coordinator or Admin can email a report.");
       const to = recipients === null ? [] : resolveRecipients(recipients, await contactsFor([row.jobs.client_id, row.jobs.contractor_id]), saidByPerson());
       return { row, job: { id: row.jobs.id, job_number: row.jobs.job_number }, to };
     };
@@ -407,7 +414,7 @@ Deno.serve(async (req) => {
         .eq("id", ticketId.trim().toUpperCase()).maybeSingle();
       if (error) throw new Error(error.message);
       const row = data as unknown as TicketSendRow | null;
-      if (!row || !row.jobs) throw new Error("No ticket with that number — use list_tickets to find it.");
+      if (!row || !row.jobs) throw refuse("No ticket with that number — use list_tickets to find it.");
       ticketSendGate(row, who);
       // The job's current client rep, the way the job record names one.
       const people = await contactsFor([row.jobs.client_id]);
@@ -522,7 +529,7 @@ Deno.serve(async (req) => {
         // the time; the row is inserted by App through RLS once the person
         // presses Schedule, and gated again when it fires.
         const kind = input.kind;
-        if (!isKind(kind) || kind === "reminder") throw new Error("kind must be jha, report or ticket_approval; a reminder is set_reminder's.");
+        if (!isKind(kind) || kind === "reminder") throw refuse("kind must be jha, report or ticket_approval; a reminder is set_reminder's.");
         const runAt = localToUtc(input.run_at);
         checkRunAt(runAt, Date.now());
         const recordId = String(input.record_id ?? "").trim();
@@ -537,7 +544,7 @@ Deno.serve(async (req) => {
           const found = await reportForSend(recordId, input.recipients);
           job = found.job; to = found.to; label = labelFor("report", found.row); message = REPORT_MESSAGE;
         } else {
-          if (!seesMoney) throw new Error("Only an Admin or a Technician can send a ticket for approval from here.");
+          if (!seesMoney) throw refuse("Only an Admin or a Technician can send a ticket for approval from here.");
           const found = await ticketForSend(recordId);
           job = found.job; to = found.to; label = labelFor("ticket_approval", found.row);
         }
@@ -565,13 +572,13 @@ Deno.serve(async (req) => {
           .select("id, kind, label, run_at, status").eq("id", String(input.id ?? "").trim()).maybeSingle();
         if (error) throw new Error(error.message);
         const row = data as { id: string; kind: string; label: string; run_at: string; status: string } | null;
-        if (!row) throw new Error("No scheduled send with that id — use list_scheduled to find it.");
-        if (row.status !== "queued" && row.status !== "failed") throw new Error(`That send is already ${row.status}; there is nothing to cancel.`);
+        if (!row) throw refuse("No scheduled send with that id — use list_scheduled to find it.");
+        if (row.status !== "queued" && row.status !== "failed") throw refuse(`That send is already ${row.status}; there is nothing to cancel.`);
         const words = cancelWords(row.label, Date.parse(row.run_at), row.kind);
         action = { kind: "cancel_scheduled", summary: words.summary, done: words.done, id: row.id };
         out = { ready: true, summary: words.summary };
       } else if (name === "make_file") {
-        if (files.length >= MAX_FILES) throw new Error(`Five files is the most in one answer.`);
+        if (files.length >= MAX_FILES) throw refuse(`Five files is the most in one answer.`);
         const file = checkFile(input);
         files.push(file);
         out = { ready: true, file: fileWords(file), approx_chars: fileChars(file), note: "The card offers Download and Save to Files; nothing more to do." };
@@ -582,7 +589,7 @@ Deno.serve(async (req) => {
       } else if (name === "forget_learned") {
         const id = String(input.id ?? "").trim();
         const row = learnedRows.find(r => r.id === id);
-        if (!row) throw new Error("No learned note with that id — use list_learned to find it.");
+        if (!row) throw refuse("No learned note with that id — use list_learned to find it.");
         const words = forgetWords(row.note);
         action = { kind: "forget_learned", summary: words.summary, done: words.done, id: row.id };
         out = { ready: true, summary: words.summary };
@@ -596,15 +603,15 @@ Deno.serve(async (req) => {
           .eq("id", String(input.id ?? "").trim()).maybeSingle();
         if (error) throw new Error(error.message);
         const row = data as unknown as RescheduleRow | null;
-        if (!row) throw new Error("No scheduled send with that id — use list_scheduled to find it.");
-        if (row.kind === "reminder") throw new Error("A reminder cannot be moved — cancel it (cancel_scheduled) and set a new one (set_reminder).");
-        if (!row.jobs) throw new Error("No scheduled send with that id — use list_scheduled to find it.");
-        if (row.status !== "queued" && row.status !== "failed") throw new Error(`That send is already ${row.status}; there is nothing to move.`);
-        if (!isKind(row.kind)) throw new Error(`Nothing sends a "${row.kind}".`);
+        if (!row) throw refuse("No scheduled send with that id — use list_scheduled to find it.");
+        if (row.kind === "reminder") throw refuse("A reminder cannot be moved — cancel it (cancel_scheduled) and set a new one (set_reminder).");
+        if (!row.jobs) throw refuse("No scheduled send with that id — use list_scheduled to find it.");
+        if (row.status !== "queued" && row.status !== "failed") throw refuse(`That send is already ${row.status}; there is nothing to move.`);
+        if (!isKind(row.kind)) throw refuse(`Nothing sends a "${row.kind}".`);
         const wantsTime = String(input.run_at ?? "").trim() !== "";
         const wantsTo = Array.isArray(input.recipients) && input.recipients.length > 0;
-        if (!wantsTime && !wantsTo) throw new Error("Give a new time, new recipients, or both — nothing was changed.");
-        if (wantsTo && row.kind === "ticket_approval") throw new Error("A ticket approval goes to the ticket's client rep; only its time can be moved.");
+        if (!wantsTime && !wantsTo) throw refuse("Give a new time, new recipients, or both — nothing was changed.");
+        if (wantsTo && row.kind === "ticket_approval") throw refuse("A ticket approval goes to the ticket's client rep; only its time can be moved.");
         const oldRunAt = Date.parse(row.run_at);
         const runAt = wantsTime ? localToUtc(input.run_at) : oldRunAt;
         // The EFFECTIVE time, new or kept: moving yesterday's failed send to
@@ -616,12 +623,12 @@ Deno.serve(async (req) => {
         if (row.kind === "jha") to = (await jhaForSend(row.record_id, wantsTo ? input.recipients : null)).to;
         else if (row.kind === "report") to = (await reportForSend(row.record_id, wantsTo ? input.recipients : null)).to;
         else {
-          if (!seesMoney) throw new Error("Only an Admin or a Technician can send a ticket for approval from here.");
+          if (!seesMoney) throw refuse("Only an Admin or a Technician can send a ticket for approval from here.");
           await ticketForSend(row.record_id);
           to = [];
         }
         if (!wantsTo) to = splitList(row.to_list);
-        if (!wantsTo && runAt === oldRunAt) throw new Error(`That send is already set for ${whenWords(oldRunAt)} — nothing was changed.`);
+        if (!wantsTo && runAt === oldRunAt) throw refuse(`That send is already set for ${whenWords(oldRunAt)} — nothing was changed.`);
         const job = { id: row.jobs.id, job_number: row.jobs.job_number };
         const words = rescheduleWords(row.kind, row.label, job, to, oldRunAt, runAt, wantsTo);
         action = {
@@ -662,23 +669,23 @@ Deno.serve(async (req) => {
       } else if (name === "draft_contact") {
         const org = await resolveOrg(given(input.organisation));
         const seed = { name: given(input.name), title: given(input.title), email: given(input.email), phone: given(input.phone), notes: given(input.notes, 1000) };
-        if (!seed.name) throw new Error("A contact needs a name. Ask the person.");
+        if (!seed.name) throw refuse("A contact needs a name. Ask the person.");
         const summary = `Add ${seed.name}${seed.title ? ` (${seed.title})` : ""} to ${org.name}'s contacts${seed.email ? `, ${seed.email}` : ""}${seed.phone ? `, ${seed.phone}` : ""}? The Contacts screen's form opens filled in for you to save.`;
         action = { kind: "draft_contact", summary, org, seed };
         out = { ready: true, summary, organisation: org };
       } else if (name === "draft_organisation") {
         const orgName = given(input.name);
         const type = input.type === "contractor" ? "contractor" : input.type === "client" ? "client" : "";
-        if (!orgName) throw new Error("An organisation needs a name. Ask the person.");
-        if (!type) throw new Error("type must be client or contractor.");
+        if (!orgName) throw refuse("An organisation needs a name. Ask the person.");
+        if (!type) throw refuse("type must be client or contractor.");
         const dup = (await findOrgs(orgName)).find(h => h.name.toLowerCase() === orgName.toLowerCase());
-        if (dup) throw new Error(`${dup.name} is already on file as a ${dup.org_type}; add people to it with draft_contact.`);
+        if (dup) throw refuse(`${dup.name} is already on file as a ${dup.org_type}; add people to it with draft_contact.`);
         const summary = `Add ${orgName} as a new ${type}? The Contacts screen's New organisation dialog opens with it filled in for you to add.`;
         action = { kind: "draft_organisation", summary, seed: { name: orgName, type } };
         out = { ready: true, summary };
       } else if (name === "find_contact") {
         const pat = likeSafe(given(input.q));
-        if (!pat) throw new Error("Give part of a name, title, email or phone.");
+        if (!pat) throw refuse("Give part of a name, title, email or phone.");
         let query = asUser.from("contacts").select("id, org_type, org_id, name, title, email, phone, is_primary")
           .or(`name.ilike.%${pat}%,title.ilike.%${pat}%,email.ilike.%${pat}%,phone.ilike.%${pat}%`)
           .order("name").limit(20);
@@ -701,7 +708,7 @@ Deno.serve(async (req) => {
         }));
       } else if (name === "day_check") {
         const wanted = given(input.date);
-        if (wanted && !isDay(wanted)) throw new Error("date must be YYYY-MM-DD.");
+        if (wanted && !isDay(wanted)) throw refuse("date must be YYYY-MM-DD.");
         const day = wanted || todayIn(Date.now());
         // The jobs the person worked that day: a JHA they filed, a ticket
         // they raised, a ticket they were crew on — each read as them.
@@ -818,8 +825,8 @@ Deno.serve(async (req) => {
         // opening with what it already has (openJobByNumber, openTicket).
         const kind = String(input.kind ?? "");
         const id = given(input.id);
-        if (!OPEN_KINDS.includes(kind)) throw new Error("kind must be job, ticket, jha or report.");
-        if (!id) throw new Error("Which one? Give the job number, the ticket number or the id.");
+        if (!OPEN_KINDS.includes(kind)) throw refuse("kind must be job, ticket, jha or report.");
+        if (!id) throw refuse("Which one? Give the job number, the ticket number or the id.");
         let job: { id: string; job_number: string };
         let summary: string;
         let status: string | null = null;
@@ -833,16 +840,16 @@ Deno.serve(async (req) => {
           const { data, error } = await asUser.from("tickets").select("id, status, technician_id, jobs(id, job_number)").eq("id", id.toUpperCase()).maybeSingle();
           if (error) throw new Error(error.message);
           const row = data as unknown as OpenTicketRow | null;
-          if (!row || !row.jobs) throw new Error("No ticket with that number — use list_tickets to find it.");
+          if (!row || !row.jobs) throw refuse("No ticket with that number — use list_tickets to find it.");
           job = row.jobs; status = row.status; recId = row.id;
           editor = row.status === "Draft" && (row.technician_id === user.id || me.role === "Admin");
           summary = editor ? `Open ${row.id} in the ticket editor?` : `Open ${row.jobs.job_number}, where ${row.id} is?`;
         } else {
-          if (!UUID.test(id)) throw new Error(`That is not an id — use ${kind === "jha" ? "list_jhas" : "list_reports"} to find it.`);
+          if (!UUID.test(id)) throw refuse(`That is not an id — use ${kind === "jha" ? "list_jhas" : "list_reports"} to find it.`);
           const { data, error } = await asUser.from(kind === "jha" ? "jhas" : "reports").select("id, jobs(id, job_number)").eq("id", id).maybeSingle();
           if (error) throw new Error(error.message);
           const row = data as unknown as OpenRecordRow | null;
-          if (!row || !row.jobs) throw new Error(`No ${kind === "jha" ? "assessment" : "report"} with that id — use ${kind === "jha" ? "list_jhas" : "list_reports"} to find it.`);
+          if (!row || !row.jobs) throw refuse(`No ${kind === "jha" ? "assessment" : "report"} with that id — use ${kind === "jha" ? "list_jhas" : "list_reports"} to find it.`);
           job = row.jobs;
           summary = `Open ${row.jobs.job_number}, where the ${kind === "jha" ? "JHA" : "report"} is?`;
         }
@@ -854,12 +861,12 @@ Deno.serve(async (req) => {
           .select("id, status, technician_id, work_date, client_contact, jobs(id, job_number)").eq("id", id).maybeSingle();
         if (error) throw new Error(error.message);
         const row = data as unknown as CheckTicketRow | null;
-        if (!row || !row.jobs) throw new Error("No ticket with that number — use list_tickets to find it.");
+        if (!row || !row.jobs) throw refuse("No ticket with that number — use list_tickets to find it.");
         if (row.status !== "Draft") {
-          throw new Error(`${row.id} is ${row.status} — ${row.status === "Awaiting approval" ? "cancel the approval (cancel_approval) to change it" : "it can no longer be changed"}.`);
+          throw refuse(`${row.id} is ${row.status} — ${row.status === "Awaiting approval" ? "cancel the approval (cancel_approval) to change it" : "it can no longer be changed"}.`);
         }
         // The editor's own rule: one technician never edits another's ticket.
-        if (row.technician_id !== user.id && me.role !== "Admin") throw new Error(`${row.id} is another technician's ticket — only its technician or an Admin can check or edit it.`);
+        if (row.technician_id !== user.id && me.role !== "Admin") throw refuse(`${row.id} is another technician's ticket — only its technician or an Admin can check or edit it.`);
         const linesRes = await asUser.from("ticket_lines").select("kind, label, unit, quantity, unit_rate").eq("ticket_id", row.id);
         if (linesRes.error) throw new Error(linesRes.error.message);
         const crewRes = await asUser.from("ticket_crew").select("straight_hours, ot_hours, solo_hours, solo_ot_hours, profiles(name)").eq("ticket_id", row.id);
@@ -906,7 +913,7 @@ Deno.serve(async (req) => {
           if (error) throw new Error(error.message);
           schedule = data as { id: string } | null;
         }
-        if (!schedule) throw new Error(`${client.name} has no published rate schedule — Rate admin is where one is published.`);
+        if (!schedule) throw refuse(`${client.name} has no published rate schedule — Rate admin is where one is published.`);
         const { data: linesD, error: lErr } = await asUser.from("rate_lines").select("kind, label, unit, rate").eq("schedule_id", schedule.id)
           .order("position", { ascending: true, nullsFirst: false }).order("label");
         if (lErr) throw new Error(lErr.message);
@@ -935,11 +942,11 @@ Deno.serve(async (req) => {
           .select("id, status, technician_id, approved_at, jobs(id, job_number)").eq("id", id).maybeSingle();
         if (error) throw new Error(error.message);
         const row = data as unknown as CheckTicketRow | null;
-        if (!row || !row.jobs) throw new Error("No ticket with that number — use list_tickets to find it.");
+        if (!row || !row.jobs) throw refuse("No ticket with that number — use list_tickets to find it.");
         // The RPC's own rule, applied before proposing; the RPC applies it
         // again when App calls it.
-        if (row.status !== "Awaiting approval" || row.approved_at) throw new Error(`${row.id} is ${row.status} — only a ticket awaiting approval can have its approval cancelled.`);
-        if (row.technician_id !== user.id && !["Admin", "Coordinator"].includes(me.role ?? "")) throw new Error(`${row.id} is another technician's ticket — its technician, an Admin or a Coordinator can cancel the approval.`);
+        if (row.status !== "Awaiting approval" || row.approved_at) throw refuse(`${row.id} is ${row.status} — only a ticket awaiting approval can have its approval cancelled.`);
+        if (row.technician_id !== user.id && !["Admin", "Coordinator"].includes(me.role ?? "")) throw refuse(`${row.id} is another technician's ticket — its technician, an Admin or a Coordinator can cancel the approval.`);
         const summary = `Cancel ${row.id}'s approval? The rep's link stops working and the ticket goes back to a draft on ${row.jobs.job_number}.`;
         const done = `Cancelled: ${row.id} is a draft again on ${row.jobs.job_number}. A new send makes a new link.`;
         action = { kind: "cancel_approval", summary, done, ticket: { id: row.id }, job: { id: row.jobs.id, job_number: row.jobs.job_number } };
@@ -954,7 +961,7 @@ Deno.serve(async (req) => {
           equipment: rows.map(e => ({ id: e.id, type: e.type, serial: e.serial_number, calibration_due: e.calibration_due, status: e.status, held_by: e.assigned_name || null }))
         };
       } else {
-        throw new Error(`no tool named ${name}`);
+        throw refuse(`no tool named ${name}`);
       }
       tool = "";
       return out;
@@ -986,17 +993,15 @@ Deno.serve(async (req) => {
     });
   } catch (e) {
     const message = (e as Error).message;
-    // The office gets what happened; the browser gets something a person can
-    // act on. Two kinds of message end up here and only one of them was
-    // written to be read: the sentences this function raises itself — a gate
-    // refusing a send, a date that is not a date, a ticket that is another
-    // technician's — are the answer, and `plainRefusal` lets them through.
-    // A PostgREST or Postgres message is not: it names columns, constraints
-    // and functions, and a caller who can make one appear can map the schema
-    // an error at a time. It goes to function_errors, where the digest and
-    // Home's strip read it, and the person is told to try again.
+    // The office gets what happened; the browser gets what a person can act
+    // on. Only a refusal raised through `refuse` — ours, written to be read —
+    // carries its own words out; everything else becomes one fixed sentence,
+    // because an unmarked error came from the database, the provider or a
+    // shape nobody expected, and a caller who can provoke one could map the
+    // schema an error at a time. The real text always reaches
+    // function_errors, where the digest and Home's strip read it.
     await logError("ask", message, { user: userId, tool });
-    return json({ error: plainRefusal(message) ? message : ASK_TROUBLE }, 400);
+    return json({ error: plainRefusal(e) ? message : ASK_TROUBLE }, 400);
   }
 });
 

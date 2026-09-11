@@ -5,6 +5,13 @@
 // nothing. Every refusal names the field the form would refuse without,
 // so the model asks the person instead of guessing.
 
+// A refusal written to be READ by whoever asked — see askSends.ts.
+function refuse(words: string): Error {
+  const e = new Error(words);
+  (e as Error & { plain?: boolean }).plain = true;
+  return e;
+}
+
 export interface ClientHit { id: string; name: string }
 export interface JobHit { id: string; job_number: string; project?: string | null; client_name?: string | null; status?: string | null }
 export interface JobSeed {
@@ -37,7 +44,7 @@ export function shapeJobDraft(input: Record<string, unknown>, client: ClientHit)
   const project = str(input.project);
   const lsd = str(input.lsd);
   const missing = [!project && "a project name", !lsd && "the LSD (site location)"].filter((m): m is string => !!m);
-  if (missing.length) throw new Error(`The job form needs ${missing.join(" and ")} — ask the person.`);
+  if (missing.length) throw refuse(`The job form needs ${missing.join(" and ")} — ask the person.`);
   const seed: JobSeed = {
     project, jobNumber: str(input.job_number), client: client.name, lsd, afe: str(input.afe),
     contractor: str(input.contractor_name), clientRepName: str(input.client_rep), contractorRepName: str(input.contractor_rep)

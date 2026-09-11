@@ -11,6 +11,15 @@
 // columns. Everything is bounded, and a refusal says what to fix in words
 // the model can act on.
 
+// A refusal written to be READ by whoever asked — see askSends.ts. Ask's
+// top-level catch shows a `plain` error's words and masks everything else,
+// so every sentence here that names what to fix must be marked.
+function refuse(words: string): Error {
+  const e = new Error(words);
+  (e as Error & { plain?: boolean }).plain = true;
+  return e;
+}
+
 export const FILE_KINDS = ["html", "css", "csv", "xlsx", "pdf"] as const;
 export type FileKind = typeof FILE_KINDS[number];
 export const MAX_TEXT_CHARS = 200_000;
@@ -56,14 +65,14 @@ const cell = (v: unknown): Cell => (v == null ? null : typeof v === "number" && 
 
 function checkTable(raw: unknown, where: string, rowsSoFar: number): Table {
   const t = (raw && typeof raw === "object") ? raw as { columns?: unknown; rows?: unknown } : null;
-  if (!t || !Array.isArray(t.columns) || !t.columns.length) throw new Error(`${where} needs columns — a list of column names.`);
-  if (t.columns.length > MAX_COLUMNS) throw new Error(`${where} has ${t.columns.length} columns; the most is ${MAX_COLUMNS}.`);
+  if (!t || !Array.isArray(t.columns) || !t.columns.length) throw refuse(`${where} needs columns — a list of column names.`);
+  if (t.columns.length > MAX_COLUMNS) throw refuse(`${where} has ${t.columns.length} columns; the most is ${MAX_COLUMNS}.`);
   const columns = t.columns.map(c => String(c ?? "").trim());
-  if (!Array.isArray(t.rows)) throw new Error(`${where} needs rows — a list of rows, each a list of cells.`);
-  if (rowsSoFar + t.rows.length > MAX_ROWS) throw new Error(`Too many rows: the most in one file is ${MAX_ROWS}. Narrow it down and say so.`);
+  if (!Array.isArray(t.rows)) throw refuse(`${where} needs rows — a list of rows, each a list of cells.`);
+  if (rowsSoFar + t.rows.length > MAX_ROWS) throw refuse(`Too many rows: the most in one file is ${MAX_ROWS}. Narrow it down and say so.`);
   const rows = t.rows.map((r, i) => {
-    if (!Array.isArray(r)) throw new Error(`${where}, row ${i + 1} is not a list of cells.`);
-    if (r.length > columns.length) throw new Error(`${where}, row ${i + 1} has ${r.length} cells for ${columns.length} columns.`);
+    if (!Array.isArray(r)) throw refuse(`${where}, row ${i + 1} is not a list of cells.`);
+    if (r.length > columns.length) throw refuse(`${where}, row ${i + 1} has ${r.length} cells for ${columns.length} columns.`);
     const out = r.map(cell);
     while (out.length < columns.length) out.push(null);
     return out;
@@ -74,21 +83,21 @@ function checkTable(raw: unknown, where: string, rowsSoFar: number): Table {
 // The tool's input, checked and shaped, or a refusal in words.
 export function checkFile(raw: unknown): AskFile {
   const r = (raw && typeof raw === "object") ? raw as Record<string, unknown> : {};
-  if (!isFileKind(r.kind)) throw new Error(`kind must be one of ${FILE_KINDS.join(", ")}.`);
+  if (!isFileKind(r.kind)) throw refuse(`kind must be one of ${FILE_KINDS.join(", ")}.`);
   const kind = r.kind;
   const name = safeName(r.name, kind);
   if (kind === "html" || kind === "css") {
     const text = str(r.text);
-    if (!text || !text.trim()) throw new Error(`A ${kind} file needs text — the file's whole content.`);
-    if (text.length > MAX_TEXT_CHARS) throw new Error(`The text is ${text.length} characters; the most is ${MAX_TEXT_CHARS}.`);
+    if (!text || !text.trim()) throw refuse(`A ${kind} file needs text — the file's whole content.`);
+    if (text.length > MAX_TEXT_CHARS) throw refuse(`The text is ${text.length} characters; the most is ${MAX_TEXT_CHARS}.`);
     return { name, kind, text };
   }
   if (kind === "csv") {
     return { name, kind, table: checkTable(r.table, "A csv file's table", 0) };
   }
   if (kind === "xlsx") {
-    if (!Array.isArray(r.sheets) || !r.sheets.length) throw new Error("An xlsx file needs sheets — a list of { name, columns, rows }.");
-    if (r.sheets.length > MAX_SHEETS) throw new Error(`${r.sheets.length} sheets; the most is ${MAX_SHEETS}.`);
+    if (!Array.isArray(r.sheets) || !r.sheets.length) throw refuse("An xlsx file needs sheets — a list of { name, columns, rows }.");
+    if (r.sheets.length > MAX_SHEETS) throw refuse(`${r.sheets.length} sheets; the most is ${MAX_SHEETS}.`);
     let rowsSoFar = 0;
     const seen = new Set<string>();
     const sheets = r.sheets.map((s, i) => {
@@ -105,9 +114,9 @@ export function checkFile(raw: unknown): AskFile {
   // pdf
   const d = (r.document && typeof r.document === "object") ? r.document as { title?: unknown; subtitle?: unknown; sections?: unknown } : null;
   const title = d ? str(d.title)?.trim() ?? "" : "";
-  if (!d || !title) throw new Error("A pdf file needs document: { title, sections: [{ heading?, text?, table? }] }.");
-  if (!Array.isArray(d.sections) || !d.sections.length) throw new Error("A pdf document needs at least one section with text or a table.");
-  if (d.sections.length > MAX_SECTIONS) throw new Error(`${d.sections.length} sections; the most is ${MAX_SECTIONS}.`);
+  if (!d || !title) throw refuse("A pdf file needs document: { title, sections: [{ heading?, text?, table? }] }.");
+  if (!Array.isArray(d.sections) || !d.sections.length) throw refuse("A pdf document needs at least one section with text or a table.");
+  if (d.sections.length > MAX_SECTIONS) throw refuse(`${d.sections.length} sections; the most is ${MAX_SECTIONS}.`);
   let rowsSoFar = 0;
   let chars = title.length;
   const sections = d.sections.map((s, i) => {
@@ -122,10 +131,10 @@ export function checkFile(raw: unknown): AskFile {
       section.table = checkTable(o.table, `Section ${i + 1}'s table`, rowsSoFar);
       rowsSoFar += section.table.rows.length;
     }
-    if (!section.heading && !section.text && !section.table) throw new Error(`Section ${i + 1} is empty — give it a heading, text or a table.`);
+    if (!section.heading && !section.text && !section.table) throw refuse(`Section ${i + 1} is empty — give it a heading, text or a table.`);
     return section;
   });
-  if (chars > MAX_TEXT_CHARS) throw new Error(`The document's text is ${chars} characters; the most is ${MAX_TEXT_CHARS}.`);
+  if (chars > MAX_TEXT_CHARS) throw refuse(`The document's text is ${chars} characters; the most is ${MAX_TEXT_CHARS}.`);
   const doc: Doc = { title, sections };
   const subtitle = str(d.subtitle)?.trim();
   if (subtitle) doc.subtitle = subtitle;

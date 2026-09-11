@@ -11,6 +11,18 @@
 // own words in the thread. An address the model took from a record, a
 // query text or a guess is refused, whoever it claims to be.
 
+// A refusal written to be READ by whoever asked. Ask's top-level catch shows
+// a `plain` error's own words and replaces anything else with one fixed
+// sentence, so an unmarked throw — a database or a provider's message —
+// cannot carry a schema or an account detail out to the browser. Defined
+// here rather than imported because this file holds no imports of its own;
+// the four lines are the same in every module that refuses in words.
+function refuse(words: string): Error {
+  const e = new Error(words);
+  (e as Error & { plain?: boolean }).plain = true;
+  return e;
+}
+
 export interface Person { id: string; name: string; email: string | null; org_type?: string }
 export interface Me { id: string; role: string }
 export interface JhaToSend {
@@ -50,7 +62,7 @@ export function addressIn(s: unknown): string {
 // throws the words the model should pass on.
 export function resolveRecipients(named: unknown, people: Person[], saidByPerson: string): string[] {
   const list = Array.isArray(named) ? named.map(x => String(x ?? "").trim()).filter(Boolean) : [];
-  if (!list.length) throw new Error("Who should it go to? Ask the person for a contact's name or an email address.");
+  if (!list.length) throw refuse("Who should it go to? Ask the person for a contact's name or an email address.");
   const said = String(saidByPerson ?? "").toLowerCase();
   const out: string[] = [];
   const seen = new Set<string>();
@@ -60,9 +72,9 @@ export function resolveRecipients(named: unknown, people: Person[], saidByPerson
   };
   for (const item of list) {
     if (item.includes("@")) {
-      if (!ADDRESS.test(item)) throw new Error(`"${item}" is not a valid email address.`);
+      if (!ADDRESS.test(item)) throw refuse(`"${item}" is not a valid email address.`);
       if (!said.includes(item.toLowerCase())) {
-        throw new Error(`The address ${item} was not typed by the person — ask them to type it, or name a contact on file for this job.`);
+        throw refuse(`The address ${item} was not typed by the person — ask them to type it, or name a contact on file for this job.`);
       }
       add(item);
       continue;
@@ -71,33 +83,33 @@ export function resolveRecipients(named: unknown, people: Person[], saidByPerson
     const exact = people.filter(p => String(p.name ?? "").toLowerCase() === q);
     const hits = exact.length ? exact : people.filter(p => String(p.name ?? "").toLowerCase().includes(q));
     if (!hits.length) {
-      throw new Error(`No contact called "${item}" is on file for this job's client or contractor. Ask the person who they mean, or for the address.`);
+      throw refuse(`No contact called "${item}" is on file for this job's client or contractor. Ask the person who they mean, or for the address.`);
     }
     if (hits.length > 1) {
-      throw new Error(`More than one contact matches "${item}": ${hits.map(h => h.name).join(", ")}. Ask the person which.`);
+      throw refuse(`More than one contact matches "${item}": ${hits.map(h => h.name).join(", ")}. Ask the person which.`);
     }
     const email = String(hits[0].email ?? "").trim();
-    if (!email) throw new Error(`${hits[0].name} has no email on file — add one on the Contacts screen, or ask the person for the address.`);
+    if (!email) throw refuse(`${hits[0].name} has no email on file — add one on the Contacts screen, or ask the person for the address.`);
     add(email);
   }
-  if (out.length > MAX_RECIPIENTS) throw new Error(`${out.length} addresses; ${MAX_RECIPIENTS} is the limit.`);
+  if (out.length > MAX_RECIPIENTS) throw refuse(`${out.length} addresses; ${MAX_RECIPIENTS} is the limit.`);
   return out;
 }
 
 export function jhaSendGate(jha: JhaToSend, me: Me): void {
-  if (!jha.pdf_key) throw new Error("This assessment has no PDF yet — render it on Job detail first.");
+  if (!jha.pdf_key) throw refuse("This assessment has no PDF yet — render it on Job detail first.");
   if (jha.signed_by !== me.id && !JHA_SEND_ROLES.includes(me.role)) {
-    throw new Error("Only the technician who filed this assessment, or a Technician, Coordinator or Admin, can email it.");
+    throw refuse("Only the technician who filed this assessment, or a Technician, Coordinator or Admin, can email it.");
   }
 }
 
 export function ticketSendGate(t: TicketToSend, me: Me): void {
   if (t.status === "Approved" || t.status === "Invoiced") {
-    throw new Error(`Ticket ${t.id} is ${String(t.status).toLowerCase()} — the client has already signed it, so there is nothing to send.`);
+    throw refuse(`Ticket ${t.id} is ${String(t.status).toLowerCase()} — the client has already signed it, so there is nothing to send.`);
   }
-  if (!(Number(t.total) > 0)) throw new Error(`Ticket ${t.id} has nothing on it yet, so there is nothing to approve.`);
+  if (!(Number(t.total) > 0)) throw refuse(`Ticket ${t.id} has nothing on it yet, so there is nothing to approve.`);
   if (t.technician_id !== me.id && !TICKET_SEND_ROLES.includes(me.role)) {
-    throw new Error(`Ticket ${t.id} is another technician's; only its technician, a Coordinator or an Admin can send it for approval.`);
+    throw refuse(`Ticket ${t.id} is another technician's; only its technician, a Coordinator or an Admin can send it for approval.`);
   }
 }
 
@@ -105,7 +117,7 @@ export function ticketSendGate(t: TicketToSend, me: Me): void {
 // raised against, else the job's current client rep.
 export function ticketApprovalAddress(contactLine: unknown, fallbackEmail: unknown): string {
   const address = addressIn(contactLine) || String(fallbackEmail ?? "").trim();
-  if (!address) throw new Error("No client email on file for this ticket — add a client rep to the job record and it can be sent.");
+  if (!address) throw refuse("No client email on file for this ticket — add a client rep to the job record and it can be sent.");
   return address;
 }
 

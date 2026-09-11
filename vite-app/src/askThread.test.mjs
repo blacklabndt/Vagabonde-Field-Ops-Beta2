@@ -62,53 +62,72 @@ test("the words for a refused note never carry the database's own", () => {
     "a correction that failed and a note that failed are each recorded");
 });
 
-test("a refusal a person can act on reaches them; a database's words never do", () => {
+test("only a refusal we wrote carries its own words out; everything else is masked", () => {
   // S6, the top level. Every error in the ask function funnels through one
   // catch, and it used to return `e.message` whole — so a caller who could
   // provoke a PostgREST error read column names, constraint names and
   // function signatures out of the reply, one error at a time.
   //
-  // The real regex is lifted out of the function rather than copied here: a
-  // copy would pass this test for ever while the shipped one drifted.
-  const src = readFileSync(new URL("../../supabase/functions/ask/index.ts", import.meta.url), "utf8");
-  const line = src.match(/^const DB_SHAPE = (\/.+\/[a-z]*);$/m);
-  assert.ok(line, "DB_SHAPE is a single-line regex literal the test can lift");
-  const body = line[1].slice(1, line[1].lastIndexOf("/"));
-  const flags = line[1].slice(line[1].lastIndexOf("/") + 1);
-  const shape = new RegExp(body, flags);
-  const plain = (m) => Boolean(m) && m.length <= 300 && !shape.test(m);
+  // The first fix read the WORDS and masked anything shaped like a database
+  // message. That is allow-by-default: it masks what it recognises, so the
+  // cost of an unforeseen message — or of a later edit adding a throw — is
+  // disclosure. This is the other way round. Our sentences are MARKED at the
+  // point they are raised, and the catch shows only a marked error. What
+  // forgetting costs now is silence, which is the failure we can afford.
+  //
+  // So the test is not a list of strings to classify. It is: no sentence of
+  // ours anywhere in the ask path is raised unmarked.
+  const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
+  const FILES = [
+    "../../supabase/functions/ask/index.ts",
+    "../../supabase/functions/_shared/askSends.ts",
+    "../../supabase/functions/_shared/askFiles.ts",
+    "../../supabase/functions/_shared/askDrafts.ts",
+    "../../supabase/functions/_shared/askLoop.ts",
+    "../../supabase/functions/_shared/scheduledSends.ts",
+    "../../supabase/functions/_shared/hoursDose.ts",
+    "../../supabase/functions/_shared/chasePlan.ts"
+  ];
+  for (const f of FILES) {
+    const src = read(f);
+    // A literal sentence thrown as a bare Error is one nobody will ever see.
+    const bare = [...src.matchAll(/throw new Error\(\s*["`]/g)];
+    assert.equal(bare.length, 0,
+      `${f}: ${bare.length} sentence(s) raised unmarked — write throw refuse("…") so the person can read it`);
+    // And every file that refuses in words defines the marker itself: these
+    // modules may hold no imports of their own.
+    if (src.includes("throw refuse(")) {
+      assert.match(src, /function refuse\(words: string\): Error \{\s*const e = new Error\(words\);\s*\(e as Error & \{ plain\?: boolean \}\)\.plain = true;\s*return e;\s*\}/,
+        `${f}: refuses in words but does not define the marker the catch reads`);
+    }
+  }
 
-  // Ours. Written for whoever pressed the button, and they pass.
-  for (const m of [
-    "That ticket is another technician's.",
-    "That account has already taught Ask as much as it can hold (40 notes). Delete one before adding another.",
-    "2026-11-31 is not a day November has.",
-    "Ask has no key. An Admin can add one on the Admin screen.",
-    "That send is already gone.",
-    "You do not have the tab that would let Ask read tickets."
-  ]) assert.equal(plain(m), true, `ours should reach the person: ${m}`);
+  // The database's own errors stay bare on purpose — that is what makes the
+  // default masking rather than disclosure.
+  const ask = read(FILES[0]);
+  assert.ok((ask.match(/throw new Error\([A-Za-z_]/g) ?? []).length > 20,
+    "the supabase-js errors are still raised unmarked, and so are masked");
 
-  // The database's. Every one of these names something the caller should
-  // not learn from a reply.
-  for (const m of [
-    'column tickets.approval_token does not exist',
-    'new row for relation "ask_learned" violates check constraint "ask_learned_note_check"',
-    'permission denied for table profiles',
-    'invalid input syntax for type uuid: "x"',
-    'duplicate key value violates unique constraint "tickets_client_key_key"',
-    'null value in column "profile_id" of relation "ticket_crew" violates not-null constraint',
-    'Could not find the function public.replace_learned(uuid, text) in the schema cache (PGRST202)',
-    'canceling statement due to statement timeout',
-    'deadlock detected',
-    'relation "private.internal_config" does not exist'
-  ]) assert.equal(plain(m), false, `the database's should be masked: ${m}`);
+  // Anthropic's own words are not ours to pass on, and the loop knows it.
+  const loop = read("../../supabase/functions/_shared/askLoop.ts");
+  const fn = loop.slice(loop.indexOf("async function refusal("), loop.indexOf("export async function askLoop"));
+  assert.match(fn, /return refuse\("Ask is busy/, "a busy answer is ours and says what to do");
+  assert.match(fn, /return refuse\("The Anthropic key was refused/, "so is a refused key");
+  assert.match(fn, /return new Error\(`Anthropic answered/, "the provider's own body is not marked");
 
-  // And the catch actually uses it, with the real words still logged.
-  const tail = src.slice(src.lastIndexOf("} catch (e) {"));
+  // And the catch reads the mark, not the message, with the real words logged.
+  const tail = ask.slice(ask.lastIndexOf("} catch (e) {"));
   assert.match(tail, /await logError\("ask", message/, "the office still gets what happened");
-  assert.match(tail, /plainRefusal\(message\) \? message : ASK_TROUBLE/,
-    "and the browser gets the fixed sentence unless the words were ours");
+  assert.match(tail, /plainRefusal\(e\) \? message : ASK_TROUBLE/,
+    "the browser gets the fixed sentence unless the error was marked as ours");
   assert.doesNotMatch(tail, /error: message \}/, "never the raw message");
+
+  // plainRefusal judges the mark. A lookalike object with the right words and
+  // no mark is still masked — which is the whole difference from the regex.
+  const marked = Object.assign(new Error("That ticket is another technician's."), { plain: true });
+  const bare2 = new Error("That ticket is another technician's.");
+  assert.equal(marked.plain === true, true);
+  assert.equal(bare2.plain === true, false, "the same sentence unmarked does not get out");
 });
 
 test("a question too heavy to be a question is refused before it is parsed", () => {

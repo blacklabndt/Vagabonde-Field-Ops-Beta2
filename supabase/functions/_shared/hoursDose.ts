@@ -6,6 +6,13 @@
 // or a number, and 0.1 + 0.2 is not 0.3. Every figure is turned into whole
 // hundredths, summed as integers and turned back once, the way money is.
 
+// A refusal written to be READ by whoever asked — see askSends.ts.
+function refuse(words: string): Error {
+  const e = new Error(words);
+  (e as Error & { plain?: boolean }).plain = true;
+  return e;
+}
+
 export const ZONE = "America/Edmonton";
 
 export interface Period { start: string; end: string }
@@ -31,7 +38,7 @@ export function isDay(v: unknown): v is string {
 
 const ymd = (day: string): [number, number, number] => {
   const m = DAY.exec(day);
-  if (!m) throw new Error("A date must be YYYY-MM-DD.");
+  if (!m) throw refuse("A date must be YYYY-MM-DD.");
   const [y, mo, d] = m.slice(1).map(Number);
   return [y, mo, d];
 };
@@ -55,9 +62,9 @@ const blank = (v: unknown): boolean => v === undefined || v === null || v === ""
 // The range the model asked for: both ends, or neither and the default.
 export function periodFrom(start: unknown, end: unknown, fallback: Period): Period {
   if (blank(start) && blank(end)) return fallback;
-  if (!isDay(start) || !isDay(end)) throw new Error("Give both start and end as YYYY-MM-DD, or neither for the current period.");
-  if (start > end) throw new Error("The start is after the end.");
-  if (Date.parse(end) - Date.parse(start) > MAX_PERIOD_MS) throw new Error("A year is the most at once — ask for a shorter period.");
+  if (!isDay(start) || !isDay(end)) throw refuse("Give both start and end as YYYY-MM-DD, or neither for the current period.");
+  if (start > end) throw refuse("The start is after the end.");
+  if (Date.parse(end) - Date.parse(start) > MAX_PERIOD_MS) throw refuse("A year is the most at once — ask for a shorter period.");
   return { start, end };
 }
 

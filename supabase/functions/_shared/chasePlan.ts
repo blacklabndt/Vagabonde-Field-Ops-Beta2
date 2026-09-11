@@ -5,6 +5,15 @@
 // between the markers is held to the panel's copy by askTwins.test.mjs.
 // Below the core: the words the card shows for a plan.
 
+// A refusal written to be READ by whoever asked — see askSends.ts. It sits
+// above the shared core on purpose: the twin in vite-app/src/chasePlan.js
+// has nothing to match here, and the core itself is untouched.
+function refuse(words: string): Error {
+  const e = new Error(words);
+  (e as Error & { plain?: boolean }).plain = true;
+  return e;
+}
+
 export interface ChaseRow { id: string; contactLabel: string; chasedAt: string | null; queriedAt: string | null }
 export interface ChaseDue { id: string; to: string }
 export interface ChasePlan { due: ChaseDue[]; queried: string[]; recent: string[]; noEmail: string[] }
@@ -69,7 +78,7 @@ export function chaseWords(plan: ChasePlan, scope: string): { summary: string; d
   if (plan.recent.length) parts.push(`${plan.recent.length} left alone — sent or chased in the last ${CHASE_RECENT_DAYS} days`);
   if (plan.noEmail.length) parts.push(`${plan.noEmail.length} skipped — no client email on file (${some(plan.noEmail)})`);
   const skipped = parts.join("; ");
-  if (!plan.due.length) throw new Error(`Nothing to chase${scope}: ${skipped || "no ticket is awaiting approval"}.`);
+  if (!plan.due.length) throw refuse(`Nothing to chase${scope}: ${skipped || "no ticket is awaiting approval"}.`);
   const n = plan.due.length;
   return {
     summary: `Chase ${n} unsigned ticket${n === 1 ? "" : "s"}${scope} — resend the approval link for ${some(plan.due.map(d => d.id))}?${skipped ? ` ${skipped}.` : ""}`,
