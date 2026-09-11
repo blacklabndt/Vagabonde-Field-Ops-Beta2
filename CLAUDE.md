@@ -569,6 +569,33 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   no-confirm learning rests on. What it may not learn: anything about a
   person, a job, a ticket, a client, a figure; nothing a note says grants
   anything.
+  Ask MAKES FILES (spec
+  `docs/superpowers/specs/2026-09-10-ask-makes-files-design.md`): the
+  `make_file` tool (`tab: "any"` — `toolsFor` offers it to anyone
+  holding a tab at all, never to an account with none) proposes an HTML,
+  CSS, CSV, XLSX or PDF file from what the tools returned in that
+  conversation; `_shared/askFiles.ts` (pure, in the guard list) checks
+  the shape — text for html/css, `table {columns, rows}` for csv,
+  `sheets` (≤10) for xlsx, `document {title, subtitle?, sections}` for
+  pdf — with the caps (200 KB of text, 2,000 rows a file, 50 columns, 5
+  files an answer) and `safeName` (path and Windows-refused characters
+  and control characters out, the kind's extension on), and the response
+  carries `files` (each with `words`). `FILE_KINDS` lives twice
+  (askFiles.ts and askTools.ts, which may not import each other) and
+  askTools.test.mjs fails on drift. The FUNCTION WRITES NOTHING: the
+  device builds the bytes in `askFiles.js` — CSV with the accounting
+  export's `csvCell` (moved there; common.jsx imports it), HTML through
+  `stripScripts` (script blocks, `on*=` handlers, `javascript:` URLs
+  out, because a record Ask read can carry planted text), XLSX through
+  SheetJS and PDF through jsPDF+autotable, whose loaders moved out of
+  Timesheets into `cdnLibs.js` (SRI, on demand; `workerCsp.test.mjs`
+  reads that file for the CDN host now). The card's file block offers
+  Download (`saveBlob`) and, for an account holding the files tab
+  (App passes `canSaveFiles`), Save to Files — a confirm in the card,
+  then `Db.uploadSharedFile("Ask", file)`, the Files screen's own
+  upload, where storage's policy decides. Files stay with their turn in
+  the thread (memory only). The answer budget is `MAX_TOKENS = 8000`
+  so a file has room. Not built: a preview in the card, XLS (BIFF).
 - The screen is in the address bar: `vite-app/src/route.js` (pure, node-
   tested) spells `#/board`, `#/chat`, `#/job/S-10113` and
   `#/job/S-10113/ticket`; App.jsx pushes one history entry per screen
@@ -961,8 +988,8 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   reads both files off disk, strips the types from the function's with
   Node's own stripper, folds the whitespace and compares them. Change one,
   change the other, in the same commit; an interface goes ABOVE the marker,
-  where the twin has nothing to match. Fifteen shared modules — `backupSchedule.ts`,
-  `askTools.ts`, `askLoop.ts`, `askDrafts.ts`, `askSends.ts`, `scheduledSends.ts`, `askKnowledge.ts`, `askLearn.ts`,
+  where the twin has nothing to match. Sixteen shared modules — `backupSchedule.ts`,
+  `askTools.ts`, `askLoop.ts`, `askDrafts.ts`, `askSends.ts`, `scheduledSends.ts`, `askKnowledge.ts`, `askLearn.ts`, `askFiles.ts`,
   `backupTables.ts`, `backupManifest.ts`, `backupRun.ts`, `backupOauth.ts`,
   `drive.ts`, `gzip.ts` and `constantTime.ts` — are erasable TypeScript with
   no imports of their own (`backupManifest.ts` may name `backupSchedule.ts`,

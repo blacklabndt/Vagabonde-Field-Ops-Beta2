@@ -583,6 +583,10 @@ vite-app/
     ticketSeedLines.js      lines Ask drafted, matched to the rate card by label; the
                             unmatched are named, never invented
     scheduledSends.js       what Job detail's Scheduled sends strip says about a row
+    askFiles.js             the bytes of a file Ask made — CSV, HTML without scripts,
+                            XLSX and PDF through the on-demand libraries
+    cdnLibs.js              SheetJS and jsPDF from the CDN with SRI, shared by
+                            Timesheets and Ask
     dosimetryPrompt.js      the serials offer's pure questions: which typed serial is
                             news, what keeping writes, and the once-a-session mark
     wipDrafts.js            the half-entered work Open tickets lists off the device
@@ -668,7 +672,8 @@ supabase/
                             scheduledSends, the fire-time gate and the clock of a
                             send that waits; askKnowledge, what Ask knows about the
                             app itself and where the person is; askLearn, how it learns
-                            more from the crew), the three send bodies (mailJha,
+                            more from the crew; askFiles, the shape of a file it makes),
+                            the three send bodies (mailJha,
                             mailReport, mailApproval — one email each, called by the
                             live function and by the scheduled-sends tick), webPush
                             (the one Web Push loop: the chat's and a scheduled send's
