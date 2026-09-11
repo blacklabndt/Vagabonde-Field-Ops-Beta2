@@ -185,9 +185,9 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
     setBusy(true);
     setError("");
     try {
-      const { answer, trace, action, learned, files } = await Db.ask([...threadForSend(), { role: "user", text }], context);
+      const { answer, trace, action, learned, files, learnTrouble } = await Db.ask([...threadForSend(), { role: "user", text }], context);
       pushTurn("user", text);
-      pushTurn("assistant", answer, trace, action, learned, files);
+      pushTurn("assistant", answer, trace, action, learned, files, learnTrouble);
       setTurns(askTurns());
       setDraft("");
     } catch (e) {
@@ -326,6 +326,17 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
                         }}>×</button>
                     </div>
                   ))}
+                </div>
+              )}
+              {/* A note that could NOT be kept, said beside the ones that
+                  were. Silence here is what it replaced: the write's answer
+                  was thrown away, so a note the database refused looked
+                  exactly like one that landed — nothing on the card, and
+                  nothing in the table either. It is not an error tone: the
+                  answer above is sound, and only the remembering failed. */}
+              {t.learnTrouble && (
+                <div className="ask-learned">
+                  <div className="ask-learned-note"><span>{t.learnTrouble}</span></div>
                 </div>
               )}
               {/* A proposal, on the latest answer only — an older one may

@@ -46,6 +46,10 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
 interface Me { name: string | null; role: string | null; tab_access: string[] | null; deactivated_at: string | null }
+// What the learning pass kept, and what it could not. `trouble` is words for
+// the card: the answer is never failed for a note, but a note the database
+// refused must not look like one that landed.
+interface LearnResult { added: { id: string; note: string }[]; trouble: string | null }
 interface OrgHit { org_id: string; name: string; contact_count: number }
 interface JobRow {
   id: string; job_number: string; project: string | null; client_name: string | null; contractor_name: string | null;
@@ -186,10 +190,19 @@ Deno.serve(async (req) => {
     // What the crew has taught Ask about the app, read as the caller (every
     // staff account may): into the prompt after the built-in knowledge,
     // graded by the speaker's role as it is now.
+    // NEWEST first, then reversed for the prompt, so the window holds the
+    // most recent notes and not the oldest: an oldest-first read hands the
+    // whole window to whoever wrote earliest, and a caller who could stamp
+    // `created_at` — which they could, until the grant was narrowed — owned
+    // it outright. `id` breaks the tie because `created_at` alone does not:
+    // notes written in one pass share an instant to the microsecond, which
+    // is true of every row in the live table today.
     const { data: learnedData, error: learnedErr } = await asUser.from("ask_learned")
-      .select("id, note, created_at, profiles(name, role)").order("created_at").limit(MAX_LEARNED);
+      .select("id, note, created_at, profiles(name, role)")
+      .order("created_at", { ascending: false }).order("id", { ascending: false })
+      .limit(MAX_LEARNED);
     if (learnedErr) throw new Error(learnedErr.message);
-    const learnedRows = (learnedData ?? []) as unknown as LearnedRow[];
+    const learnedRows = ((learnedData ?? []) as unknown as LearnedRow[]).reverse();
 
     const key = (await appSettings()).anthropicApiKey;
     if (!key) return json({ error: "Ask isn't set up yet — an Admin can add the Anthropic key on the Admin screen." }, 400);
@@ -880,17 +893,26 @@ Deno.serve(async (req) => {
     };
 
     const result = await askLoop(thread, toolDefinitions(tools),
-      systemPrompt({ name: me.name ?? "", role: me.role ?? "" }, Date.now(), { knowledge: knowledgeText(), learned: learnedLines(learnedRows), where }), key,
-      { fetch: (url, init) => fetch(url, init), runTool, trace: traceLine, now: Date.now });
+      systemPrompt({ name: me.name ?? "", role: me.role ?? "" }, Date.now(), { knowledge: knowledgeText(), where }), key,
+      { fetch: (url, init) => fetch(url, init), runTool, trace: traceLine, now: Date.now },
+      // The crew's notes, as data in the conversation and never in the
+      // system message. The fence is minted per request: a note written
+      // yesterday cannot contain a word invented a moment ago, so it cannot
+      // close the block it sits in. That is a cost, not a boundary — the
+      // boundary is that nothing here can act. Tools run as the caller under
+      // RLS and every write waits for the person's confirm on the card.
+      learnedLines(learnedRows, crypto.randomUUID().slice(0, 8)));
     // Then it learns: one small call over the conversation's own text (never
     // a tool result) and the notes it has, and the rows it decides on are
     // written AS THE CALLER through RLS — a replace of someone else's note
     // by a non-Admin is refused by the delete policy and the new note lands
     // beside the old one, where the Admin's list shows both. Best effort:
     // nothing here can fail the answer, and a missed note is not an error.
-    const learned = await learn(asUser, thread, result.answer, learnedRows, key, user.id).catch(() => []);
+    const kept = await learn(asUser, thread, result.answer, learnedRows, key, user.id)
+      .catch(() => ({ added: [], trouble: null }) as LearnResult);
     return json({
-      ...result, learned,
+      ...result, learned: kept.added,
+      ...(kept.trouble ? { learnTrouble: kept.trouble } : {}),
       ...(action ? { action } : {}),
       ...(files.length ? { files: files.map(f => ({ ...f, words: fileWords(f) })) } : {})
     });
@@ -903,7 +925,7 @@ Deno.serve(async (req) => {
 
 // One extractor call and the writes it asks for, as the caller. Returns the
 // notes added, with their ids, for the card's "Learned:" line.
-async function learn(asUser: SupabaseClient, thread: unknown, answer: string, existing: LearnedRow[], apiKey: string, userId: string): Promise<{ id: string; note: string }[]> {
+async function learn(asUser: SupabaseClient, thread: unknown, answer: string, existing: LearnedRow[], apiKey: string, userId: string): Promise<LearnResult> {
   const turns = [...windowTurns(thread), { role: "assistant" as const, text: answer }];
   const { system, user } = learnPrompt(turns, existing.map(e => ({ id: e.id, note: e.note })));
   const res = await fetch(API_URL, {
@@ -911,22 +933,67 @@ async function learn(asUser: SupabaseClient, thread: unknown, answer: string, ex
     headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": API_VERSION },
     body: JSON.stringify({ model: LEARN_MODEL, max_tokens: LEARN_MAX_TOKENS, system, messages: [{ role: "user", content: user }] })
   });
-  if (!res.ok) return [];
+  if (!res.ok) return { added: [], trouble: null };
   const reply = (await res.json()) as { content?: { type: string; text?: string }[] };
   const text = (reply.content ?? []).filter(b => b.type === "text").map(b => b.text ?? "").join("\n");
   const decided = parseLearned(text, existing.map(e => e.id));
-  const notes: string[] = [];
+  const added: { id: string; note: string }[] = [];
+  let trouble: string | null = null;
+
+  // A correction is ONE act: replace_learned removes the old row and writes
+  // the new one in a single transaction, under the caller's own policies. It
+  // was a delete and then an insert in two round trips, and a delete that
+  // landed with an insert that then did not took the original with it — the
+  // person asked for a correction and lost what they had. A refusal here
+  // (the note has gone, or it is not this caller's to remove) leaves the old
+  // note exactly where it was, which is the right answer to "replace a thing
+  // you may not touch" and is why it is not retried as an add.
   for (const r of decided.replace) {
-    // Refused (not the speaker, not an Admin) is a silent zero rows; the
-    // corrected note is still written beside the old one.
-    await asUser.from("ask_learned").delete().eq("id", r.id);
-    notes.push(r.note);
+    const { data, error } = await asUser.rpc("replace_learned", { _old: r.id, _note: r.note });
+    if (error) {
+      trouble ??= learnTrouble(error.message);
+      // The card gets a sentence a person can read; the office gets what
+      // actually happened. Losing the real words to spare the browser them
+      // would only move the blindness, not remove it.
+      await logError("ask", `a note could not be corrected: ${error.message}`, { user: userId, note: r.id });
+      continue;
+    }
+    const row = data as { id: string; note: string } | null;
+    if (row) added.push({ id: row.id, note: row.note });
   }
+
   const room = roomFor(existing.length - decided.replace.length, decided.add.length);
-  notes.push(...decided.add.slice(0, room));
-  if (!notes.length) return [];
-  const { data } = await asUser.from("ask_learned").insert(notes.map(note => ({ note, said_by: userId }))).select("id, note");
-  return ((data ?? []) as { id: string; note: string }[]);
+  const fresh = decided.add.slice(0, room);
+  if (fresh.length) {
+    // The insert's answer is READ. It was discarded, so a note the database
+    // refused — the per-author cap is the one that will actually fire — was
+    // indistinguishable from one that landed: the card said nothing and the
+    // note was not there. The answer is never failed for it; the card is
+    // told instead.
+    const { data, error } = await asUser.from("ask_learned")
+      .insert(fresh.map(note => ({ note, said_by: userId }))).select("id, note");
+    if (error) {
+      trouble ??= learnTrouble(error.message);
+      await logError("ask", `a note could not be kept: ${error.message}`, { user: userId });
+    }
+    added.push(...((data ?? []) as { id: string; note: string }[]));
+  }
+  return { added, trouble };
+}
+
+// What the card says when a note could not be kept.
+//
+// The cap's sentence is OURS — written in the migration, meant to be read by
+// whoever pressed the button, and the one refusal a person can actually do
+// something about — so it passes through. Everything else becomes a fixed
+// sentence: a raw database message is written for whoever runs the database,
+// names columns and constraints, and is the shape that leaks a schema one
+// error at a time. The real words still reach the office, through
+// function_errors, where the digest and Home's strip read them.
+const LEARN_TROUBLE = "Something Ask learned could not be kept. The answer above is unaffected.";
+
+function learnTrouble(message: string): string {
+  return /as much as it can hold/i.test(message) ? message : LEARN_TROUBLE;
 }
 
 // Best-effort, never masks the real error (admin-digest's shape).

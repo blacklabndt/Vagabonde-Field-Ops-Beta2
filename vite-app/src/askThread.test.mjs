@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { askTurns, pushTurn, threadForSend, forgetAskThread, dropAction, dropLearned, isConfirmAction, confirmLabel, formLabel, jobLinks, mergeDictation, foldTranscripts, ASK_KEEP } from "./askThread.js";
 
 test("an answer keeps what was learned, and the × drops one note from the turn alone", () => {
@@ -18,6 +19,47 @@ test("an answer keeps what was learned, and the × drops one note from the turn 
   assert.equal(askTurns()[3].files[0].name, "t.csv");
   assert.equal("files" in askTurns()[2], false);
   forgetAskThread();
+});
+
+test("a note that could not be kept rides with its answer, and silence is not an answer", () => {
+  // What this replaced: the write's answer was discarded, so a note the
+  // database refused looked exactly like one that landed — nothing on the
+  // card, and nothing in the table either.
+  forgetAskThread();
+  pushTurn("user", "how do reports go out?");
+  pushTurn("assistant", "From Job detail.", [], null, [], [],
+    "That account has already taught Ask as much as it can hold (40 notes). Delete one before adding another.");
+  assert.match(askTurns()[1].learnTrouble, /as much as it can hold/);
+  assert.equal(askTurns()[1].text, "From Job detail.", "the answer itself is untouched");
+  assert.equal("learned" in askTurns()[1], false, "and nothing is claimed to have been kept");
+
+  // Both may be true at once: one note kept, another refused.
+  pushTurn("assistant", "Both.", [], null, [{ id: "n1", note: "One landed." }], [], "and one did not");
+  assert.deepEqual(askTurns()[2].learned, [{ id: "n1", note: "One landed." }]);
+  assert.equal(askTurns()[2].learnTrouble, "and one did not");
+
+  // Nothing wrong, nothing said.
+  pushTurn("assistant", "Fine.", [], null, [], [], "");
+  assert.equal("learnTrouble" in askTurns()[3], false);
+  pushTurn("assistant", "Fine.", [], null, []);
+  assert.equal("learnTrouble" in askTurns()[4], false);
+  forgetAskThread();
+});
+
+test("the words for a refused note never carry the database's own", () => {
+  // S6: a raw PostgREST message names columns and constraints and is written
+  // for whoever runs the database. The cap's sentence is ours and is meant
+  // to be read, so it passes; everything else is one fixed sentence, and the
+  // real words go to function_errors where the office reads them.
+  const src = readFileSync(new URL("../../supabase/functions/ask/index.ts", import.meta.url), "utf8");
+  const fn = src.slice(src.indexOf("function learnTrouble("), src.indexOf("function learnTrouble(") + 220);
+  assert.match(fn, /as much as it can hold/, "the cap's own sentence is recognised");
+  assert.match(fn, /LEARN_TROUBLE/, "and anything else becomes the fixed one");
+  assert.doesNotMatch(fn, /\$\{message\}/, "the database's words are never interpolated for the browser");
+  // And they are not merely dropped: both failure paths log what happened.
+  const learn = src.slice(src.indexOf("async function learn("), src.indexOf("const LEARN_TROUBLE"));
+  assert.equal((learn.match(/await logError\("ask"/g) ?? []).length, 2,
+    "a correction that failed and a note that failed are each recorded");
 });
 
 test("a proposal the card confirms in place is told from a draft by its kind, and the button says what it does", () => {

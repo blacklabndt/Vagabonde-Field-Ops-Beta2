@@ -13,11 +13,16 @@ export function askTurns() { return turns.slice(); }
 
 // An answer may carry an action — the form a draft proposes — kept on the
 // turn for the card's buttons and, like the trace, never sent back.
-export function pushTurn(role, text, trace, action, learned, files) {
+export function pushTurn(role, text, trace, action, learned, files, learnTrouble) {
   const turn = { role, text };
   if (trace && trace.length) turn.trace = trace.slice();
   if (action) turn.action = action;
   if (Array.isArray(learned) && learned.length) turn.learned = learned.map(n => ({ id: n.id, note: n.note }));
+  // A note the database refused. It rides with its answer like the notes
+  // that landed, because the alternative is what this replaced: silence, and
+  // a note that simply was not there. The answer itself is never failed for
+  // it — the person asked a question, not to be taught something.
+  if (typeof learnTrouble === "string" && learnTrouble) turn.learnTrouble = learnTrouble;
   // A file's checked shape stays with the answer that made it, so Download
   // and Save to Files work on any turn, not only the latest.
   if (Array.isArray(files) && files.length) turn.files = files.slice();

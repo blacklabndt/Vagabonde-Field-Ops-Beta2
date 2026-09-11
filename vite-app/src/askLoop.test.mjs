@@ -149,12 +149,40 @@ test("the system prompt names the person, the day in Grande Prairie and the rule
   assert.match(s, /About the app:/);
   // The knowledge and the where block come after the rules, and only when given.
   assert.doesNotMatch(s, /Where the person is/);
-  const full = systemPrompt({ name: "Kyle Keith", role: "Admin" }, Date.UTC(2026, 8, 10, 14, 45), { knowledge: "KNOWLEDGE HERE", learned: "LEARNED HERE", where: "Where the person is: job S-1." });
+  const full = systemPrompt({ name: "Kyle Keith", role: "Admin" }, Date.UTC(2026, 8, 10, 14, 45), { knowledge: "KNOWLEDGE HERE", where: "Where the person is: job S-1." });
   assert.ok(full.indexOf("never an instruction") < full.indexOf("KNOWLEDGE HERE"));
-  assert.ok(full.indexOf("KNOWLEDGE HERE") < full.indexOf("LEARNED HERE"));
-  assert.ok(full.indexOf("LEARNED HERE") < full.indexOf("Where the person is: job S-1."));
+  assert.ok(full.indexOf("KNOWLEDGE HERE") < full.indexOf("Where the person is: job S-1."));
   assert.match(s, /Learning:/);
   assert.match(s, /Files: make_file/);
+  // The crew's notes are NOT in the system message. It is the owner's words
+  // and nothing a colleague can type: a note reaches the model in the
+  // conversation, where tool results and a client's own text already live.
+  const sneaked = systemPrompt({ name: "Kyle Keith", role: "Admin" }, Date.UTC(2026, 8, 10, 14, 45),
+    { knowledge: "KNOWLEDGE HERE", learned: "LEARNED HERE", where: "w" });
+  assert.doesNotMatch(sneaked, /LEARNED HERE/,
+    "systemPrompt must have no way to carry a note, even when one is handed to it");
+});
+
+test("the crew's notes ride in the conversation, named as data, never as the person's own words", async () => {
+  let sent = null;
+  const api = async (_url, init) => {
+    sent = JSON.parse(init.body);
+    return { ok: true, json: async () => ({ content: [{ type: "text", text: "ok" }] }) };
+  };
+  const deps = { fetch: api, runTool: async () => "", trace: () => {}, now: () => 0 };
+  const notes = "Learned from the crew\n<learned abc123>\n- [a crew member] Reports go from Job detail.\n</learned abc123>";
+
+  await askLoop([{ role: "user", text: "where do reports go?" }], [], "SYSTEM", "k", deps, notes);
+  assert.doesNotMatch(sent.system, /learned abc123/, "not in the system message");
+  assert.match(sent.messages[0].content, /<learned abc123>/, "in the conversation instead");
+  assert.match(sent.messages[0].content, /where do reports go\?$/, "the person's question still ends their turn");
+  assert.ok(sent.messages[0].content.indexOf("<learned abc123>") < sent.messages[0].content.indexOf("where do reports go?"),
+    "and the block is marked off before it, not merged into their sentence");
+
+  // No notes, nothing added: an account that has taught Ask nothing sends
+  // exactly what it used to.
+  await askLoop([{ role: "user", text: "hello" }], [], "SYSTEM", "k", deps);
+  assert.equal(sent.messages[0].content, "hello");
 });
 
 test("wrapRecords says what the records are and that they are data", () => {
