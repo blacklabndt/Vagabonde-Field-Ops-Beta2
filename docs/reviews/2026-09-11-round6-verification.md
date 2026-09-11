@@ -132,7 +132,25 @@ No migration, no RLS change, no live probe: nothing in the database moved.
 
 The build is green BEFORE the commit, which is the rule.
 
-## Status at the end of the session: COMMITTED, NOT DEPLOYED
+## Deployed — 11 Sept, by Kyle from his own shell
+
+Confirmed by reading the live project rather than by report: all eight
+functions updated within eighty seconds of each other at about 17:17,
+sequentially and in the order below, while round 5's `ask` and
+`scheduled-sends` still carry their 16:05 timestamps — so this is a
+complete pass of its own and not a stale read.
+
+`create-user` 7, `delete-user` 9, `unlock-user` 2, `password-reset` 6,
+`mail-test` 8, `backup-run` 27, `backup-restore` 23, `backup-oauth` 12.
+
+The Worker (`npm run build && npx wrangler deploy`, carrying `fa3e48a`'s
+wording) is NOT confirmed from here: this sandbox allows `wrangler deploy`
+but not `wrangler deployments list`, and the Worker has no custom route in
+`wrangler.toml` to fetch. Confirm it the way the habits section says — check
+that the newly hashed chunk answers 200, `assets/adminSetup-EJQMIZRY.js`
+from the build that went with it.
+
+## Status before that deploy: COMMITTED, NOT DEPLOYED
 
 Three commits on `room/37dbe6165f-beta-2-review`, working tree clean:
 
