@@ -67,6 +67,16 @@ export const BUDGET_MS = 100_000;
 // repeated work rather than a hole; a run left sitting costs the schedule.
 export const SLICE_ALIVE_MS = 3 * 60_000;
 
+// What a table part leaves itself to gzip and upload the rows it has read.
+// The read loop stops at this much of the budget left rather than at the
+// deadline, because a part that spends the whole slice reading is uploaded
+// by nobody and checkpointed by nobody: the cursor is written after
+// stepTables returns, so the reclaim starts that same part from the same
+// key and reads it all again — and a table whose pages come back small
+// enough could never finish one part, wedging the run until the six-hour
+// retry window fails it for good.
+export const PART_TAIL_MS = 20_000;
+
 // A failed unit is tried this many times over before the run fails with the
 // last reason — and only when the drive said the refusal was worth
 // retrying. The gaps widen; the total is under half a slice's budget.

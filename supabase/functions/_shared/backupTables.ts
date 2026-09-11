@@ -280,6 +280,15 @@ export const PAGE_ROWS = 1000;
 // ticket_lines is a few megabytes of JSON before gzip.
 export const MAX_PART_ROWS = 25000;
 
+// How many requests one part may make before it is uploaded with what it
+// has. A short page is the server's cap and not exhaustion, so the read
+// keeps asking; with the cap at 1,000 a full part is twenty-five requests,
+// but a gateway answering a hundred rows at a time would need two hundred
+// and fifty and a slice cannot afford that. The deadline is the real guard
+// (PART_TAIL_MS in backupRun.ts); this is the backstop for pages that come
+// back fast and tiny, where the clock alone would let the loop spin.
+export const PART_MAX_REQUESTS = 60;
+
 // A copy of the rows with the credential columns emptied. The caller's rows
 // are never touched: they are also what gets counted and what the manifest
 // records.

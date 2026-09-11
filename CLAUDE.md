@@ -1,12 +1,12 @@
 # VagaboNDE Field Ops — Beta 2
 
-## Pending: review fixes need the tax migration before deployment
+## A ticket remembers its GST rate
 
-The Codex review fixes are in this worktree. Before deploying the app or
-approval functions, apply `supabase/handover/draft-ticket-gst-snapshot.sql`,
-run `supabase/handover/probes-ticket-gst-snapshot.sql`, then file the applied
-SQL under migrations with the applier's version. The draft has NOT been
-applied from this session. No historical GST rates are backfilled.
+The tax migration is APPLIED and filed:
+`20260911204844_a_ticket_remembers_its_gst_rate.sql`, its probes beside it
+under `supabase/handover/`, run live and passed (11 Sept). Nothing is
+pending there. No historical GST rates are backfilled — legacy rows keep a
+null snapshot and the client-rate fallback deliberately.
 
 The first approval attempt reserves `tickets.gst_rate` through the service-only
 `freeze_ticket_gst` RPC before rendering/sending; retries, withdrawals and
@@ -990,7 +990,17 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   would delete the backup being restored, after the wipe. Retention also
   spares by name the folder of every queued or running restore. Work is done in slices of about 100 seconds (`BUDGET_MS`)
   with the position in `backup_runs.cursor`, and a slice that got something
-  done kicks the next one itself — `{action:"advance", runId, chain:true}`,
+  done kicks the next one itself. A table part is checkpointed by its
+  return, so it never reads to the end of the slice: `stepTables` stops with
+  `PART_TAIL_MS` (20 s) left to gzip and upload, or after
+  `PART_MAX_REQUESTS` (60) pages, and uploads what it has with `exhausted`
+  false — the next slice carries on from the key. Without that, a short page
+  being the server's cap rather than exhaustion meant a gateway answering a
+  hundred rows at a time could spend a whole slice inside one part, be
+  uploaded by nobody, and be read again from the same key by the reclaim —
+  for ever, until the six-hour window failed the run. Never stop a part that
+  has read nothing: an empty part with `exhausted` false advances
+  `partIndex` and nothing else — `{action:"advance", runId, chain:true}`,
   never a tick, because a tick reads the heartbeat that same slice has just
   written and calls the run busy. There is no separate kick secret; the
   chain signs itself with the same `x-internal-secret` the cron sends. The

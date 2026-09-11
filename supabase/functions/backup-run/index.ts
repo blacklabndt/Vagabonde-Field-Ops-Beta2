@@ -28,7 +28,7 @@
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   LOAD_ORDER, BUCKETS, CURSOR_COLUMN, TABLE_KEYS,
-  PAGE_ROWS, MAX_PART_ROWS, stripSecrets, partFileName
+  PAGE_ROWS, MAX_PART_ROWS, PART_MAX_REQUESTS, stripSecrets, partFileName
 } from "../_shared/backupTables.ts";
 import {
   MANIFEST_NAME, TABLES_FOLDER, FILES_FOLDER,
@@ -45,7 +45,7 @@ import type { Connection } from "../_shared/backupCommon.ts";
 // How many backup folders listBackups reads the manifests of at once.
 const MANIFEST_READS = 4;
 import {
-  BUDGET_MS, RETRIES, afterFilesPage, afterTablePart, countsOf, foldIntoIndex,
+  BUDGET_MS, PART_TAIL_MS, RETRIES, afterFilesPage, afterTablePart, budgetLeft, countsOf, foldIntoIndex,
   forgetIndex, newRunCursor, nextPhaseAfterManifest, outOfBudget, pausePage,
   retryDelayMs, reviveCursor, shouldRetry, sliceDeadline, sliceLooksAlive,
   startPrefixWalk, stillHoldsRun, gatewayRefusal, isTransientEdgeError, withinRetryWindow
@@ -563,7 +563,7 @@ async function advance(db: SupabaseClient, run: Run, secret: string): Promise<Re
 
     let units = 0;
     while (!outOfBudget(deadline, Date.now()) && cursor.phase !== "done") {
-      if (cursor.phase === "tables") cursor = await stepTables(db, conn.drive, tablesFolder, cursor);
+      if (cursor.phase === "tables") cursor = await stepTables(db, conn.drive, tablesFolder, cursor, deadline);
       else if (cursor.phase === "files") cursor = await stepFiles(db, conn.drive, filesFolder, cursor, deadline, conn.rootFolderId, folderId, runId);
       else if (cursor.phase === "manifest") cursor = await stepManifest(db, conn.drive, folderId, cursor, String(current.kind), runId);
       else if (cursor.phase === "retention") cursor = await stepRetention(db, conn.drive, conn.rootFolderId, conn.keep, cursor);
@@ -783,7 +783,7 @@ async function failOrLeave(
 // ── Phase: tables ────────────────────────────────────────────────────────
 
 async function stepTables(
-  db: SupabaseClient, drive: DriveClient, tablesFolder: string, c: RunCursor
+  db: SupabaseClient, drive: DriveClient, tablesFolder: string, c: RunCursor, deadline: number
 ): Promise<RunCursor> {
   if (c.tableIndex >= LOAD_ORDER.length) { c.phase = "files"; return c; }
   const table = LOAD_ORDER[c.tableIndex];
@@ -798,6 +798,7 @@ async function stepTables(
   let lastKey: string | null = c.lastKey;
   let offset = c.offset;
   let exhausted = false;
+  let requests = 0;
 
   while (rows.length < MAX_PART_ROWS) {
     const pageSize = Math.min(PAGE_ROWS, MAX_PART_ROWS - rows.length);
@@ -811,6 +812,7 @@ async function stepTables(
     }
     const { data, error } = await q;
     if (error) throw error;
+    requests += 1;
     const page = (data ?? []) as Record<string, unknown>[];
     rows.push(...page);
     if (cursorColumn && page.length) lastKey = String(page[page.length - 1][cursorColumn]);
@@ -818,6 +820,16 @@ async function stepTables(
     // A short page may be the server's max-rows cap, not exhaustion.
     // Only an empty response proves this table has no more records.
     if (!page.length) { exhausted = true; break; }
+    // Stop while there is still time to gzip and upload: a part is
+    // checkpointed by its return, so one that outlives the slice is read
+    // again from the same key by whoever reclaims the run. Uploading a
+    // short part with exhausted false is the cheap answer — afterTablePart
+    // keeps the key and the next slice carries on from it. The break is
+    // below the empty-page test, so a part that read nothing is never
+    // stopped short: an empty part with exhausted false would advance
+    // partIndex for ever.
+    if (requests >= PART_MAX_REQUESTS) break;
+    if (budgetLeft(deadline, Date.now()) <= PART_TAIL_MS) break;
   }
 
   if (table === "profiles") await addAuthEmails(db, rows);

@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { periodFrom, periodWords, payPeriodFor, todayIn, sumHours } from "../../supabase/functions/_shared/hoursDose.ts";
+import { PART_TAIL_MS, afterTablePart, budgetLeft, foldIntoIndex, newRunCursor } from "../../supabase/functions/_shared/backupRun.ts";
+import { PART_MAX_REQUESTS } from "../../supabase/functions/_shared/backupTables.ts";
 
 const read = name => readFileSync(new URL(`../../supabase/functions/${name}`, import.meta.url), "utf8");
 
@@ -137,16 +139,31 @@ test("the partial note names the period and says the slice is not chronological"
 const backup = read("backup-run/index.ts");
 const start = backup.indexOf("async function stepTables(");
 const end = backup.indexOf("\n}", start) + 2;
-const makeBackup = new Function("LOAD_ORDER", "CURSOR_COLUMN", "TABLE_KEYS", "MAX_PART_ROWS", "PAGE_ROWS", "addAuthEmails", "foldIntoIndex", "partFileName", "gzip", "stripSecrets", "withRetry", "afterTablePart",
+const makeBackup = new Function("LOAD_ORDER", "CURSOR_COLUMN", "TABLE_KEYS", "MAX_PART_ROWS", "PAGE_ROWS", "PART_MAX_REQUESTS", "PART_TAIL_MS", "budgetLeft", "addAuthEmails", "foldIntoIndex", "partFileName", "gzip", "stripSecrets", "withRetry", "afterTablePart",
   `return (${stripTypeScriptTypes(backup.slice(start, end))});`);
+
+// Everything stepTables reads from module scope, handed in from the source
+// the way the hours branch above is: the ceilings are the shared modules'
+// own exports, so a change to either number is a change to these tests.
+// `done` reports what the read decided (the identity afterTablePart) unless
+// a test wants the real cursor arithmetic, which `makeRealPart` gives it.
+const makePart = (maxRows, pageRows, fold = c => c, after = (_, done) => done) =>
+  makeBackup(["tickets"], { tickets: "id" }, {}, maxRows, pageRows,
+    PART_MAX_REQUESTS, PART_TAIL_MS, budgetLeft,
+    async () => {}, fold, () => "part", async bytes => bytes, (_, rows) => rows,
+    async (_, fn) => fn(), after);
+const makeRealPart = (maxRows, pageRows) => makePart(maxRows, pageRows, foldIntoIndex, afterTablePart);
+
+const FROM_SCRATCH = { tableIndex: 0, lastKey: null, offset: 0, partIndex: 0 };
+// Far enough ahead that the clock never ends a part in the tests that are
+// about rows rather than time.
+const UNHURRIED = () => Date.now() + 10 * 60_000;
 
 test("a reduced server cap still respects the backup part's row budget", async () => {
   const records = Array.from({ length: 1500 }, (_, i) => ({ id: String(i).padStart(6, "0") }));
   const db = cappedDb(records, 300);
-  const readPart = makeBackup(["tickets"], { tickets: "id" }, {}, 1000, 1000,
-    async () => {}, c => c, () => "part", async bytes => bytes, (_, rows) => rows,
-    async (_, fn) => fn(), (_, result) => result);
-  const result = await readPart(db, { upload: async () => {} }, "folder", { tableIndex: 0, lastKey: null, offset: 0, partIndex: 0 });
+  const readPart = makePart(1000, 1000);
+  const result = await readPart(db, { upload: async () => {} }, "folder", { ...FROM_SCRATCH }, UNHURRIED());
   assert.equal(result.rows, 1000);
   assert.equal(result.offset, 1000);
   assert.equal(result.lastKey, "000999");
@@ -158,15 +175,73 @@ for (const cap of [250, 1000]) {
     test(`backup reads ${count} rows completely with an API cap of ${cap}`, async () => {
       const records = Array.from({ length: count }, (_, i) => ({ id: String(i).padStart(6, "0") }));
       const db = cappedDb(records, cap);
-      const readPart = makeBackup(["tickets"], { tickets: "id" }, {}, 25000, 1000,
-        async () => {}, c => c, () => "part", async bytes => bytes, (_, rows) => rows,
-        async (_, fn) => fn(), (_, result) => result);
+      const readPart = makePart(25000, 1000);
       let written;
       const result = await readPart(db, { upload: async (_folder, _name, bytes) => { written = JSON.parse(new TextDecoder().decode(bytes)); } }, "folder",
-        { tableIndex: 0, lastKey: null, offset: 0, partIndex: 0 });
+        { ...FROM_SCRATCH }, UNHURRIED());
       assert.deepEqual(written, records);
       assert.equal(result.rows, count);
       assert.equal(result.exhausted, true);
     });
   }
 }
+
+// A part is checkpointed by its return: one that reads until the slice is
+// over is uploaded by nobody, and the reclaim starts it again from the same
+// key. So the read stops while there is still time to gzip and upload, and
+// the short part says exhausted false.
+test("a part out of slice uploads what it read and says it is not exhausted", async () => {
+  const records = Array.from({ length: 5000 }, (_, i) => ({ id: String(i).padStart(6, "0") }));
+  const db = cappedDb(records, 100);
+  const readPart = makePart(25000, 1000);
+  let written;
+  // A deadline already gone: the first page is read (a part that read
+  // nothing may never stop short) and the clock ends the loop after it.
+  const result = await readPart(db, { upload: async (_f, _n, bytes) => { written = JSON.parse(new TextDecoder().decode(bytes)); } },
+    "folder", { ...FROM_SCRATCH }, Date.now() - 1);
+  assert.equal(result.exhausted, false, "the table is not finished");
+  assert.equal(result.rows, 100, "one page read, not the whole table");
+  assert.equal(written.length, result.rows, "every row read was uploaded");
+  assert.equal(result.lastKey, written.at(-1).id, "the cursor is the last row uploaded");
+});
+
+// An empty table still ends the phase on a spent clock: exhaustion is the
+// empty page, tested before the budget, so the part is never left to be
+// read again for ever.
+test("an empty table is exhausted even with the slice already over", async () => {
+  const readPart = makePart(25000, 1000);
+  const result = await readPart(cappedDb([], 1000), { upload: async () => {} }, "folder", { ...FROM_SCRATCH }, Date.now() - 1);
+  assert.equal(result.exhausted, true);
+  assert.equal(result.rows, 0);
+});
+
+// Fast, tiny pages never spend the clock, so the request ceiling is what
+// stops them: a gateway capped at one row would otherwise ask 25,000 times
+// inside one part, none of it checkpointed.
+test("tiny pages stop at the part's request ceiling rather than spinning", async () => {
+  const records = Array.from({ length: 25000 }, (_, i) => ({ id: String(i).padStart(6, "0") }));
+  const db = cappedDb(records, 1, PART_MAX_REQUESTS);
+  const readPart = makePart(25000, 1000);
+  const result = await readPart(db, { upload: async () => {} }, "folder", { ...FROM_SCRATCH }, UNHURRIED());
+  assert.equal(db.calls, PART_MAX_REQUESTS);
+  assert.equal(result.rows, PART_MAX_REQUESTS);
+  assert.equal(result.exhausted, false);
+  assert.equal(result.lastKey, records[PART_MAX_REQUESTS - 1].id);
+});
+
+// Slice after slice reads the table with no gap and no row twice — the real
+// cursor arithmetic, since that is what the run writes back to backup_runs.
+test("the next slice resumes a stopped part from its key", async () => {
+  const records = Array.from({ length: 150 }, (_, i) => ({ id: String(i).padStart(6, "0") }));
+  const db = cappedDb(records, 1, 400);
+  const readPart = makeRealPart(25000, 1000);
+  const seen = [];
+  const drive = { upload: async (_f, _n, bytes) => { seen.push(...JSON.parse(new TextDecoder().decode(bytes))); } };
+  let cursor = newRunCursor("2026-09-11T02:00:00.000Z");
+  for (let slice = 0; slice < 6 && cursor.phase === "tables"; slice++) {
+    cursor = await readPart(db, drive, "folder", cursor, UNHURRIED());
+  }
+  assert.equal(cursor.phase, "files", "the one table finished");
+  assert.equal(cursor.rows.tickets, records.length);
+  assert.deepEqual(seen.map(r => r.id), records.map(r => r.id));
+});
