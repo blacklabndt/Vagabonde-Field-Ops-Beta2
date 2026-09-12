@@ -1,21 +1,50 @@
--- DRAFT, NOT APPLIED. Phase 1: prepare the masked read relation and RPCs.
--- Then deploy the app, Ask and render-invoice readers; verify PostgREST embeds
--- profiles, jobs and ticket_lines through tickets_read after schema reload.
--- Only then apply ticket-money-select-enforce.sql. Until phase 2, the original
--- direct total disclosure remains open. Never claim phase 1 closes it.
+-- DRAFT, NOT APPLIED. Phase 1: prepare the masked read relation and the RPCs.
+-- Until phase 2 the original direct total disclosure remains open. Phase 1
+-- closes nothing; never say that it has.
+--
+-- The order is not a preference. Each step is what makes the next one safe:
+--
+--   1. Apply this file. Nothing is taken away, so nothing can break.
+--   2. Deploy the app and Ask. render-invoice is no longer part of this --
+--      the invoice read names no money column and stays on the base table.
+--   3. Put the new build on a tablet and open it. The app is a PWA: an
+--      installed copy serves itself from its own service worker, and the
+--      office cannot refresh it for the crew. Between phase 1 and phase 2
+--      an old build keeps working, so the gap may be as wide as it needs
+--      to be -- but the moment phase 2 lands, any device still on the old
+--      build reads no ticket at all. Confirm the new build is what a real
+--      tablet loads before going on, not merely what CI deployed.
+--   4. Run probes-ticket-money-select-api.mjs against the deployed API, as
+--      a price role and as a Helper. It is the only thing that answers the
+--      one question the isolated harness cannot: whether PostgREST still
+--      resolves the REVERSE ticket_lines embed through a view. Two reads
+--      depend on it -- reopening a draft (getTicket) and the archive's
+--      Job details.txt. If it refuses, stop: read the lines in a second
+--      request instead, and do not apply phase 2 until it answers 200.
+--   5. Only then apply ticket-money-select-enforce.sql, and run the API
+--      probe again -- it reports which phase it found and asserts the
+--      refusals once enforcement is on.
 begin;
 
 -- Owner rights are intentional: authenticated will lose base total SELECT.
 -- Therefore enforce the current tickets SELECT predicate explicitly here.
 -- Any future row-scope change must update this predicate as well as base RLS.
+--
+-- Three columns of the base table are deliberately absent from this list and
+-- from the phase 2 grant: approval_token, approval_expires_at and approved_ip.
+-- No read on caller authority names any of them anywhere in the app, Ask or
+-- the Edge Functions -- approve-ticket filters on the token hash and
+-- mailApproval writes it, both with the service role, which this never
+-- touches. The token is a stored credential and the IP is a client rep's;
+-- a list being written from scratch is the moment to leave them out.
 create or replace view public.tickets_read
 with (security_barrier = true, security_invoker = false) as
 select t.id, t.job_id, t.technician_id, t.work_date, t.status,
        t.client_contact, t.contractor_contact,
        case when (select private.user_role()) = any (array['Admin'::text, 'Technician'::text])
             then t.total else null::numeric end as total,
-       t.approved_at, t.approved_by_email, t.approved_ip, t.invoiced_at,
-       t.created_at, t.approval_token, t.approval_sent_at, t.approval_expires_at,
+       t.approved_at, t.approved_by_email, t.invoiced_at,
+       t.created_at, t.approval_sent_at,
        t.delays, t.approved_signature, t.approval_sent_to, t.approval_sent_by,
        t.client_key, t.chased_at, t.queried_at, t.query_text, t.query_by,
        t.invoice_number, t.gst_rate

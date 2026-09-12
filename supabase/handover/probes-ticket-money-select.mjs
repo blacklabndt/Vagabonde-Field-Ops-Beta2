@@ -14,6 +14,11 @@ const rows = async sql => (await db.query(sql)).rows;
 const refused = async sql => {
   await assert.rejects(db.query(sql), e => e.code === '42501'); checks++;
 };
+// 42703: the relation has no such column. Used where the masked view simply
+// does not carry a column, rather than carrying one nobody may read.
+const absent = async sql => {
+  await assert.rejects(db.query(sql), e => e.code === '42703'); checks++;
+};
 async function caller(role, staff = true) {
   await db.exec('reset role');
   await db.query("select set_config('qa.role', $1, false), set_config('qa.staff', $2, false)", [role, String(staff)]);
@@ -84,6 +89,17 @@ try {
     const aging = (await rows('select * from public.ticket_aging()'))[0];
     equal(String(aging.tickets), '1');
     equal(aging.total, priced ? '123.45' : null);
+    // Neither door hands a signed-in account the stored approval credential,
+    // the link's expiry or the rep's IP. The view omits them; the base grant
+    // never named them. Both halves are asserted, because dropping one alone
+    // leaves the other as the way in.
+    for (const col of ['approval_token', 'approval_expires_at', 'approved_ip']) {
+      // On the base table the grant list never named it: permission denied.
+      await refused(`select ${col} from public.tickets`);
+      // Through the view it is not a column at all, which is the stronger
+      // answer -- there is nothing to grant later by accident.
+      await absent(`select ${col} from public.tickets_read`);
+    }
     await refused("update public.tickets_read set status='Draft' where id='QA-ticket'");
     await refused("delete from public.tickets_read where id='QA-ticket'");
     await refused("insert into public.tickets_read(id,job_id,work_date) values ('bad','00000000-0000-0000-0000-000000000002',current_date)");

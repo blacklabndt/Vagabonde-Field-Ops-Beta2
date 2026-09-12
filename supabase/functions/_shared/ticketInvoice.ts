@@ -9,8 +9,9 @@
 //
 // Deliberately takes the client rather than making one. approve-ticket reads
 // with the service role because the person following the link has no account;
-// mail also reads with the service role. The signed-in renderer explicitly
-// selects tickets_read so its masked total and staff gate apply.
+// mail also reads with the service role. The signed-in renderer reads as the
+// caller, and the tickets SELECT policy's own is_staff() gate is what decides
+// -- no masked relation is needed here, because the select names no money.
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { InvoiceData, InvoiceSettings } from "./invoice.ts";
@@ -32,8 +33,15 @@ interface CrewReadRow {
 }
 
 // Everything the invoice prints, and nothing else.
+//
+// tickets.total is deliberately absent. Every figure on the bill is summed
+// from the lines by invoiceTotals -- the stored total is never trusted here,
+// and reading it anyway made this, the most-called read in the app, a money
+// read on the caller's own authority for a number nothing printed. Leaving
+// it out is why a signed-in renderer can go on reading the base table after
+// direct SELECT on tickets.total is revoked.
 const TICKET_INVOICE_SELECT =
-  "id, work_date, total, status, delays, client_contact, approved_at, approved_by_email, approved_signature, approval_sent_to, " +
+  "id, work_date, status, delays, client_contact, approved_at, approved_by_email, approved_signature, approval_sent_to, " +
   "invoice_number, invoiced_at, gst_rate, " +
   "jobs(job_number, project, lsd, afe, area, clients(name, gst_rate), contractors(name)), " +
   "ticket_lines(kind, label, unit, quantity, unit_rate)";
@@ -88,10 +96,7 @@ export async function loadInvoice(
   fallbackContact = "",
   // The invoice settings when the caller has read the row already (mail.ts's
   // appSettings carries them); otherwise read here, best-effort.
-  settingsGiven: InvoiceSettings | null = null,
-  // Service callers retain their base-table read. A signed-in caller must
-  // use the masked relation after direct SELECT on tickets.total is revoked.
-  ticketRelation: "tickets" | "tickets_read" = "tickets"
+  settingsGiven: InvoiceSettings | null = null
 ): Promise<{ data: InvoiceData | null; error: string | null }> {
   // Three reads that need nothing from each other, started together: this
   // is the hottest read there is — the approval page's GET and POST, every
@@ -105,7 +110,7 @@ export async function loadInvoice(
   // emailed bill ends up carrying terms the page it links to does not.
   const [{ data: ticket, error }, { data: crewRows }, settings] = await Promise.all([
     client
-      .from(ticketRelation)
+      .from("tickets")
       .select(TICKET_INVOICE_SELECT)
       .order(...TICKET_LINES_ORDER)
       .eq("id", ticketId)

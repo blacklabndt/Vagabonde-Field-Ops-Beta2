@@ -73,23 +73,31 @@ test("the real invoice loader fetches the snapshot before rendering the approved
 
 const approval = stripTypeScriptTypes(read("mailApproval.ts").replace(/^import .*;\r?\n/gm, "")).replace(/export /g, "");
 
-test("signed-in invoice loader uses the masked relation while service callers retain the base", async () => {
+// The invoice never reads tickets.total -- invoiceTotals sums the lines --
+// so this, the app's hottest read, names no money column and needs no masked
+// relation. That is what lets it keep reading the base table on the caller's
+// own authority once direct SELECT on tickets.total is revoked, and it is
+// also why the reverse ticket_lines embed here never has to resolve through
+// a view. A select that names total again would quietly undo both.
+test("the invoice loader reads the base table and names no money column", async () => {
   const loaderSource = stripTypeScriptTypes(read("ticketInvoice.ts").replace(/^import .*;\r?\n/gm, "")).replace(/export /g, "");
   const load = new Function("LEVEL_LEGEND", `${loaderSource}; return loadInvoice;`)("");
-  for (const relation of [undefined, "tickets_read"]) {
-    const reads = [];
-    const db = { from(table) {
-      reads.push(table);
-      return { select() { return this; }, order() { return this; }, eq() { return this; },
-        maybeSingle: async () => ({ data: null, error: null }),
-        // biome-ignore lint/suspicious/noThenProperty: models the awaited PostgREST query builder.
-        then(resolve) { resolve({ data: [], error: null }); }
-      };
-    } };
-    await load(db, "TEST", "", {}, relation);
-    assert.equal(reads[0], relation ?? "tickets");
-    assert.equal(reads[1], "ticket_crew");
-  }
+  const reads = [];
+  let selected = "";
+  const db = { from(table) {
+    reads.push(table);
+    return { select(s) { if (table === "tickets") selected = s; return this; },
+      order() { return this; }, eq() { return this; },
+      maybeSingle: async () => ({ data: null, error: null }),
+      // biome-ignore lint/suspicious/noThenProperty: models the awaited PostgREST query builder.
+      then(resolve) { resolve({ data: [], error: null }); }
+    };
+  } };
+  await load(db, "TEST", "", {});
+  assert.equal(reads[0], "tickets");
+  assert.equal(reads[1], "ticket_crew");
+  assert.ok(!/\btotal\b/.test(selected), `invoice select must name no money column: ${selected}`);
+  assert.ok(/\bticket_lines\(/.test(selected));
 });
 // `refuse` is the module's one import (the marker from _shared/publicError.ts,
 // which decides whether a sentence reaches the person or only the log). The

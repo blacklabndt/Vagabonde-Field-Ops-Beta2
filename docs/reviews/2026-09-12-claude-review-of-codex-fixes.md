@@ -82,3 +82,57 @@ filed under `supabase/migrations/` with the applier's version — Kyle's call.
 
 Codex's `openTicket()` observation (the selected job changing before the
 async load settles) is unreproduced and correctly left unfixed.
+
+## The three notes, closed (12 Sept, Claude, on Kyle's instruction)
+
+Nothing is applied live. Both SQL files remain drafts under
+`supabase/handover/`; the disclosure is still open.
+
+**Note 2 — the stored credential.** `approval_token` is gone from the view
+and from the phase 2 grant list, and so are `approval_expires_at` and
+`approved_ip`: no read on caller authority names any of the three anywhere
+in the app, Ask or the functions. `approve-ticket` filters on the token
+hash and `mailApproval` writes it, both with the service role, which this
+never touches. Writing the grant list from scratch is the one moment those
+columns can be left out without anybody noticing a loss.
+
+Removing them from the view alone would have left `approved_ip` readable
+on the base table — the grant list named it on a different line than the
+one the edit matched. The harness caught it: the new assertions ask both
+doors for each of the three columns, because dropping one is the other's
+way in. `probes-ticket-money-select.mjs` is now 99 checks and passes.
+
+**Note 1 — the reverse embed.** One of the three sites is gone rather than
+verified. `TICKET_INVOICE_SELECT` named `tickets.total`, which nothing
+prints: `invoiceTotals` sums the lines, and `invoice.ts` says so in as
+many words ("Computed from the lines, never trusted from the caller").
+So the app's hottest read — the approval page's GET and POST, every
+approval email, every archived invoice — was reading money on the
+caller's own authority for a number no document carries. It is out, the
+`ticketRelation` parameter with it, and `render-invoice` reads the base
+table again. A test asserts the select names no money column and still
+carries the `ticket_lines` embed, so a future select cannot quietly undo
+it.
+
+Two sites remain, both in the browser and both price-role paths:
+`getTicket` (reopening a draft) and `listTicketsForArchive`
+(Job details.txt). PostgREST has resolved reverse embeds through views
+since v7 and this should work — but "should" is not the standard on the
+night a base-table grant is taken away, and the isolated harness cannot
+answer it. `probes-ticket-money-select-api.mjs` is new: it signs in as a
+price role and as a Helper against the deployed API, asserts the reverse
+embed answers 200 with an array, asserts the forward embeds, asserts the
+masking, reports which phase the project is in, and asserts the refusals
+once phase 2 is on. If the reverse embed refuses, the fix is a second
+request for the lines — not pressing on.
+
+**Note 3 — the PWA.** Written into the phase 1 header as a numbered
+order, because the hazard is that phase 2 is the irreversible half: an
+installed build serves itself from its own service worker, and an old one
+stops reading tickets at all the moment the base grant goes. The gap
+between the phases may be as wide as it needs to be; what may not be
+skipped is seeing the new build load on a real tablet, not merely seeing
+CI deploy it.
+
+Green at this commit: 922 tests, Biome clean on 216 files, 22 functions
+type-check, build ships 36 precache entries, 99 isolated SQL checks.
