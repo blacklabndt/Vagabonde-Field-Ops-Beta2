@@ -3,12 +3,12 @@
   "private": true,
   "description": "Repo-root build entry. The app itself lives in vite-app/.",
   "scripts": {
-    "//": "Cloudflare Workers Builds runs from the repo root with no root-directory setting, so the build reaches down into the app. `npm ci` rather than `install` so the lockfile is honoured exactly and a CI build can't quietly pick up a different dependency version than the one tested here.",
+    "//": "Repo-root build entry; install the locked app dependencies before building.",
     "build": "npm --prefix vite-app ci && npm --prefix vite-app run build",
     "lint": "npm --prefix vite-app run lint",
     "typecheck": "npm --prefix vite-app run typecheck",
     "test": "npm --prefix vite-app test",
-    "//deploy": "Local deploy safeguard, not CI: a red test stops the deploy on the one path that actually ships. Deploys are run by hand from this machine (wrangler CLI), so this is the gate. Direct `npx wrangler deploy` still bypasses it, and Supabase Edge Functions deploy separately via the supabase CLI.",
+    "//deploy": "Local deployment runs tests and build first. GitHub Actions automatically deploys the Worker and SPA after successful checks on room/37dbe6165f-beta-2-review. Supabase functions and migrations release separately.",
     "deploy": "npm test && npm run build && npx wrangler deploy"
   }
 }

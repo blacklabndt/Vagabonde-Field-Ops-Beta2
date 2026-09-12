@@ -1,25 +1,15 @@
-# Test signal for pushes and pull requests.
-#
-# This is deliberately NOT a deploy workflow. Cloudflare Workers Builds is
-# already wired to this repository and builds from the repo root (see the
-# comment in the root package.json); a `wrangler deploy` step here would be
-# a second deploy path racing the first, and would need a Cloudflare API
-# token stored in GitHub. Edge Functions deploy separately through the
-# supabase CLI either way.
-#
-# Note also what this workflow is not: Workers Builds does not consult
-# GitHub check results, so a red run here does not stop a deploy. It tells
-# a human the tree is broken; it does not gate anything.
+# Test every push/PR; ship the Worker and SPA only from the release branch.
+# Supabase functions and schema changes retain their separate release process.
 name: CI
 
 on:
   push:
   pull_request:
 
-# A new push to a branch cancels the run still going for the old one.
+# Let an in-progress deployment finish before processing another release.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -55,3 +45,12 @@ jobs:
 
       - name: Build
         run: npm --prefix vite-app run build
+
+      - name: Deploy Worker and app
+        if: github.event_name == 'push' && github.ref == 'refs/heads/room/37dbe6165f-beta-2-review' && github.repository == 'blacklabndt/Vagabonde-Field-Ops-Beta2'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: '39d46bd7c717e6215af2079b0dd804c0'
+          wranglerVersion: '4.131.1'
+          command: deploy --keep-vars --tag ${{ github.sha }} --message "GitHub Actions ${{ github.run_id }} commit ${{ github.sha }}"
