@@ -27,3 +27,8 @@ supabase/.temp/
 # Written by `deno check` when the functions are type-checked from the root
 # (see CLAUDE.md); the repo has no Deno config of its own to pin.
 deno.lock
+
+# Live bug-hunt harness and its output. The scripts probe the LIVE project and
+# their logs carry real record excerpts and token columns; nothing in here is
+# part of the app, and a committed log is a disclosure nobody meant to make.
+vite-app/e2e/hunt/
