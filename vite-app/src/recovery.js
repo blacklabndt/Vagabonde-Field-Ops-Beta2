@@ -28,13 +28,21 @@ import { sbClient } from "./config.js";
 function readRecoveryHash() {
   if (typeof window === "undefined") return false;
   const p = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
-  return p.get("type") === "recovery" && !!p.get("access_token");
+  return p.get("type") === "recovery" && !!p.get("access_token") && !!p.get("refresh_token");
 }
-let pending = readRecoveryHash();
-// A bare `type=recovery` is also taken out of the address bar. Nothing else
-// reads it, and leaving it there means a bookmark or a forwarded link keeps
-// asking the same question on every load.
-if (typeof window !== "undefined" && !pending
+// The hash is a HINT and never authority. A URL is written by whoever sends
+// it, so a well-formed one proves only that somebody typed two tokens — and
+// the screen behind this used to open on the word plus any string at all.
+// The hint is read only where a forged one costs nothing: holding off the
+// boot's DESTRUCTIVE work, where a wipe not done can harm nobody. What OPENS
+// the set-password screen is `pending`, and only supabase-js reporting a
+// recovery session it actually minted sets that.
+let hinted = readRecoveryHash();
+let pending = false;
+// A hash that says recovery without a whole session in it is taken out of the
+// address bar. Nothing else reads it, and leaving it there means a bookmark
+// or a forwarded link keeps asking the same question on every load.
+if (typeof window !== "undefined" && !hinted
     && new URLSearchParams((window.location.hash || "").replace(/^#/, "")).get("type") === "recovery"
     && window.history && window.history.replaceState) {
   window.history.replaceState(null, "", (window.location.pathname || "") + (window.location.search || ""));
@@ -71,13 +79,21 @@ sbClient.auth.onAuthStateChange(event => {
 
 export const Recovery = {
   pending: () => pending,
-  clear() { pending = false; },
+  // "A password reset may be in play" — the hint, or the real thing. Only for
+  // deciding what NOT to destroy; never for opening the set-password screen.
+  hinted: () => hinted || pending,
+  clear() { pending = false; hinted = false; },
   // A plain sentence when the link landed with a complaint instead of a
   // session; null on every ordinary start.
   error: () => linkError,
   // fn(true) whenever a recovery session is detected after subscription.
   subscribe(fn) {
     listeners.add(fn);
+    // The event is one-shot and never replayed, and it can land in the gap
+    // between a component reading pending() for its initial state and its
+    // effect getting here. A subscriber arriving after it is told at once
+    // rather than never.
+    if (pending) fn(true);
     return () => listeners.delete(fn);
   }
 };

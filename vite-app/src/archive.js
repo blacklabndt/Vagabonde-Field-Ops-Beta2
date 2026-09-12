@@ -315,7 +315,12 @@ export async function buildArchive({ jobs, mode, from, to, by = "", onProgress =
     });
     try {
       [record, jhas, reports, ticketRows] = await OfflineCache.liveOnly(() => Promise.all([
-        db.getJobRecord(job), db.listJhasForJob(job.dbId), db.listReportsForJob(job.dbId), db.listTicketsForJob(job.dbId)
+        // The three lists are the archive's own paged reads, not Job
+        // detail's: those stop at PostgREST's 1,000-row cap without saying
+        // so, and the drift check before the clear reads the same three —
+        // so a truncated build and a truncated re-check agreed with each
+        // other and the clear deleted work that was never in the zip.
+        db.getJobRecord(job), db.listAllJhasForJob(job.dbId), db.listAllReportsForJob(job.dbId), db.listAllTicketsForJob(job.dbId)
       ]));
     } catch (e) {
       missing.push(`The job's record, assessments, reports and tickets: ${e.message || "read failed"}`);

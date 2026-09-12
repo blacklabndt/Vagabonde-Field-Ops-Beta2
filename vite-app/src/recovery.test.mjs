@@ -54,17 +54,23 @@ async function loadRecovery(hash) {
   return { mod, handler, rewrites, fire: event => handler(event, null) };
 }
 
-test("a recovery landing is caught during import, before anything subscribes", async () => {
-  const { mod, handler } = await loadRecovery("#access_token=abc&type=recovery");
-  assert.equal(mod.Recovery.pending(), true, "the hash was read at module evaluation");
+test("a recovery landing is noticed during import, before anything subscribes", async () => {
+  // The hash is read at module evaluation, and it is read as a HINT: enough
+  // to hold the boot off its destructive work, never enough to open the
+  // set-password screen. Only the auth event does that.
+  const { mod, handler } = await loadRecovery("#access_token=abc&refresh_token=xyz&type=recovery");
+  assert.equal(mod.Recovery.hinted(), true, "the hash was read at module evaluation");
+  assert.equal(mod.Recovery.pending(), false, "but a URL is not authority to change a password");
   assert.equal(typeof handler, "function", "and the auth subscription was already in place");
 });
 
 test("an ordinary landing is not a recovery", async () => {
   const { mod } = await loadRecovery("");
   assert.equal(mod.Recovery.pending(), false);
-  const { mod: withOtherHash } = await loadRecovery("#access_token=abc&type=signup");
+  assert.equal(mod.Recovery.hinted(), false, "and nothing to hold the boot off for");
+  const { mod: withOtherHash } = await loadRecovery("#access_token=abc&refresh_token=xyz&type=signup");
   assert.equal(withOtherHash.Recovery.pending(), false, "only type=recovery counts");
+  assert.equal(withOtherHash.Recovery.hinted(), false, "a whole session under another word is still not a reset");
 });
 
 test("the word without the token is not a recovery, and is stripped", async () => {
@@ -75,14 +81,23 @@ test("the word without the token is not a recovery, and is stripped", async () =
   // bar to ask again on the next load.
   const { mod, rewrites } = await loadRecovery("#type=recovery");
   assert.equal(mod.Recovery.pending(), false);
+  assert.equal(mod.Recovery.hinted(), false);
   assert.deepEqual(rewrites, ["/"], "the hash was taken out of the URL");
 
-  const { mod: refresh } = await loadRecovery("#refresh_token=abc&type=recovery");
-  assert.equal(refresh.Recovery.pending(), false, "the access token is what makes the session");
+  // Auth sends the whole recovery session or none of it, so half a hash is
+  // half a forgery — and neither half is left in the bar to ask again.
+  const { mod: refresh, rewrites: refreshRewrites } = await loadRecovery("#refresh_token=abc&type=recovery");
+  assert.equal(refresh.Recovery.hinted(), false, "the access token is half of what makes the session");
+  assert.deepEqual(refreshRewrites, ["/"]);
+
+  const { mod: access, rewrites: accessRewrites } = await loadRecovery("#access_token=abc&type=recovery");
+  assert.equal(access.Recovery.hinted(), false, "and the refresh token is the other half");
+  assert.equal(access.Recovery.pending(), false);
+  assert.deepEqual(accessRewrites, ["/"]);
 });
 
 test("a real recovery landing is left in the address bar for supabase-js", async () => {
-  const { rewrites } = await loadRecovery("#access_token=abc&type=recovery");
+  const { rewrites } = await loadRecovery("#access_token=abc&refresh_token=xyz&type=recovery");
   assert.deepEqual(rewrites, [], "nothing else may eat the hash before the client reads it");
 });
 
@@ -110,17 +125,52 @@ test("unsubscribing stops the callback", async () => {
   assert.equal(mod.Recovery.pending(), true, "the flag is still set — only the callback went away");
 });
 
-test("a landing already caught by the hash does not fire again", async () => {
-  // Deliberate: the hash and the event are two sightings of one arrival. The
-  // screen reads pending() when it mounts, so the notification is only for a
-  // recovery nobody has seen yet — firing it twice would re-open the
-  // set-password screen over whatever the person had moved on to.
-  const { mod, fire } = await loadRecovery("#access_token=abc&type=recovery");
+test("the hash opens nothing on its own — the event is what does", async () => {
+  // The two sightings are not equal. The hash is whatever was sent to this
+  // device; the event is supabase-js reporting a session it minted from it.
+  // A hinted landing therefore still waits, and the event still wakes the
+  // screen, because that is the only thing that may.
+  const { mod, fire } = await loadRecovery("#access_token=abc&refresh_token=xyz&type=recovery");
+  const seen = [];
+  mod.Recovery.subscribe(v => seen.push(v));
+  assert.deepEqual(seen, [], "the hash was read at import and told nobody");
+  assert.equal(mod.Recovery.pending(), false);
+
+  fire("PASSWORD_RECOVERY");
+  assert.deepEqual(seen, [true], "the session Auth made is what opens it");
+  assert.equal(mod.Recovery.pending(), true);
+});
+
+test("a forged recovery hash opens nothing at all", async () => {
+  // Team chat linkifies URLs, so this address can arrive in a message: the
+  // word plus two strings anybody can type. It used to be enough to open the
+  // real "Set a new password" screen over a live session. It buys a forger
+  // one thing now — the boot leaves this device's data alone — and that is
+  // deliberate, because a wipe not done can harm nobody.
+  const { mod } = await loadRecovery("#access_token=not-a-token&refresh_token=nor-this&type=recovery");
+  assert.equal(mod.Recovery.hinted(), true, "the boot holds off its destructive work");
+  assert.equal(mod.Recovery.pending(), false, "and the screen does not open");
+
   let calls = 0;
   mod.Recovery.subscribe(() => { calls++; });
+  assert.equal(calls, 0, "nobody is told a reset is happening");
+});
+
+test("an event that lands before a subscriber is replayed to it", async () => {
+  // The gap this closes is real and narrow: App.jsx reads pending() for its
+  // initial state and subscribes in an effect, and PASSWORD_RECOVERY is a
+  // one-shot supabase-js never replays. An event arriving between those two
+  // moments was heard by nobody once the hash stopped standing in for it.
+  const { mod, fire } = await loadRecovery("#access_token=abc&refresh_token=xyz&type=recovery");
   fire("PASSWORD_RECOVERY");
-  assert.equal(calls, 0);
-  assert.equal(mod.Recovery.pending(), true);
+
+  const seen = [];
+  mod.Recovery.subscribe(v => seen.push(v));
+  assert.deepEqual(seen, [true], "told at once, synchronously, rather than never");
+
+  const later = [];
+  mod.Recovery.subscribe(v => later.push(v));
+  assert.deepEqual(later, [true], "and so is the next one");
 });
 
 // ── the dead link ────────────────────────────────────────────────────────
@@ -132,7 +182,7 @@ test("a landing already caught by the hash does not fire again", async () => {
 test("an ordinary start has nothing to say", async () => {
   const { mod } = await loadRecovery("");
   assert.equal(mod.Recovery.error(), null);
-  const { mod: signedIn } = await loadRecovery("#access_token=abc&type=recovery");
+  const { mod: signedIn } = await loadRecovery("#access_token=abc&refresh_token=xyz&type=recovery");
   assert.equal(signedIn.Recovery.error(), null, "a working link is not an error");
 });
 
@@ -163,10 +213,13 @@ test("any other complaint is passed on in Auth's own words, once", async () => {
 });
 
 test("clear() puts it back, and a later reset is caught again", async () => {
-  const { mod, fire } = await loadRecovery("#access_token=abc&type=recovery");
+  const { mod, fire } = await loadRecovery("#access_token=abc&refresh_token=xyz&type=recovery");
+  assert.equal(mod.Recovery.hinted(), true);
+  fire("PASSWORD_RECOVERY");
   assert.equal(mod.Recovery.pending(), true);
   mod.Recovery.clear();
   assert.equal(mod.Recovery.pending(), false, "the set-password screen is done with it");
+  assert.equal(mod.Recovery.hinted(), false, "and the hash it landed on is spent with it");
 
   const seen = [];
   mod.Recovery.subscribe(v => seen.push(v));

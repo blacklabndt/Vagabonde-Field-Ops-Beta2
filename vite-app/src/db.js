@@ -1,5 +1,5 @@
 import { sbClient, VAPID_PUBLIC_KEY } from "./config.js";
-import { money, todayLocal, localDate, dayMonth, ticketDateStamp, primaryContact, ageInDays, storageKeySafe, STANDARD_RATE_LINES, nonNegative, lineTotal, decimalString, ticketStatusWriteRefusal, gstRateOf, billableNumber, storedNumber } from "./data.js";
+import { money, todayLocal, localDate, dayMonth, ticketDateStamp, primaryContact, ageInDays, storageKeySafe, STANDARD_RATE_LINES, nonNegative, lineTotal, decimalString, ticketStatusWriteRefusal, gstRateOf, billableNumber, storedNumber, seesPrices } from "./data.js";
 import { OfflineCache } from "./offlineCache.js";
 import { Toasts } from "./toastBus.js";
 import { OfflineQueue, isNetworkError } from "./offlineQueue.js";
@@ -330,6 +330,77 @@ const assertSessionAlive = async () => {
   }
 };
 
+// May the account making THIS request see money — and therefore replace a
+// ticket's billing lines? Prices are Admins' and Technicians' (the
+// rate_lines / ticket_lines policies name the role as well as the tab), and
+// this is the client-side half of that rule, asked before a write that
+// would otherwise delete lines the account cannot read.
+//
+// Asked of the role, never inferred from a figure. The guard in
+// updateTicket used to read "nothing came back and the row carries money",
+// and moving the ticket reads onto the `tickets_read` view (20260912205211)
+// — which masks `total` to null for exactly those roles — turned that test
+// into `Number(null || 0) > 0`: false, for every account it existed to stop.
+//
+// Fresh and session-matched: the id comes from this session's own token and
+// the role is read for that id, every time. Nothing is remembered between
+// calls, so there is no way for this to answer with the last account's role
+// on a shared tablet, and a role changed mid-session is seen at the next save.
+//
+// A read that fails is raised, not read as "no price role". A failure is
+// evidence of nothing; answering it by skipping the line replacement would
+// report a save as done while the billing never landed — the silent
+// half-save is worse than a refusal the technician can retry.
+async function currentUserSeesPrices() {
+  // getSession rather than getUser: the id is the one in the token this
+  // request will be made with, read locally, so the check costs one round
+  // trip (the profile) and not two on a link that is already the reason
+  // half this file exists. The profiles read is where the freshness is —
+  // and RLS answers it as that same token, so the two cannot be different
+  // accounts. Same call assertSessionAlive makes, for the same reason.
+  const { data: auth, error: aErr } = await sbClient.auth.getSession();
+  if (aErr) throw aErr;
+  const id = auth && auth.session && auth.session.user ? auth.session.user.id : null;
+  if (!id) {
+    throw plainError("You're signed out, so nothing could be saved. Sign in again and retry — everything on screen is still there.");
+  }
+  const { data: me, error: pErr } = await sbClient.from("profiles")
+    .select("id, role").eq("id", id).maybeSingle();
+  if (pErr) throw pErr;
+  // No row is not "no price role" either: a locked account still reads its
+  // own profiles row (20260908063429), so an empty answer here is a read
+  // that went wrong or a session that is not what it claimed to be.
+  if (!me || me.id !== id) {
+    throw plainError("Your account couldn't be checked just now, so nothing was changed on this ticket's charges. Try saving again in a moment.");
+  }
+  return seesPrices(me);
+}
+
+// The same question, started early and asked later — the startKeyLookup
+// shape, for the same reason: a save that must wait on this answer before
+// it replaces the lines need not wait on it *serially*. Started in front of
+// the metadata UPDATE, it overlaps that round trip and the reads behind a
+// silent refusal, so the common case (a Technician, who passes) pays no
+// wall clock for the check at all.
+//
+// It never rejects. An earlier await in the caller can throw while this is
+// still in flight — a refused UPDATE, a ticket cancelled on another device
+// — and a rejected promise nobody is left to await is an unhandled
+// rejection, which is fatal in some of the runtimes this codebase runs in
+// and noise in the rest. So the failure is carried as a value and re-thrown
+// by whoever awaits it; fail-closed is unchanged, only its timing.
+function startPriceRoleLookup() {
+  return currentUserSeesPrices().then(sees => ({ sees }), error => ({ error }));
+}
+
+// Reads that answer back. `{ error }` is raised here, not swallowed: see
+// currentUserSeesPrices for why a failed read may not pass for "no prices".
+async function priceRoleAnswer(lookup) {
+  const { sees, error } = await lookup;
+  if (error) throw error;
+  return sees;
+}
+
 // The same database refusal, translated, for anything that slips past the
 // client-side check (a stale tab, a hand-crafted request).
 const friendlyLineError = e =>
@@ -423,6 +494,28 @@ function shapeJobTicket(t) {
   };
 }
 const JOB_TICKET_COLUMNS = "id, job_id, work_date, status, total, created_at, technician_id, profiles(name)";
+
+// One job's rows of a table, every one of them, walked by key. The ordering
+// is the key's because that is what makes the walk safe; the callers put the
+// list back into the order their screens read it in (newestFirst below).
+const archiveJobRows = (table, columns, jobDbId) => fetchAllKeyset(async after => {
+  let q = sbClient.from(table).select(columns).eq("job_id", jobDbId);
+  if (after != null) q = q.gt("id", after);
+  const { data, error } = await q.order("id").limit(RESPONSE_ROW_CAP);
+  if (error) throw error;
+  return data || [];
+});
+
+// Newest first, the id breaking a tie — the order the unpaged reads these
+// replace came back in. It is not decoration: the zip's entry order, its
+// manifest and Job details.txt are all built in the order these lists
+// arrive, and a build has to come out the same twice. Timestamps arrive as
+// ISO strings in one offset, so they sort as text; a missing one sorts last.
+const newestFirst = (rows, field) => rows.slice().sort((a, b) => {
+  const x = a[field] || "", y = b[field] || "";
+  if (x !== y) return x < y ? 1 : -1;
+  return String(a.id) < String(b.id) ? 1 : -1;
+});
 
 // Everything the archive's job text file says about a ticket, in one row.
 // gst_rate is the rate this ticket was actually billed at, reserved on its
@@ -732,6 +825,38 @@ export const Db = {
       return { rows: rows || [], total: count ?? (rows || []).length };
     });
     return data.map(shapeJob);
+  },
+
+  // ── The archive's own reads of a job's paperwork ─────────────────────
+  // Every row, not the first thousand.
+  //
+  // Job detail's listTicketsForJob / listJhasForJob / listReportsForJob are
+  // one unpaged request each. That is right for a screen — a job with more
+  // than 1,000 tickets is not a list anybody scrolls, and the cached copy is
+  // what makes the job open offline — and wrong for the archive, because the
+  // archive is read twice: once to build the zip and once, live, to check
+  // for drift a moment before the clear deletes the jobs. Both reads
+  // truncate at exactly the same 1,000 rows, so they agree with each other,
+  // the counts and the id lists match, and the clear deletes work that is
+  // not in the zip.
+  //
+  // Keyset rather than OFFSET pages: this is the read a bulk delete is
+  // decided on, and an OFFSET walk can silently skip a row that moves
+  // between pages (paging.js says which shape is for what). A page that
+  // fails throws, which is what both callers turn into a refusal.
+  //
+  // No cache in either direction: nothing here is answered from the device's
+  // remembered copy, and nothing here writes over Job detail's.
+  async listAllTicketsForJob(jobDbId) {
+    return newestFirst(await archiveJobRows("tickets_read", JOB_TICKET_COLUMNS, jobDbId), "created_at").map(shapeJobTicket);
+  },
+
+  async listAllJhasForJob(jobDbId) {
+    return newestFirst(await archiveJobRows("jhas", JHA_COLUMNS, jobDbId), "signed_at").map(shapeJha);
+  },
+
+  async listAllReportsForJob(jobDbId) {
+    return newestFirst(await archiveJobRows("reports", "*", jobDbId), "uploaded_at").map(shapeReport);
   },
 
   // A whole job's tickets, with everything the archive's text file says about
@@ -3273,7 +3398,11 @@ export const Db = {
     // round trip, strictly after this one, in front of every save and every
     // queued replay. A job the embed cannot show (unsynced, or invisible)
     // falls through to assertJobOpen so the wording of that case is its own.
-    const { data: row, error: rErr } = await sbClient.from("tickets_read").select("status, job_id, total, jobs(status, job_number)").eq("id", ticketId).maybeSingle();
+    // `total` is deliberately not read here any more. It was read for the
+    // line guard below, which now asks the account's role instead — and a
+    // masked figure sitting in a variable is the thing that guard was
+    // wrongly built on once already.
+    const { data: row, error: rErr } = await sbClient.from("tickets_read").select("status, job_id, jobs(status, job_number)").eq("id", ticketId).maybeSingle();
     if (rErr) throw rErr;
     // Cancelled on another device while this editor was open. Say so —
     // the screen's generic wrapper ("press Save again") would be a lie
@@ -3302,6 +3431,13 @@ export const Db = {
     lines = lines.map(cleanLine);
     const total = totalOf(lines);
     assertBillable(total);
+    // Whether this account may replace the billing at all, asked now and
+    // awaited below, where the answer is actually needed: it overlaps the
+    // UPDATE that follows instead of standing in front of it. Started after
+    // every refusal above, so a save that is not allowed to land still fails
+    // on its own words and reads no profile; the sink inside the starter is
+    // what makes an early throw from here on safe.
+    const priceRole = startPriceRoleLookup();
     // No total in the patch. The old lines are still in place at this point,
     // so writing the new sum here would leave the row disagreeing with them
     // until the replacement below lands — which is the window the constraint
@@ -3346,6 +3482,24 @@ export const Db = {
       throw plainError(`Ticket ${ticketId} belongs to another technician — your account can't change it. Ask them, or the office, to make the edit.`);
     }
 
+    // Everything above here is this account's to write — the status, the
+    // reps, the delays — and the crew's hours are saved by the caller after
+    // this returns. The billing is not: a role without prices can neither
+    // read a ticket's lines nor write them, so the replacement below is not
+    // attempted at all and the lines are left exactly as they were.
+    //
+    // The answer is the account's role, read live by the lookup started
+    // above; a profile read that fails throws out of here rather than
+    // passing for "no prices", because that would look like a save that
+    // worked. `total` comes back null and not a number: this account was
+    // never shown one, and Number(null) is 0 — a figure that reads as a
+    // ticket worth nothing.
+    //
+    // Awaited here and nowhere earlier: this is the first line that needs
+    // it, and it stays in front of the read of the old lines below, which
+    // is the read a role without prices comes back empty from.
+    if (!(await priceRoleAnswer(priceRole))) return { id: ticketId, total: null };
+
     // Replacing the lines is delete-then-insert, and the gap between the two
     // is where a dropped connection or a refused insert used to destroy a
     // ticket's existing billing — found in beta testing, when an overflow on
@@ -3362,16 +3516,6 @@ export const Db = {
       .from("ticket_lines").select("kind, label, unit, quantity, unit_rate, line_order")
       .eq("ticket_id", ticketId).order("line_order");
     if (oErr) throw oErr;
-    // Nothing read from a ticket that carries money means the lines are
-    // there and this account can't see them (prices are Admins' and
-    // Technicians'; the policy hides the rows rather than refusing the
-    // read). Replacing what can't be seen would be deleting it — the
-    // database refuses the delete to those roles too, but the editor should
-    // not even try: the hours, reps and delays are saved, the billing is
-    // left exactly as it was.
-    if (!(oldLines && oldLines.length) && Number(row.total || 0) > 0) {
-      return { id: ticketId, total: Number(row.total) };
-    }
 
     const { error: dErr } = await sbClient.from("ticket_lines").delete().eq("ticket_id", ticketId);
     if (dErr) throw dErr;

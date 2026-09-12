@@ -783,7 +783,7 @@ export function App() {
           // session — see forgetStoredSession. An account with nothing
           // behind it must not be left one to refresh from.
           signOut: async () => {
-            if (Recovery.pending()) return;
+            if (Recovery.hinted()) return;
             const { error } = await sbClient.auth.signOut();
             if (error) forgetStoredSession();
           },
@@ -867,8 +867,17 @@ export function App() {
         // The server answered, and this account has nothing behind it any
         // more — deactivated, or stripped of every tab. Nobody is coming
         // back for this, so everything goes, drafts included.
-        try { await OfflineCache.remove(IDENTITY_KEY); } catch { /* the clear below tries again */ }
-        try { await OfflineCache.clear(); } catch (e) { console.error("Couldn't clear the offline cache after the account was locked:", e); }
+        //
+        // Unless a reset may be in play: the sign-out above was suppressed
+        // for it, so this is not an account being retired — it is a recovery
+        // session whose profile could not be read, and the wipe would take
+        // the half-entered tickets of the person now typing a new password.
+        // The hint is enough to hold off on, because a wipe not done costs
+        // nothing and a forged one therefore buys nobody anything.
+        if (!Recovery.hinted()) {
+          try { await OfflineCache.remove(IDENTITY_KEY); } catch { /* the clear below tries again */ }
+          try { await OfflineCache.clear(); } catch (e) { console.error("Couldn't clear the offline cache after the account was locked:", e); }
+        }
       } else if (!user) {
         // A session that simply ended — expired, or signed out on another
         // device. The identity goes, or it outlives the server's "no session"
@@ -1131,7 +1140,10 @@ export function App() {
   // The same set Open tickets shows: drafts still to be sent to the client.
   const openMyTicketsCount = myTickets.filter(t => t.status === "Draft").length;
 
-  if (checkingSession) {
+  // The recovery screen outranks the boot spinner: the boot is skipped only
+  // when the event had already fired at mount, so one landing while it is in
+  // flight would otherwise sit behind "Signing you in…".
+  if (checkingSession && !recovering) {
     return (
       <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
         <Loading label="Signing you in…" style={{ width: "min(280px, 80vw)" }} />
