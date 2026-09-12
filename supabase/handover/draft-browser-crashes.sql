@@ -13,6 +13,13 @@
 -- can be redeployed with a bug and the table should still refuse the row.
 -- crashReport.test.mjs reads this file and the module and fails on drift.
 --
+-- This table is the ledger and the rate limit, not the screen. Once a row is
+-- in, report-error writes one companion row into public.function_errors --
+-- the log the office already reads -- carrying the same four slugs and not a
+-- word more, so a browser crash shows up in the Recent failures panel beside
+-- every Edge Function failure. A collision (the rate limit) writes neither,
+-- so a crash-looping phone cannot fill the log it was meant to inform.
+--
 -- The primary key IS the rate limit: one report per account per minute, with
 -- the minute stamped from the server's clock. A second crash in the same
 -- minute collides and the function swallows the collision. Counting rows

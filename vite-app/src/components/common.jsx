@@ -6,7 +6,7 @@ import { Db } from "../db.js";
 import { nonNegative } from "../data.js";
 import { acceptsNumberText, isWholeStep } from "../numberInput.js";
 import { buzz } from "../haptics.js";
-import { reportCrash } from "../crashReport.js";
+import { reportCrash } from "../crashSend.js";
 
 // Re-exported from data.js, which is where they live now — the sign-in path
 // needs them and cannot import a file that pulls in React. Kept here so the

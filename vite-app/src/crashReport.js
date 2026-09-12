@@ -16,8 +16,6 @@
 // in a try/catch with a swallowed rejection: if the report cannot go, the
 // person still gets their "This screen hit a problem" and their Reload.
 
-import { sbClient } from "./config.js";
-
 // ═══ shared core (twin: supabase/functions/_shared/crashReport.ts) ═══
 
 /** Every category a crash may be filed under. Fixed: the browser picks, it never invents. */
@@ -117,15 +115,22 @@ export function crashBody(error, routeId, componentId) {
  * colliding on the primary key. A device crash-looping is therefore one row
  * a minute, not a flood — and nothing here needs to remember anything
  * between crashes to make that true.
+ *
+ * The invoke is handed in rather than imported so this module needs no
+ * browser to load: crashSend.js binds the real client, and the test binds
+ * one that throws and one that rejects, which is the only behaviour here
+ * that matters — that neither reaches the caller.
  */
-export function reportCrash(error, routeId, componentId) {
-  try {
-    const body = crashBody(error, routeId, componentId);
-    // An unusable build stamp is the one refusal worth making here: the
-    // server would refuse it too, and this saves the round trip.
-    if (!body.app_version) return;
-    Promise.resolve(sbClient.functions.invoke("report-error", { body })).catch(() => {});
-  } catch {
-    // Reporting is the nice-to-have; the error screen is not.
-  }
+export function makeReportCrash(invoke) {
+  return function reportCrash(error, routeId, componentId) {
+    try {
+      const body = crashBody(error, routeId, componentId);
+      // An unusable build stamp is the one refusal worth making here: the
+      // server would refuse it too, and this saves the round trip.
+      if (!body.app_version) return;
+      Promise.resolve(invoke(body)).catch(() => {});
+    } catch {
+      // Reporting is the nice-to-have; the error screen is not.
+    }
+  };
 }
