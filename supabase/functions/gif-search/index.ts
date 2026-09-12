@@ -17,11 +17,14 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { appSettings } from "../_shared/mail.ts";
+import { refuse, publicWords, loggedWords } from "../_shared/publicError.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+const TROUBLE = "GIF search is not answering. Try again in a moment.";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -44,15 +47,29 @@ Deno.serve(async (req) => {
     }
     const key = (await appSettings()).klipyApiKey;
     if (!key) {
-      throw new Error("GIF search isn't set up yet — an Admin can add the KLIPY key on the Admin screen.");
+      throw refuse("GIF search isn't set up yet — an Admin can add the KLIPY key on the Admin screen.");
     }
     return new Response(JSON.stringify({ appKey: key }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
-    return new Response(JSON.stringify({ error: (e as Error).message }), {
+    // The office reads everything; the person reads only what was written
+    // for them. See _shared/publicError.ts for why the default is masking.
+    await logError("gif-search", loggedWords(e));
+    return new Response(JSON.stringify({ error: publicWords(e, TROUBLE) }), {
       status: 400,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
+
+// Masking without logging would only move the blindness: the office would
+// lose what the browser stopped being told. Logged with a throwaway
+// service-role client, best effort, never masking the real error.
+async function logError(functionName: string, message: string) {
+  try {
+    const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    await admin.from("function_errors").insert({ function_name: functionName, message });
+  } catch { /* logging is best-effort */ }
+}
+

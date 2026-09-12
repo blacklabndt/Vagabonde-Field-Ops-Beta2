@@ -94,11 +94,15 @@ test("only a refusal we wrote carries its own words out; everything else is mask
     const bare = [...src.matchAll(/throw new Error\(\s*["`]/g)];
     assert.equal(bare.length, 0,
       `${f}: ${bare.length} sentence(s) raised unmarked — write throw refuse("…") so the person can read it`);
-    // And every file that refuses in words defines the marker itself: these
-    // modules may hold no imports of their own.
+    // And every file that refuses in words either IMPORTS the one definition
+    // (_shared/publicError.ts) or spells it out itself — which the guard-list
+    // modules must, because they may hold no imports at all. What is refused
+    // is a file that refuses in words with no marker anywhere near it.
     if (src.includes("throw refuse(")) {
-      assert.match(src, /function refuse\(words: string\): Error \{\s*const e = new Error\(words\);\s*\(e as Error & \{ plain\?: boolean \}\)\.plain = true;\s*return e;\s*\}/,
-        `${f}: refuses in words but does not define the marker the catch reads`);
+      const imported = /import \{[^}]*\brefuse\b[^}]*\} from "[^"]*publicError\.ts"/.test(src);
+      const spelled = /function refuse\(words: string\): Error \{\s*const e = new Error\(words\);\s*\(e as Error & \{ plain\?: boolean \}\)\.plain = true;\s*return e;\s*\}/.test(src);
+      assert.ok(imported || spelled,
+        `${f}: refuses in words but neither imports nor defines the marker the catch reads`);
     }
   }
 
@@ -117,7 +121,7 @@ test("only a refusal we wrote carries its own words out; everything else is mask
 
   // And the catch reads the mark, not the message, with the real words logged.
   const tail = ask.slice(ask.lastIndexOf("} catch (e) {"));
-  assert.match(tail, /await logError\("ask", message/, "the office still gets what happened");
+  assert.match(tail, /await logError\("ask", loggedWords\(e\)/, "the office still gets what happened");
   assert.match(tail, /plainRefusal\(e\) \? message : ASK_TROUBLE/,
     "the browser gets the fixed sentence unless the error was marked as ours");
   assert.doesNotMatch(tail, /error: message \}/, "never the raw message");

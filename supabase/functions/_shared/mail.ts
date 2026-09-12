@@ -8,6 +8,7 @@
 // recipient guards, escaping and the email frame are provider-neutral.)
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { refuse } from "./publicError.ts";
 
 const RESEND_URL = "https://api.resend.com/emails";
 
@@ -31,7 +32,7 @@ export async function appSettings() {
   // the env fallbacks or the test sender — that sent mail under rotated
   // keys once. (An absent row is fine: that's an unconfigured install,
   // and exactly what the fallbacks are for.)
-  if (error) throw new Error(`Couldn't read the app settings: ${error.message}. Try again.`);
+  if (error) throw refuse("Couldn't read the app settings. Try again, and tell the office if it keeps happening.", error.message);
   const row: Record<string, string | null> = data ?? {};
   return {
     apiKey: row.resend_api_key || Deno.env.get("RESEND_API_KEY") || "",
@@ -84,7 +85,7 @@ export async function sendMail(opts: {
 }) {
   const settings = opts.settings ?? await appSettings();
   if (!settings.apiKey) {
-    throw new Error("Email isn't set up yet — an Admin can add the Resend API key on the Admin screen.");
+    throw refuse("Email isn't set up yet — an Admin can add the Resend API key on the Admin screen.");
   }
   // Key set but no verified sending address: the fallback is Resend's
   // onboarding sender, which only delivers to the Resend account owner's
@@ -127,13 +128,13 @@ export async function sendMail(opts: {
     // Testing mode's one limit, named: only the Resend account owner's own
     // inbox can receive until a domain is verified.
     if (/testing emails|own email address/i.test(msg)) {
-      throw new Error(`Email is in testing mode, so Resend only delivers to the inbox of the email address the Resend account was created with — it refused ${opts.to}. Sending to anyone needs the domain verified and the sending addresses set on the Admin screen.`);
+      throw refuse(`Email is in testing mode, so Resend only delivers to the inbox of the email address the Resend account was created with — it refused ${opts.to}. Sending to anyone needs the domain verified and the sending addresses set on the Admin screen.`);
     }
     // The other refusal an admin can cause from inside the app: a sending
     // address on a domain Resend hasn't verified. Name the fix, not just
     // the vendor's error.
     if (/not verified/i.test(msg)) {
-      throw new Error(`Resend refused the sending address ${from}: ${msg} On the Admin screen, clear the sending addresses to go back to testing mode, or use an address on the domain verified at resend.com/domains.`);
+      throw refuse(`Resend refused the sending address ${from}: ${msg} On the Admin screen, clear the sending addresses to go back to testing mode, or use an address on the domain verified at resend.com/domains.`);
     }
     // "Slow down" and "try again" are not the same answer as "that address is
     // wrong", and the bulk chase is the caller that has to tell them apart: it
@@ -151,7 +152,9 @@ export async function sendMail(opts: {
     if (res.status >= 500) {
       throw transient(`Resend is unavailable (${res.status}): ${msg}${held}`, wait);
     }
-    throw new Error(`Resend ${body.statusCode ?? res.status}: ${msg}`);
+    // The provider's own body is not ours to pass on: it is written for us,
+    // not for the person, and it can quote back whatever was submitted.
+    throw refuse("The email was refused by the mail provider. Try again, and tell the office if it keeps happening.", `Resend ${body.statusCode ?? res.status}: ${msg}`);
   }
   return body;
 }
@@ -159,8 +162,16 @@ export async function sendMail(opts: {
 // The seconds go on the error as well as into the message: a caller inside
 // this runtime (a future batch sender in a function) shouldn't have to parse
 // English to find out how long to hold off.
+//
+// Marked as ours, and it has to be: "slow down" and "that address is wrong"
+// are different answers, and the bulk chase tells them apart by reading the
+// MESSAGE — only that crosses the function boundary. Masked, every rate
+// limit would reach the tracker as an unexplained failure and thousands of
+// approvals it could have waited for would be counted as tickets the office
+// must now chase by hand. Resend's own wording rides along on purpose, and
+// is the one provider text we pass on: it is about the pipe, not the data.
 function transient(message: string, retryAfter: number | null) {
-  const e = new Error(message) as Error & { retryAfter?: number };
+  const e = refuse(message) as Error & { retryAfter?: number };
   if (retryAfter != null) e.retryAfter = retryAfter;
   return e;
 }
@@ -210,12 +221,12 @@ export function recipients(value: unknown, field: string): string {
     .map(s => s.trim())
     .filter(Boolean);
 
-  if (!list.length) throw new Error(`${field} needs at least one email address.`);
+  if (!list.length) throw refuse(`${field} needs at least one email address.`);
   if (list.length > MAX_RECIPIENTS) {
-    throw new Error(`${field} has ${list.length} addresses; ${MAX_RECIPIENTS} is the limit.`);
+    throw refuse(`${field} has ${list.length} addresses; ${MAX_RECIPIENTS} is the limit.`);
   }
   const bad = list.filter(a => !ADDRESS.test(a));
-  if (bad.length) throw new Error(`${field} is not a valid email address: ${bad.join(", ")}`);
+  if (bad.length) throw refuse(`${field} is not a valid email address: ${bad.join(", ")}`);
 
   return list.join(",");
 }

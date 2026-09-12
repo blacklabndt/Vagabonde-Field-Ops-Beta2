@@ -11,6 +11,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { appSettings, corsHeaders, recipients, optionalRecipients } from "../_shared/mail.ts";
 import { mailApproval } from "../_shared/mailApproval.ts";
+import { refuse, publicWords, loggedWords } from "../_shared/publicError.ts";
+
+const TROUBLE = "The approval could not be sent. Try again, and tell the office if it keeps happening.";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -34,7 +37,7 @@ Deno.serve(async (req) => {
     const { ticketId, to, cc } = await req.json();
     // A guard against a client bug, so it should never fire — but whoever
     // reads it pressed a button, and a variable name tells them nothing.
-    if (!ticketId) throw new Error("This request didn't say which ticket to send. Reload the app and try again.");
+    if (!ticketId) throw refuse("This request didn't say which ticket to send. Reload the app and try again.");
     const toList = recipients(to, "to");
     const ccList = optionalRecipients(cc, "cc");
 
@@ -63,9 +66,9 @@ Deno.serve(async (req) => {
     ]);
     // The three columns the two gates read, named rather than inferred.
     const ticket = ticketRead as { id: string; technician_id: string | null; status: string | null } | null;
-    if (tErr || !ticket) throw new Error("Ticket not found, or you don't have access to it");
+    if (tErr || !ticket) throw refuse("Ticket not found, or you don't have access to it");
     if (ticket.status === "Approved" || ticket.status === "Invoiced") {
-      throw new Error("That ticket is already approved — nothing to send.");
+      throw refuse("That ticket is already approved — nothing to send.");
     }
 
     // Being able to SEE the ticket is not being allowed to send it out for
@@ -92,8 +95,10 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   } catch (e) {
-    await logError("send-ticket-approval", (e as Error).message);
-    return new Response(JSON.stringify({ error: (e as Error).message }), {
+    // The office reads everything; the person reads only what was written
+    // for them. See _shared/publicError.ts for why the default is masking.
+    await logError("send-ticket-approval", loggedWords(e));
+    return new Response(JSON.stringify({ error: publicWords(e, TROUBLE) }), {
       status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   }

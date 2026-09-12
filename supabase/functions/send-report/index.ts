@@ -15,6 +15,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders, recipients, optionalRecipients } from "../_shared/mail.ts";
 import { mailReport, REPORT_MAIL_SELECT, type ReportMailRow } from "../_shared/mailReport.ts";
+import { refuse, publicWords, loggedWords } from "../_shared/publicError.ts";
+
+const TROUBLE = "The report could not be emailed. Try again, and tell the office if it keeps happening.";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -38,7 +41,7 @@ Deno.serve(async (req) => {
     const { reportId, to, cc, message } = await req.json();
     // A guard against a client bug, so it should never fire — but whoever
     // reads it pressed a button, and a variable name tells them nothing.
-    if (!reportId) throw new Error("This request didn't say which report to send. Reload the app and try again.");
+    if (!reportId) throw refuse("This request didn't say which report to send. Reload the app and try again.");
     // The caller check above proves who is asking, not who receives — the
     // link this email carries opens a private PDF for 14 days.
     const toList = recipients(to, "to");
@@ -64,11 +67,11 @@ Deno.serve(async (req) => {
         status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }
-    if (rErr || !report) throw new Error("Report not found, or you don't have access to it");
+    if (rErr || !report) throw refuse("Report not found, or you don't have access to it");
     // Without a PDF there is no attachment and no link — the contractor gets
     // an email carrying nothing while the row is stamped as sent, which is
     // how a report quietly never goes out. Same guard as send-jha.
-    if (!report.pdf_key) throw new Error("This report has no PDF on file — nothing was sent. Upload it first.");
+    if (!report.pdf_key) throw refuse("This report has no PDF on file — nothing was sent. Upload it first.");
 
     const admin = createClient(
       Deno.env.get("SUPABASE_URL")!,
@@ -79,8 +82,10 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   } catch (e) {
-    await logError("send-report", (e as Error).message);
-    return new Response(JSON.stringify({ error: (e as Error).message }), {
+    // The office reads everything; the person reads only what was written
+    // for them. See _shared/publicError.ts for why the default is masking.
+    await logError("send-report", loggedWords(e));
+    return new Response(JSON.stringify({ error: publicWords(e, TROUBLE) }), {
       status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   }

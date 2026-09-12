@@ -26,6 +26,7 @@ import { invoicePage, gstLabelOf, invoiceTotals, lineCents } from "./invoice.ts"
 import type { InvoiceLine } from "./invoice.ts";
 import { loadInvoice } from "./ticketInvoice.ts";
 import { hashToken } from "./approvalToken.ts";
+import { refuse } from "./publicError.ts";
 
 const money = (n: number) =>
   "$" + Number(n).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -37,7 +38,7 @@ export async function mailApproval(
   // must use the same rate even if an Admin edits the client meanwhile.
   // A failed email keeps this reservation but never marks approval sent.
   const { error: gstErr } = await admin.rpc("freeze_ticket_gst", { p_ticket_id: ticketId });
-  if (gstErr) throw new Error(`The ticket's tax rate could not be saved: ${gstErr.message}`);
+  if (gstErr) throw refuse("The ticket's tax rate could not be reserved, so nothing was sent. Try again, and tell the office if it keeps happening.", gstErr.message);
 
   // 30 days to sign. Long enough to survive a rep's holiday, short enough
   // that a stale forwarded email stops opening a ticket nobody has signed.
@@ -54,7 +55,7 @@ export async function mailApproval(
   // the invoice's terms, the app address the link is built on, and the
   // mail transport.
   const { data: invoiceData, error: invErr } = await loadInvoice(admin, ticketId, to, settings.invoice);
-  if (invErr || !invoiceData) throw new Error(invErr ?? "Ticket not found");
+  if (invErr || !invoiceData) throw refuse("That ticket could not be read, so nothing was sent.", invErr ?? "no invoice row");
   // The job and the work date the email names, off the same read the
   // attached bill is printed from.
   const job = invoiceData.job;
@@ -95,7 +96,7 @@ export async function mailApproval(
   // Refuse instead, and say what to set.
   const appBase = (settings.approvalBaseUrl ?? "").replace(/\/+$/, "");
   if (!appBase) {
-    throw new Error("The app address isn't set, so an approval link can't be built — an Admin can set it on the Admin screen (App address).");
+    throw refuse("The app address isn't set, so an approval link can't be built — an Admin can set it on the Admin screen (App address).");
   }
   const link = `${appBase}/approve?t=${token}`;
 
@@ -189,8 +190,9 @@ export async function mailApproval(
     status: "Awaiting approval"
   }).eq("id", ticketId);
   if (tokenErr) {
-    throw new Error(
-      `The email went out, but the approval link could not be saved — resend the ticket. (${tokenErr.message})`
+    throw refuse(
+      "The email went out, but the approval link could not be saved — resend the ticket.",
+      tokenErr.message
     );
   }
   return { ok: true };

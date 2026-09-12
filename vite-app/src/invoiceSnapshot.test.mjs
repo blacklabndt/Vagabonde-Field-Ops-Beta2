@@ -49,7 +49,12 @@ test("the real invoice loader fetches the snapshot before rendering the approved
 });
 
 const approval = stripTypeScriptTypes(read("mailApproval.ts").replace(/^import .*;\r?\n/gm, "")).replace(/export /g, "");
-const makeApproval = new Function("sendMail", "wrapEmail", "esc", "invoicePage", "gstLabelOf", "invoiceTotals", "lineCents", "loadInvoice", "hashToken", `${approval}; return mailApproval;`);
+// `refuse` is the module's one import (the marker from _shared/publicError.ts,
+// which decides whether a sentence reaches the person or only the log). The
+// harness passes the real thing rather than a stub, so a refusal this test
+// catches is shaped exactly like the one a technician would be shown.
+const refuse = (words, detail) => Object.assign(new Error(words), { plain: true, ...(detail ? { detail } : {}) });
+const makeApproval = new Function("sendMail", "wrapEmail", "esc", "invoicePage", "gstLabelOf", "invoiceTotals", "lineCents", "loadInvoice", "hashToken", "refuse", `${approval}; return mailApproval;`);
 
 function approvalHarness({ failSnapshot = false, failMail = false, snapshot = null } = {}) {
   let current = 5;
@@ -71,7 +76,7 @@ function approvalHarness({ failSnapshot = false, failMail = false, snapshot = nu
     sent++;
     current = 0; // Client changes after receiving the email.
   }, x => x, String, () => "invoice", invoice.gstLabelOf, invoice.invoiceTotals, invoice.lineCents,
-  async () => ({ data: bill(frozen, current), error: null }), async () => "hashed");
+  async () => ({ data: bill(frozen, current), error: null }), async () => "hashed", refuse);
   return {
     run: () => send(admin, "TEST", "rep@example.com", undefined, "person", { approvalBaseUrl: "https://example.com", invoice: {} }),
     state: () => ({ frozen, sent, tokenWrites, total: invoice.invoiceTotals(bill(frozen, current)).grand })
@@ -86,7 +91,16 @@ test("approval freezes the rate before sending so the subsequent page cannot cha
 
 test("a snapshot failure stops the email and token write", async () => {
   const h = approvalHarness({ failSnapshot: true });
-  await assert.rejects(h.run(), /snapshot failed/);
+  // The person is told the send did not happen, in words they can act on;
+  // the database's own reason rides in `detail`, which only function_errors
+  // reads. It used to be the whole of what the browser was handed.
+  await assert.rejects(h.run(), (e) => {
+    assert.match(e.message, /tax rate could not be reserved, so nothing was sent/);
+    assert.doesNotMatch(e.message, /snapshot failed/, "the database's words are not the person's");
+    assert.equal(e.plain, true, "and the sentence is marked, or it would be masked in turn");
+    assert.match(e.detail, /snapshot failed/, "but the office still gets the reason");
+    return true;
+  });
   assert.equal(h.state().sent, 0);
   assert.equal(h.state().tokenWrites, 0);
 });

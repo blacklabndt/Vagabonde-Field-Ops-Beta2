@@ -8,6 +8,7 @@
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendMail, base64, wrapEmail, esc, MAX_ATTACHMENT_BYTES, type Attachment } from "./mail.ts";
 import type { JobEmbed } from "./mailJha.ts";
+import { refuse } from "./publicError.ts";
 
 export interface ReportMailRow {
   id: string; filename: string; pdf_key: string | null;
@@ -19,7 +20,7 @@ export async function mailReport(admin: SupabaseClient, report: ReportMailRow, t
   // Without a PDF there is no attachment and no link — the contractor gets
   // an email carrying nothing while the row is stamped as sent, which is
   // how a report quietly never goes out. Same guard as the assessment's.
-  if (!report.pdf_key) throw new Error("This report has no PDF on file — nothing was sent. Upload it first.");
+  if (!report.pdf_key) throw refuse("This report has no PDF on file — nothing was sent. Upload it first.");
   const job: JobEmbed = report.jobs ?? {};
 
   // A link that outlives the email being forwarded around a bit, but not
@@ -53,7 +54,7 @@ export async function mailReport(admin: SupabaseClient, report: ReportMailRow, t
   // the row records it as sent. A report that has a PDF on file must
   // ship at least one way, or the send is a failure and has to say so.
   if (!link && !attachments) {
-    throw new Error("Couldn't read the report's PDF from storage — nothing was sent. Try again shortly.");
+    throw refuse("Couldn't read the report's PDF from storage — nothing was sent. Try again shortly.");
   }
 
   const subject = `${job.job_number} · ${job.project} — radiographic report${report.welds ? " (" + report.welds + ")" : ""}`;
@@ -100,7 +101,7 @@ export async function mailReport(admin: SupabaseClient, report: ReportMailRow, t
     sent_at: new Date().toISOString(), sent_to: to
   }).eq("id", report.id);
   if (markErr) {
-    throw new Error(`The report went out, but it couldn't be marked as sent — it may still show as pending; don't send it again. (${markErr.message})`);
+    throw refuse("The report went out, but it couldn't be marked as sent — it may still show as pending; don't send it again.", markErr.message);
   }
   return { ok: true, attached: !!attachments };
 }

@@ -41,6 +41,7 @@ import { askLoop, systemPrompt, windowTurns, API_URL, API_VERSION } from "../_sh
 import { learnPrompt, parseLearned, roomFor, learnedLines, forgetWords, LEARN_MODEL, LEARN_MAX_TOKENS, MAX_LEARNED, type LearnedRow } from "../_shared/askLearn.ts";
 import { knowledgeText, cleanContext, whereLines } from "../_shared/askKnowledge.ts";
 import { checkFile, fileWords, fileChars, MAX_FILES, type AskFile } from "../_shared/askFiles.ts";
+import { refuse, plainRefusal, loggedWords } from "../_shared/publicError.ts";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -188,37 +189,10 @@ async function readBounded(req: Request, limit: number): Promise<string | null> 
 
 const ASK_TROUBLE = "Ask couldn't finish that one. Try again, and tell the office if it keeps happening.";
 
-// A refusal written to be READ by the person who asked.
-//
-// Two kinds of failure reach the top-level catch. The sentences this
-// function and the ask modules raise themselves are the answer — a gate
-// refusing a send, a date that is not a date, another technician's ticket —
-// and a person can act on every one. A message from PostgREST, Postgres or
-// Anthropic is not: it names columns, constraints, functions and accounts,
-// and somebody who can make one appear can map the schema an error at a
-// time.
-//
-// The two are told apart by MARKING, not by reading the words. Every
-// sentence of ours is raised through `refuse`, which flags the error; the
-// catch shows a flagged error's own words and replaces everything else with
-// one fixed sentence. So the default for anything unmarked — a supabase-js
-// error, a provider's body, a TypeError from a bad shape, anything a later
-// edit adds without thinking about it — is masked. That is the point of
-// doing it this way round: the failure mode of forgetting is silence, not
-// disclosure.
-//
-// Nothing is lost by masking: the real words go to function_errors either
-// way, where the digest and Home's strip read them.
-function refuse(words: string): Error {
-  const e = new Error(words);
-  (e as Error & { plain?: boolean }).plain = true;
-  return e;
-}
-
-export function plainRefusal(e: unknown): boolean {
-  return (e as { plain?: boolean } | null)?.plain === true;
-}
-
+// The marker and the two readers live in _shared/publicError.ts, which is
+// the one definition for every function that can import. The comment there
+// says why the default is masking; the import-free modules in the guard list
+// spell the same three lines themselves because they may hold no imports.
 const likeSafe = (v: string): string => v.replace(/[%_,()\\]/g, " ").replace(/\s+/g, " ").trim();
 const later = (a: string | null, b: string | null): string | null => (!a ? (b || null) : !b ? a : (Date.parse(a) >= Date.parse(b) ? a : b));
 
@@ -1000,7 +974,7 @@ Deno.serve(async (req) => {
     // shape nobody expected, and a caller who can provoke one could map the
     // schema an error at a time. The real text always reaches
     // function_errors, where the digest and Home's strip read it.
-    await logError("ask", message, { user: userId, tool });
+    await logError("ask", loggedWords(e), { user: userId, tool });
     return json({ error: plainRefusal(e) ? message : ASK_TROUBLE }, 400);
   }
 });

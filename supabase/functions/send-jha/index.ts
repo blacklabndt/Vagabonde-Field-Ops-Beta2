@@ -15,6 +15,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders, recipients, optionalRecipients } from "../_shared/mail.ts";
 import { mailJha, JHA_MAIL_SELECT, type JhaMailRow } from "../_shared/mailJha.ts";
+import { refuse, publicWords, loggedWords } from "../_shared/publicError.ts";
+
+const TROUBLE = "The assessment could not be emailed. Try again, and tell the office if it keeps happening.";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -38,7 +41,7 @@ Deno.serve(async (req) => {
     const { jhaId, to, cc, message } = await req.json();
     // A guard against a client bug, so it should never fire — but whoever
     // reads it pressed a button, and a variable name tells them nothing.
-    if (!jhaId) throw new Error("This request didn't say which hazard assessment to send. Reload the app and try again.");
+    if (!jhaId) throw refuse("This request didn't say which hazard assessment to send. Reload the app and try again.");
     // The caller check above proves who is asking, not who receives — the
     // link this email carries opens a private PDF for 14 days.
     const toList = recipients(to, "to");
@@ -54,8 +57,8 @@ Deno.serve(async (req) => {
       asUser.from("profiles").select("role").eq("id", user.id).single()
     ]);
     const jha = jhaRead as unknown as JhaMailRow | null;
-    if (jErr || !jha) throw new Error("Assessment not found, or you don't have access to it");
-    if (!jha.pdf_key) throw new Error("This assessment has no PDF yet — render it first");
+    if (jErr || !jha) throw refuse("Assessment not found, or you don't have access to it");
+    if (!jha.pdf_key) throw refuse("This assessment has no PDF yet — render it first");
 
     // Reading an assessment (jhas read includes the 'job' tab, which
     // Helpers hold) is not leave to mail its PDF anywhere: a JHA carries
@@ -79,8 +82,10 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   } catch (e) {
-    await logError("send-jha", (e as Error).message);
-    return new Response(JSON.stringify({ error: (e as Error).message }), {
+    // The office reads everything; the person reads only what was written
+    // for them. See _shared/publicError.ts for why the default is masking.
+    await logError("send-jha", loggedWords(e));
+    return new Response(JSON.stringify({ error: publicWords(e, TROUBLE) }), {
       status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   }

@@ -11,6 +11,7 @@
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendMail, base64, wrapEmail, esc, MAX_ATTACHMENT_BYTES, type Attachment } from "./mail.ts";
+import { refuse } from "./publicError.ts";
 
 // The assessment as the callers' reads return it. supabase-js types an
 // embed as a list without database types, so the row is named here and
@@ -24,7 +25,7 @@ export interface JhaMailRow {
 export const JHA_MAIL_SELECT = "id, signed_by, pdf_key, template, work_date, status, site_rep, profiles(name), jobs(job_number, project, clients(name))";
 
 export async function mailJha(admin: SupabaseClient, jha: JhaMailRow, to: string, cc: string | undefined, message: string): Promise<{ ok: true; attached: boolean }> {
-  if (!jha.pdf_key) throw new Error("This assessment has no PDF yet — render it first");
+  if (!jha.pdf_key) throw refuse("This assessment has no PDF yet — render it first");
   const job: JobEmbed = jha.jobs ?? {};
   const filename = jha.pdf_key.split("/").pop() ?? "jha.pdf";
 
@@ -60,7 +61,7 @@ export async function mailJha(admin: SupabaseClient, jha: JhaMailRow, to: string
   // row records it as sent. If no path to the document survived, this is
   // a failed send and has to say so.
   if (!link && !attachments) {
-    throw new Error("Couldn't read the assessment's PDF from storage — nothing was sent. Try again, or re-render the PDF first.");
+    throw refuse("Couldn't read the assessment's PDF from storage — nothing was sent. Try again, or re-render the PDF first.");
   }
 
   const subject = `${job.job_number} · ${job.project} — hazard assessment${jha.work_date ? " (" + jha.work_date + ")" : ""}`;
@@ -108,7 +109,7 @@ export async function mailJha(admin: SupabaseClient, jha: JhaMailRow, to: string
     sent_at: new Date().toISOString(), sent_to: to
   }).eq("id", jha.id);
   if (markErr) {
-    throw new Error(`The assessment went out, but it couldn't be marked as sent — it may still show as unsent; don't send it again. (${markErr.message})`);
+    throw refuse("The assessment went out, but it couldn't be marked as sent — it may still show as unsent; don't send it again.", markErr.message);
   }
   return { ok: true, attached: !!attachments };
 }

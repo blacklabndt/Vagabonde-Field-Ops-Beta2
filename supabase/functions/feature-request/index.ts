@@ -11,6 +11,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendMail, corsHeaders, wrapEmail, esc } from "../_shared/mail.ts";
+import { publicWords, loggedWords } from "../_shared/publicError.ts";
 
 const FEATURE_REQUEST_TO = "blacklabndt@gmail.com";
 // A subject line's worth, and a page's worth. A limit is what stops a
@@ -20,6 +21,8 @@ const MAX_DETAILS = 4000;
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+
+const TROUBLE = "The request could not be sent. Try again, and tell the office if it keeps happening.";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -72,6 +75,20 @@ Deno.serve(async (req) => {
 
     return json({ ok: true });
   } catch (e) {
-    return json({ error: (e as Error).message || "The request could not be sent." }, 400);
+    // The office reads everything; the person reads only what was written
+    // for them. See _shared/publicError.ts for why the default is masking.
+    await logError("feature-request", loggedWords(e));
+    return json({ error: publicWords(e, TROUBLE) }, 400);
   }
 });
+
+// Masking without logging would only move the blindness: the office would
+// lose what the browser stopped being told. Logged with a throwaway
+// service-role client, best effort, never masking the real error.
+async function logError(functionName: string, message: string) {
+  try {
+    const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    await admin.from("function_errors").insert({ function_name: functionName, message });
+  } catch { /* logging is best-effort */ }
+}
+

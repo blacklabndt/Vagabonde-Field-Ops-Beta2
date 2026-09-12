@@ -19,6 +19,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/mail.ts";
 import { invoicePage } from "../_shared/invoice.ts";
 import { loadInvoice } from "../_shared/ticketInvoice.ts";
+import { refuse, publicWords, loggedWords } from "../_shared/publicError.ts";
+
+const TROUBLE = "The invoice could not be built. Try again, and tell the office if it keeps happening.";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -40,17 +43,19 @@ Deno.serve(async (req) => {
 
   try {
     const { ticketId } = await req.json();
-    if (!ticketId) throw new Error("ticketId is required");
+    if (!ticketId) throw refuse("This request didn't say which ticket to render. Reload the app and try again.");
 
     const { data, error } = await loadInvoice(asUser, ticketId);
-    if (error || !data) throw new Error(error ?? "Ticket not found.");
+    if (error || !data) throw refuse("Ticket not found, or you don't have access to it.", error ?? "no invoice row");
 
     return new Response(JSON.stringify({ html: invoicePage(data) }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   } catch (e) {
-    await logError("render-invoice", (e as Error).message);
-    return new Response(JSON.stringify({ error: (e as Error).message }), {
+    // The office reads everything; the person reads only what was written
+    // for them. See _shared/publicError.ts for why the default is masking.
+    await logError("render-invoice", loggedWords(e));
+    return new Response(JSON.stringify({ error: publicWords(e, TROUBLE) }), {
       status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   }
