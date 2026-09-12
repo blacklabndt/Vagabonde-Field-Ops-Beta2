@@ -56,3 +56,20 @@ currently on.
       -d '{"email":"probe@seed.vagabonde.ca","password":"Str0ngPassw0rd!23"}'
 
 must answer a refusal ("Signups not allowed for this instance"), not a token.
+
+## Closed — verified live, 12 Sept 2026
+
+Kyle turned the switch off in the Supabase dashboard. Re-probed with the
+publishable key alone:
+
+- `POST /auth/v1/signup` with an email and password → `422 signup_disabled`,
+  "Signups not allowed for this instance".
+- `POST /auth/v1/signup` with an empty body (the anonymous door) →
+  `422 anonymous_provider_disabled`.
+
+Both doors are shut. `create-user` is unaffected: it mints accounts with the
+service key, which does not go through the signup endpoint.
+
+Still to do: delete the two probe accounts the hunt left behind —
+`LANE1 PROBE DELETE ME` and `lane1probe2@seed.vagabonde.ca` — once the
+signed-in lanes finish (lane1probe2 is the hunt's Technician account).
