@@ -300,6 +300,7 @@ test("a failed tool read is logged, and what the model may repeat is masked by t
     "the fixed sentence must not interpolate anything");
 
   const ask = read("../../supabase/functions/ask/index.ts");
-  assert.match(ask, /const runTool = async \(name: string, input: Record<string, unknown>\): Promise<unknown> => \{\s*try \{\s*return await readTool\(name, input\);\s*\} catch \(e\) \{\s*await logError\("ask", loggedWords\(e\), \{ user: userId, tool: name \}\);\s*throw e;\s*\}/,
+  assert.match(ask, /const investigation = createInvestigation\(readTool, tools.map\(t => t.name\)\)/);
+  assert.match(ask, /const runTool = async \(name: string, input: Record<string, unknown>\): Promise<unknown> => \{\s*try \{\s*return await investigation.runTool\(name, input\);\s*\} catch \(e\) \{\s*await logError\("ask", loggedWords\(e\), \{ user: userId, tool: name \}\);\s*throw e;\s*\}/,
     "a failed tool read no longer reaches function_errors with its real words");
 });

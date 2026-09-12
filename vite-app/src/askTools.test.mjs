@@ -20,17 +20,25 @@ test("every tool sits behind a tab the app has", () => {
 });
 
 test("toolsFor offers exactly the tools behind the tabs held, and the price roles for a ticket", () => {
-  assert.deepEqual(toolsFor(["tracker"]).map(t => t.name), ["tracker_stats", "ticket_aging", "search_tickets", "make_file", "set_reminder", "my_hours", "my_dose"]);
+  assert.deepEqual(toolsFor(["tracker"]).filter(t => t.name !== "calculate").map(t => t.name), ["tracker_stats", "ticket_aging", "search_tickets", "make_file", "set_reminder", "my_hours", "my_dose"]);
   assert.ok(toolsFor(["tracker"], "Admin").some(t => t.name === "chase_unsigned"));
   assert.ok(!toolsFor(["tracker"], "Coordinator").some(t => t.name === "chase_unsigned"));
-  assert.deepEqual(toolsFor(["board", "job", "jha", "ticket"], "Helper").map(t => t.name),
+  assert.deepEqual(toolsFor(["board", "job", "jha", "ticket"], "Helper").filter(t => t.name !== "calculate").map(t => t.name),
     ["find_client", "find_job", "job_record", "draft_job", "draft_jha", "list_jhas", "list_tickets", "send_jha", "list_reports", "schedule_send", "list_scheduled", "cancel_scheduled", "reschedule_send", "make_file", "list_learned", "forget_learned", "day_check", "set_reminder", "my_hours", "my_dose", "open_record", "cancel_approval"]);
   assert.ok(toolsFor(["ticket"], "Technician").some(t => t.name === "draft_ticket"));
   assert.ok(toolsFor(["ticket"], "Admin").some(t => t.name === "draft_ticket"));
   assert.ok(!toolsFor(["ticket"], "Coordinator").some(t => t.name === "draft_ticket"));
   assert.ok(!toolsFor(["ticket"]).some(t => t.name === "draft_ticket"));
-  assert.deepEqual(toolsFor(["chat"]).map(t => t.name), ["make_file", "set_reminder", "my_hours", "my_dose"]);
+  assert.deepEqual(toolsFor(["chat"]).filter(t => t.name !== "calculate").map(t => t.name), ["make_file", "set_reminder", "my_hours", "my_dose"]);
   assert.deepEqual(toolsFor(null), []);
+});
+
+test("calculate accepts captured source references and is available only with tab access", () => {
+  const tool = toolsFor(["chat"]).find(t => t.name === "calculate");
+  assert.ok(tool);
+  assert.deepEqual(Object.keys(tool.input_schema.properties), ["operation", "source_id", "field", "compare_source_id"]);
+  assert.ok(!toolsFor([]).some(t => t.name === "calculate"));
+  assert.equal(traceLine("calculate", {}), "calculated from retrieved records");
 });
 
 test("the lists and the JHA send sit behind job; the ticket send behind ticket and a price role", () => {

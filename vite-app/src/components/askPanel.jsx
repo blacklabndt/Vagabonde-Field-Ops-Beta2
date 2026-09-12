@@ -185,9 +185,9 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
     setBusy(true);
     setError("");
     try {
-      const { answer, trace, action, learned, files, learnTrouble } = await Db.ask([...threadForSend(), { role: "user", text }], context);
+      const { answer, trace, action, learned, files, learnTrouble, followUp } = await Db.ask([...threadForSend(), { role: "user", text }], context);
       pushTurn("user", text);
-      pushTurn("assistant", answer, trace, action, learned, files, learnTrouble);
+      pushTurn("assistant", answer, trace, action, learned, files, learnTrouble, followUp);
       setTurns(askTurns());
       setDraft("");
     } catch (e) {

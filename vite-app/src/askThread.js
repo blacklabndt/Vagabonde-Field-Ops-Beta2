@@ -13,8 +13,9 @@ export function askTurns() { return turns.slice(); }
 
 // An answer may carry an action — the form a draft proposes — kept on the
 // turn for the card's buttons and, like the trace, never sent back.
-export function pushTurn(role, text, trace, action, learned, files, learnTrouble) {
+export function pushTurn(role, text, trace, action, learned, files, learnTrouble, followUp) {
   const turn = { role, text };
+  if (role === "assistant" && Array.isArray(followUp) && followUp.length) turn.followUp = structuredClone(followUp.slice(-8));
   if (trace && trace.length) turn.trace = trace.slice();
   if (action) turn.action = action;
   if (Array.isArray(learned) && learned.length) turn.learned = learned.map(n => ({ id: n.id, note: n.note }));
@@ -47,6 +48,7 @@ export function dropAction(index) {
     if (i !== index || !t.action) return t;
     const kept = { role: t.role, text: t.text };
     if (t.trace) kept.trace = t.trace;
+    if (t.followUp) kept.followUp = t.followUp;
     return kept;
   });
 }
@@ -76,7 +78,20 @@ export function formLabel(action) {
   return action && action.kind === "open" ? "Open" : "Open the form";
 }
 
-export function threadForSend() { return turns.map(t => ({ role: t.role, text: t.text })); }
+export function threadForSend() {
+  let remaining = 6000;
+  return turns.slice().reverse().map(t => {
+    const out = { role: t.role, text: t.text };
+    if (t.followUp) {
+      const size = JSON.stringify(t.followUp).length;
+      if (size <= remaining) {
+        out.followUp = structuredClone(t.followUp);
+        remaining -= size;
+      }
+    }
+    return out;
+  }).reverse();
+}
 
 export function forgetAskThread() { turns = []; }
 

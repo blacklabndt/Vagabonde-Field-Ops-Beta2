@@ -38,6 +38,8 @@ import { shapeJobDraft, shapeTicketDraft, shapeJhaDraft } from "../_shared/askDr
 import { resolveRecipients, jhaSendGate, ticketSendGate, ticketApprovalAddress, jhaFileName, sendJhaWords, sendTicketWords, JHA_MESSAGE, REPORT_MESSAGE } from "../_shared/askSends.ts";
 import { isKind, localToUtc, checkRunAt, whenWords, labelFor, scheduleWords, cancelWords, rescheduleWords, splitList, reminderText, reminderWords, REPORT_SEND_ROLES } from "../_shared/scheduledSends.ts";
 import { askLoop, systemPrompt, windowTurns, API_URL, API_VERSION } from "../_shared/askLoop.ts";
+import { followUpLines } from "../_shared/askContext.ts";
+import { createInvestigation } from "../_shared/askInvestigation.ts";
 import { learnBody, parseLearned, roomFor, learnedLines, forgetWords, LEARN_MODEL, MAX_LEARN_REQUEST_CHARS, MAX_LEARNED, type LearnedRow } from "../_shared/askLearn.ts";
 import {
   LEASE_STALE_SECONDS, usageTokens, reserveFor, billedNothing,
@@ -623,13 +625,14 @@ Deno.serve(async (req) => {
         }));
       } else if (name === "list_tickets") {
         const job = await jobNumbered(String(input.job_number ?? ""), false);
-        const { data, error } = await asUser.from("tickets")
-          .select("id, work_date, status, total, technician_id, approval_sent_at, approval_sent_to, client_contact, profiles(name)")
+        const { data, error, count } = await asUser.from("tickets")
+          .select("id, work_date, status, total, technician_id, approval_sent_at, approval_sent_to, client_contact, profiles(name)", { count: "exact" })
           .eq("job_id", job.id).order("created_at", { ascending: false }).limit(50);
         if (error) throw new Error(error.message);
         out = ((data ?? []) as unknown as TicketListRow[]).map(r => ({
           id: r.id, work_date: r.work_date, status: r.status, technician: r.profiles?.name ?? null,
           total: seesMoney && r.total !== null ? Number(r.total) : null,
+          total_count: count,
           approval_sent_at: r.approval_sent_at, approval_sent_to: r.approval_sent_to, client_contact: r.client_contact?.name ?? null
         }));
       } else if (name === "send_jha") {
@@ -1111,9 +1114,10 @@ Deno.serve(async (req) => {
     // deny-by-default decision lives in one place and is tested there; this
     // wrapper deliberately rethrows the error whole, because function_errors
     // is supposed to have the real words.
+    const investigation = createInvestigation(readTool, tools.map(t => t.name));
     const runTool = async (name: string, input: Record<string, unknown>): Promise<unknown> => {
       try {
-        return await readTool(name, input);
+        return await investigation.runTool(name, input);
       } catch (e) {
         await logError("ask", loggedWords(e), { user: userId, tool: name });
         throw e;
@@ -1133,7 +1137,8 @@ Deno.serve(async (req) => {
       // close the block it sits in. That is a cost, not a boundary — the
       // boundary is that nothing here can act. Tools run as the caller under
       // RLS and every write waits for the person's confirm on the card.
-      learnedLines(learnedRows, crypto.randomUUID().slice(0, 8)));
+      [learnedLines(learnedRows, crypto.randomUUID().slice(0, 8), windowTurns(thread).filter(t => t.role === "user").at(-1)?.text ?? ""),
+        followUpLines(thread, tools.map(t => t.name))].filter(Boolean).join("\n\n"));
     // Then it learns: one small call over the conversation's own text (never
     // a tool result) and the notes it has, and the rows it decides on are
     // written AS THE CALLER through RLS — a replace of someone else's note
@@ -1158,7 +1163,7 @@ Deno.serve(async (req) => {
         return { added: [], trouble: words === SPENT_WORDS ? LEARN_SPENT_WORDS : words === OUT_OF_TIME_WORDS ? LEARN_NO_TIME_WORDS : LEARN_TROUBLE_WORDS } as LearnResult;
       });
     return json({
-      ...result, learned: kept.added,
+      ...result, learned: kept.added, followUp: investigation.followUp(),
       ...(kept.trouble ? { learnTrouble: kept.trouble } : {}),
       ...(action ? { action } : {}),
       ...(files.length ? { files: files.map(f => ({ ...f, words: fileWords(f) })) } : {})

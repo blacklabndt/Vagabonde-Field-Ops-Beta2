@@ -81,6 +81,20 @@ const JHA_FIELDS = {
 
 export const ASK_TOOLS: AskTool[] = [
   {
+    name: "calculate", tab: "any",
+    description: "Deterministic arithmetic on numeric fields of captured authorized reads. Use the source_id returned with a read and a direct numeric field. Supports sum, average, difference of summed sources (source minus compare), and percent_change ((source minus compare) / absolute compare times 100). Only complete sources are accepted; missing/restricted values are never zero. Report returned periods, units, and coverage. Read again if no source_id is available. No numeric arrays or expressions are accepted.",
+    input_schema: {
+      type: "object",
+      properties: {
+        operation: { type: "string", enum: ["sum", "average", "difference", "percent_change"] },
+        source_id: { type: "string", description: "Captured current source identifier from an authorized read" },
+        field: { type: "string", description: "Direct numeric field on every captured row" },
+        compare_source_id: { type: "string", description: "Captured baseline source; required only for difference and percent_change" }
+      },
+      required: ["operation", "source_id", "field"], additionalProperties: false
+    }
+  },
+  {
     name: "tracker_stats", tab: "tracker",
     description: "Totals across every billing ticket: how many are unsigned (awaiting the client's approval), how many of those are over seven days old, how many are approved and how many invoiced, each with its dollar total. A null total means this person may not see money.",
     input_schema: { type: "object", properties: {}, additionalProperties: false }
@@ -407,6 +421,7 @@ export function searchArgs(input: Record<string, unknown>): SearchArgs {
 
 // A line for the panel: what was read or drafted, in words, never the JSON.
 export function traceLine(name: string, input: Record<string, unknown>): string {
+  if (name === "calculate") return "calculated from retrieved records";
   if (name === "tracker_stats") return "read the tracker's totals";
   if (name === "ticket_aging") return "read how old the money is, by client";
   if (name === "search_tickets") {

@@ -3,6 +3,29 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { askTurns, pushTurn, threadForSend, forgetAskThread, dropAction, dropLearned, isConfirmAction, confirmLabel, formLabel, jobLinks, mergeDictation, foldTranscripts, ASK_KEEP } from "./askThread.js";
 
+test("follow-up references survive sending and dropping a proposal, then disappear on sign-out", () => {
+  forgetAskThread();
+  const followUp = [{ tool: "find_job", references: [{ job_number: "J-1" }] }];
+  pushTurn("assistant", "Here", [], { kind: "draft_job" }, [], [], "", followUp);
+  assert.deepEqual(threadForSend()[0].followUp, followUp);
+  dropAction(0);
+  assert.deepEqual(threadForSend()[0].followUp, followUp);
+  forgetAskThread();
+  assert.deepEqual(threadForSend(), []);
+});
+
+test("a long thread carries at most 6000 characters of follow-up metadata", () => {
+  forgetAskThread();
+  for (let i = 0; i < 12; i++) {
+    pushTurn("user", "question");
+    pushTurn("assistant", "answer", [], null, [], [], "", [{ tool: "find_job", references: [{ job_number: `J-${i}`, name: "x".repeat(4000) }] }]);
+  }
+  const sent = threadForSend();
+  assert.ok(sent.reduce((n, t) => n + (t.followUp ? JSON.stringify(t.followUp).length : 0), 0) <= 6000);
+  assert.equal(sent.at(-1).followUp[0].references[0].job_number, "J-11");
+  forgetAskThread();
+});
+
 test("an answer keeps what was learned, and the × drops one note from the turn alone", () => {
   forgetAskThread();
   pushTurn("user", "cancel approval is on the ticket row");
