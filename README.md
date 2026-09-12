@@ -60,21 +60,33 @@ offline after that.
 
 ## Deploying
 
-Cloudflare Workers Builds runs `npm run build` from the repository root —
-the root `package.json` reaches down into `vite-app`, because Workers Builds
-has no root-directory setting the way Pages does. In Beta 1 the repo root is
-the project root, so the reach-down is one level. `wrangler.jsonc` names the
-output directory (`vite-app/dist`), routes `/approve`, `/approve-ticket` and
-`/backup/oauth/*` through `worker/index.js` before the asset server (without
-that last one the asset cache answers the drive's redirect first and a backup
-drive can never finish connecting), and sets
-`not_found_handling` so a hard refresh on any path serves the app rather
-than a 404. A manual deploy is:
+GitHub Actions (`.github/workflows/ci.yml`) tests and builds each push and
+pull request. Successful pushes to `room/37dbe6165f-beta-2-review` in
+`blacklabndt/Vagabonde-Field-Ops-Beta2` automatically deploy the Worker and
+app. To redeploy the branch without a new commit, use **Run workflow** on
+the CI workflow in Actions and select that branch. CI tags the Cloudflare
+version with the full commit SHA and records the Actions run ID.
 
-```
-npm run build
-npx wrangler deploy
-```
+`wrangler.jsonc` names the output directory (`vite-app/dist`) and routes
+`/approve`, `/approve-ticket` and `/backup/oauth/*` through `worker/index.js`.
+Supabase Edge Functions and database migrations remain manual: apply SQL
+live, run its probes, then file the matching migration version. Deploy an
+Edge Function with `npx supabase functions deploy <name> --project-ref eielmvxzdwwprmmfamlq`.
+
+Browser crash reporting was released on 12 September 2026: migration
+`20260912160845_browser_crashes.sql` and its live probes are filed,
+`report-error` is deployed, and app/Worker commit `b3c15b8` was deployed by
+[CI run 34704562986](https://github.com/blacklabndt/Vagabonde-Field-Ops-Beta2/actions/runs/34704562986)
+after 911 tests passed. Reports record screen/component identifiers, error
+category and app version in **Recent failures**, with one report per account
+per minute and no raw error messages, URLs or stack traces.
+
+**Remaining verification:** a deliberate crash in a signed-in browser has
+not yet been tested end to end to confirm its entry appears in Recent failures.
+The database probes and deployment checks do not replace that browser check.
+Ask's spending ceiling and the GST snapshot migration are already filed as
+applied; neither is awaiting deployment as a draft. These release notes record
+the completed release, not a fresh check of the live services.
 
 `wrangler.jsonc`'s `name` has to match the existing Worker. Change it and the
 next deploy quietly creates a second Worker on a new URL, leaving the old

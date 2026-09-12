@@ -1,6 +1,6 @@
--- DRAFT: not applied. Apply through the live migration applier, run the
--- companion probes, then file this exact SQL under migrations with the
--- version returned by the applier. Deploy the new functions/app AFTER this.
+-- HISTORICAL COPY: applied live and filed on 2026-09-11 as
+-- supabase/migrations/20260911204844_a_ticket_remembers_its_gst_rate.sql.
+-- Not pending. Do not apply this duplicate; use the filed migration as history.
 -- Existing tickets remain null: no historical rate is invented/backfilled.
 
 alter table public.tickets

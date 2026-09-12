@@ -32,7 +32,7 @@ has to land. Ask hours now walks crew IDs to an empty page; backup table reads
 also stop only on an empty page while honoring the part row budget. Ask's
 calendar-date validation rejects rolled-over dates.
 
-Verification and the remaining deployment steps are in
+Historical verification and the original deployment checklist are in
 `docs/reviews/2026-09-11-beta2-fixes.md`.
 
 RT weld-inspection field app for a crew in Grande Prairie, AB. Beta 2 opened
@@ -90,7 +90,10 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   chrome107/edge107/firefox104/safari16: two years of tablets narrower. A
   toolchain upgrade must not decide which devices the crew can still use.
   Moving it is a decision of its own; leave it alone when Vite is bumped.
-- Deploy: `npm run build && npx wrangler deploy` (from repo root)
+- Deploy app/Worker: push to `room/37dbe6165f-beta-2-review`; CI deploys
+  after tests and build pass, tagged with the commit SHA. Manual redeploy:
+  Actions → CI → Run workflow on that branch. Supabase functions and
+  migrations remain manual; see README.md → Deploying.
 - Dev server: use the `.claude/launch.json` `beta2-dev` config, not Bash
 
 ## Rules that are not in the code
@@ -118,6 +121,10 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   account/minute rate limit, and service-only `file_browser_crash` writes
   it and the Recent failures entry in one transaction. Live release probes
   cover permissions, validation, atomic rollback and duplicate reporting.
+  `report-error` and app/Worker release `b3c15b8` were deployed on 12 Sept
+  (CI run 34704562986, 911 tests passed). The signed-in browser crash →
+  Recent failures end-to-end check remains unperformed; it is a verification
+  gap, not a held deployment.
   Ask's reservation ceiling is applied as
   `20260912034222_the_ceiling_is_charged_before_the_call.sql`, followed by
   `20260912041955_a_refusal_that_settles_nothing_answers_false.sql` and
