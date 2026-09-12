@@ -13,12 +13,14 @@
 -- can be redeployed with a bug and the table should still refuse the row.
 -- crashReport.test.mjs reads this file and the module and fails on drift.
 --
--- This table is the ledger and the rate limit, not the screen. Once a row is
--- in, report-error writes one companion row into public.function_errors --
--- the log the office already reads -- carrying the same four slugs and not a
--- word more, so a browser crash shows up in the Recent failures panel beside
--- every Edge Function failure. A collision (the rate limit) writes neither,
--- so a crash-looping phone cannot fill the log it was meant to inform.
+-- This table is the ledger and the rate limit, not the screen. The screen is
+-- public.function_errors, the log the office already reads, and a crash gets
+-- one row there too -- the same four slugs and not a word more, so it shows
+-- up in the Recent failures panel beside every Edge Function failure. Both
+-- rows are written by file_browser_crash (below) in ONE transaction: there
+-- is no outcome where the ledger holds the minute's rate limit and the
+-- screen shows nothing. A collision writes neither row, so a crash-looping
+-- phone cannot fill the log it was meant to inform.
 --
 -- The primary key IS the rate limit: one report per account per minute, with
 -- the minute stamped from the server's clock. A second crash in the same
@@ -65,3 +67,71 @@ create policy "browser crashes read"
      where p.id = (select auth.uid()) and p.role = 'Admin'));
 
 revoke insert, update, delete on public.browser_crashes from anon, authenticated;
+
+-- One call, one transaction, both rows -- or neither.
+--
+-- The ledger row and the office's copy used to be two PostgREST inserts, and
+-- PostgREST gives each request its own transaction: there is no way to wrap
+-- two of them. So the second could fail after the first had landed, and the
+-- crash would be invisible in the only screen anyone looks at WHILE the
+-- primary key refused every retry for the rest of the minute. Silence that
+-- looks exactly like health.
+--
+-- A function body is a transaction. The ledger insert and the log insert are
+-- inside this one, so the office's copy cannot be the half that goes missing.
+-- The unique_violation is caught here rather than at the client, which keeps
+-- the rate limit exactly where it was -- the primary key, with no read before
+-- the write -- while making the two rows atomic.
+--
+-- The log sentence is built HERE, out of the three columns the check
+-- constraints have already vetted, so nothing free-text can reach
+-- function_errors down this path even if report-error ships with a bug.
+-- handler.ts builds the same sentence for its tests; crashReport.test.mjs
+-- reads both and fails on drift.
+--
+-- security definer because the caller is the service role writing two tables
+-- it is the only writer of; execute is revoked from everyone else, so a
+-- signed-in account cannot reach it. Probed as a non-owner before it ships.
+create function public.file_browser_crash(
+  p_user_id uuid,
+  p_minute_bucket text,
+  p_error_category text,
+  p_route_id text,
+  p_component_id text,
+  p_app_version text
+) returns text
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  insert into public.browser_crashes
+    (user_id, minute_bucket, error_category, route_id, component_id, app_version)
+  values
+    (p_user_id, p_minute_bucket, p_error_category, p_route_id, p_component_id, p_app_version);
+
+  insert into public.function_errors (function_name, message, context)
+  values (
+    'browser',
+    'ErrorBoundary (' || p_component_id || ') on ' || p_route_id || ': ' || p_error_category,
+    jsonb_build_object(
+      'error_category', p_error_category,
+      'route_id', p_route_id,
+      'component_id', p_component_id,
+      'app_version', p_app_version,
+      'source', 'browser'));
+
+  return 'filed';
+exception
+  -- The rate limit landing. Neither row is written and the caller is told ok,
+  -- so a crash-looping phone cannot fill the log it was meant to inform.
+  when unique_violation then return 'rate_limited';
+end;
+$$;
+
+comment on function public.file_browser_crash(uuid, text, text, text, text, text) is
+  'Files one browser crash: the browser_crashes ledger row and its companion function_errors row, in one transaction. Returns filed or rate_limited. Service role only.';
+
+revoke all on function public.file_browser_crash(uuid, text, text, text, text, text) from public;
+revoke all on function public.file_browser_crash(uuid, text, text, text, text, text) from anon, authenticated;
+grant execute on function public.file_browser_crash(uuid, text, text, text, text, text) to service_role;

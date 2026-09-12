@@ -27,7 +27,7 @@ import {
   CATEGORIES, ROUTE_IDS, COMPONENT_IDS, APP_VERSION_RE, MAX_BODY_BYTES,
   categorize, cleanAppVersion, validateCrashReport, minuteBucket
 } from "../../supabase/functions/_shared/crashReport.ts";
-import { handleReport, readBounded, logMessage, UNIQUE_VIOLATION, LOG_FUNCTION_NAME } from "../../supabase/functions/report-error/handler.ts";
+import { handleReport, readBounded, logMessage, UNIQUE_VIOLATION, LOG_FUNCTION_NAME, FILED, RATE_LIMITED } from "../../supabase/functions/report-error/handler.ts";
 import { makeReportCrash, crashBody } from "./crashReport.js";
 
 const read = p => readFileSync(new URL("../../" + p, import.meta.url), "utf8");
@@ -165,7 +165,7 @@ test("the minute a report is filed under is the server's, not the browser's", ()
   assert.doesNotMatch(fn, /user_id:\s*(body|b|parsed|checked|report)/);
 });
 
-test("the wiring hands the handler a clock, a token check and two inserts — and nothing else", () => {
+test("the wiring hands the handler a clock, a token check and the one call — and nothing else", () => {
   // The ordering and the ceiling are RUN below, against handler.ts. What is
   // left to read is the wiring: that the handler is reached, that the byte
   // ceiling is the bytes rather than the caller's Content-Length, and that
@@ -183,7 +183,9 @@ test("the wiring hands the handler a clock, a token check and two inserts — an
 test("the browser never writes the table, and a second report in a minute is swallowed", () => {
   const fn = read(FUNCTION);
   assert.match(fn, /SUPABASE_SERVICE_ROLE_KEY/, "the service role does the insert");
-  assert.match(fn, /browser_crashes/, "into the browser's own table");
+  assert.match(fn, /admin\.rpc\("file_browser_crash"/, "through the one function that is one transaction");
+  assert.doesNotMatch(fn, /admin\.from\("browser_crashes"\)/,
+    "a direct insert is a request of its own, and cannot share a transaction with another");
   assert.equal(UNIQUE_VIOLATION, "23505");
   // The limit is the insert. A count first would let two crashing tabs both
   // read zero and both write. (Two racing reports are run, below.)
@@ -197,9 +199,53 @@ test("the browser never writes the table, and a second report in a minute is swa
   assert.doesNotMatch(draft, /for (insert|update|delete)/i, "no write policy for a signed-in account");
   assert.match(draft, /alter table public\.browser_crashes enable row level security;/);
   assert.match(draft, /p\.role = 'Admin'/, "read by Admins, like function_errors");
-  // function_errors keeps its own rules — this endpoint does not widen them.
-  assert.doesNotMatch(draft.replace(/^\s*--.*$/gm, ""), /function_errors/,
-    "the draft touches function_errors — the browser's log is its own table");
+  // function_errors keeps its own rules: the draft writes one row into it
+  // and changes nothing else about it.
+  const sql = draft.replace(/^\s*--.*$/gm, "");
+  assert.doesNotMatch(sql, /(alter|drop) (table|policy)[^;]*function_errors/i,
+    "the draft alters function_errors, and the office's log keeps its own rules");
+  assert.doesNotMatch(sql, /create policy[^;]*function_errors/i);
+});
+
+test("the ledger row and the office's copy are one transaction, not two requests", () => {
+  // Two PostgREST inserts cannot be wrapped in a transaction: each request
+  // is its own. So the office's copy could fail after the ledger row landed,
+  // and the crash would be missing from the only screen anyone reads while
+  // the primary key refused every retry for the rest of the minute. A
+  // function body IS a transaction; both inserts live inside this one.
+  const sql = read(DRAFT).replace(/^\s*--.*$/gm, "");
+  const body = /create function public\.file_browser_crash\b[\s\S]*?\n\$\$;/.exec(sql);
+  assert.ok(body, "the draft has no file_browser_crash function");
+  const fn = body[0];
+  assert.match(fn, /insert into public\.browser_crashes/, "the ledger row is inside it");
+  assert.match(fn, /insert into public\.function_errors/, "and so is the office's copy");
+  assert.match(fn, /when unique_violation then return 'rate_limited'/,
+    "the rate limit is still the key, caught inside the transaction");
+  assert.doesNotMatch(fn, /select\s+count|exists\s*\(/i, "no read-then-write crept in");
+  assert.match(fn, /security definer/);
+  assert.match(fn, /set search_path = public, pg_temp/, "a definer function pins its search_path");
+  const sig = "public.file_browser_crash(uuid, text, text, text, text, text)";
+  assert.ok(sql.includes(`revoke all on function ${sig} from anon, authenticated;`),
+    "a signed-in account keeps execute on the function that writes the office's log");
+  assert.ok(sql.includes(`grant execute on function ${sig} to service_role;`),
+    "the service role is the only caller");
+  assert.doesNotMatch(sql, /grant execute[^;]*file_browser_crash[^;]*to (anon|authenticated)/,
+    "a signed-in account can call the function that writes the log the office trusts");
+
+  // The office's copy is built in SQL out of columns the check constraints
+  // have already vetted, so nothing free-text reaches function_errors even
+  // if report-error ships with a bug. Which makes it a second copy of
+  // logMessage(), so: read both and compare the sentence they produce.
+  const joiner = /'ErrorBoundary \(' \|\| p_component_id \|\| '\) on ' \|\| p_route_id \|\| '([^']*)' \|\| p_error_category/.exec(fn);
+  assert.ok(joiner, "the log sentence in SQL is not the shape the test can compare");
+  const r = good();
+  assert.equal(`ErrorBoundary (${r.component_id}) on ${r.route_id}${joiner[1]}${r.error_category}`,
+    logMessage(r), "the sentence SQL writes and the one handler.ts builds have drifted");
+  assert.match(fn, /'browser'/, "filed under the name the panel's filter knows");
+  assert.equal(LOG_FUNCTION_NAME, "browser");
+  // ASCII on both sides, so the two copies cannot drift through an encoding
+  // on the way to the applier.
+  assert.doesNotMatch(logMessage(r), /[^ -~]/, "the log sentence is ASCII in both copies");
 });
 
 test("the table refuses what the module refuses, even if the function is redeployed wrong", () => {
@@ -315,21 +361,40 @@ const jsonReq = obj => {
   return { req: reqOf(body), state };
 };
 
-/** browser_crashes and function_errors, with the primary key enforced. */
-const fakeDb = () => {
+/**
+ * file_browser_crash, standing in for the database function: the primary key,
+ * both writes, and — the point of it — the transaction around them. logFails
+ * makes the office's copy fail; the ledger row must then not exist either.
+ */
+const fakeDb = ({ logFails = false } = {}) => {
   const crashes = new Map();
   const log = [];
   return {
     crashes,
     log,
-    insertCrash: async row => {
-      // A real insert is a round trip: yield, so two callers interleave here
+    fileCrash: async row => {
+      // A real call is a round trip: yield, so two callers interleave here
       // the way two requests would.
       await Promise.resolve();
       const key = `${row.user_id}|${row.minute_bucket}`;
-      if (crashes.has(key)) return { code: UNIQUE_VIOLATION, message: "duplicate key value violates unique constraint" };
-      crashes.set(key, row);
-      return null;
+      if (crashes.has(key)) return { outcome: "rate_limited", error: null };
+      // Inside the transaction from here: nothing written is kept unless
+      // everything is.
+      const staged = { ...row };
+      if (logFails) return { outcome: null, error: { code: "42501", message: "permission denied for table function_errors" } };
+      crashes.set(key, staged);
+      log.push({
+        function_name: LOG_FUNCTION_NAME,
+        message: logMessage(row),
+        context: {
+          error_category: row.error_category,
+          route_id: row.route_id,
+          component_id: row.component_id,
+          app_version: row.app_version,
+          source: "browser"
+        }
+      });
+      return { outcome: "filed", error: null };
     },
     insertLog: async row => { log.push(row); return null; }
   };
@@ -337,7 +402,7 @@ const fakeDb = () => {
 
 const depsOf = (db, { user = { id: "user-1" }, now = "2026-09-12T10:04:30.500Z" } = {}) => ({
   getUser: async () => user,
-  insertCrash: db.insertCrash,
+  fileCrash: db.fileCrash,
   insertLog: db.insertLog,
   now: () => new Date(now)
 });
@@ -427,7 +492,7 @@ test("the office sees a browser crash in the log it already reads", async () => 
   assert.equal(entry.function_name, LOG_FUNCTION_NAME,
     "filed under one name, so the panel's filter can pick browser crashes out");
   assert.equal(entry.message, logMessage(good()));
-  assert.equal(entry.message, "ErrorBoundary (screen) on board — chunk-load");
+  assert.equal(entry.message, "ErrorBoundary (screen) on board: chunk-load");
   assert.deepEqual(entry.context, { ...good(), source: "browser" });
   // The sentence is built from slugs the allowlists hold, and nothing else.
   const slugs = [...CATEGORIES, ...ROUTE_IDS, ...COMPONENT_IDS];
@@ -442,19 +507,44 @@ test("the office sees a browser crash in the log it already reads", async () => 
     "the browser's ledger is not a second read for the office to learn");
 });
 
-test("a crash that cannot be filed is itself reported, and one that cannot be shown is still filed", async () => {
-  const refuses = { ...fakeDb(), insertCrash: async () => ({ code: "42501", message: "permission denied for table browser_crashes" }) };
+test("a crash that cannot be filed is itself reported, and never half-filed", async () => {
+  const refuses = { ...fakeDb(), fileCrash: async () => ({ outcome: null, error: { code: "42501", message: "permission denied for table browser_crashes" } }) };
   const res = await handleReport(jsonReq(good()).req, depsOf(refuses));
   assert.equal(res.status, 400);
   assert.equal(refuses.log.length, 1, "a reporting endpoint that fails quietly is the same blindness");
   assert.equal(refuses.log[0].function_name, "report-error");
 
-  // And the other way: the ledger takes the row, the log will not have it.
-  const db = fakeDb();
-  const blind = { ...depsOf(db), insertLog: async () => { throw new Error("log is gone"); } };
-  const ok = await handleReport(jsonReq(good()).req, blind);
-  assert.equal(ok.status, 200, "the crash is filed; the office's copy is best effort");
-  assert.equal(db.crashes.size, 1);
+  // The half that used to be possible, and is the whole reason for the rpc:
+  // the ledger row lands, the office's copy does not, and the primary key
+  // then refuses every retry for the rest of the minute. A crash invisible
+  // in the only screen anyone reads, behind a rate limit that thinks it did
+  // its job. Both rows are one transaction, so neither is written.
+  const db = fakeDb({ logFails: true });
+  const half = await handleReport(jsonReq(good()).req, depsOf(db));
+  assert.equal(half.status, 400, "the caller is told the pair could not be written");
+  assert.equal(db.crashes.size, 0, "no ledger row without the office's copy");
+  assert.equal(db.log.filter(r => r.function_name === LOG_FUNCTION_NAME).length, 0);
+  assert.equal(db.log.filter(r => r.function_name === "report-error").length, 1,
+    "and the failure itself is reported");
+  // The minute is still free, so the next report is not rate-limited into
+  // the same silence.
+  const working = fakeDb();
+  const retry = await handleReport(jsonReq(good()).req, depsOf(working));
+  assert.equal(retry.status, 200);
+  assert.equal(working.crashes.size, 1);
+});
+
+test("an answer the database function never gives is a failure, not a success", async () => {
+  // outcome is the function's own word. Anything else — a renamed rpc, a
+  // migration half-applied, null from PostgREST — must not read as filed.
+  for (const outcome of [null, "", "ok", "FILED", undefined]) {
+    const db = { ...fakeDb(), fileCrash: async () => ({ outcome, error: null }) };
+    const res = await handleReport(jsonReq(good()).req, depsOf(db));
+    assert.equal(res.status, 400, `outcome ${JSON.stringify(outcome)} was treated as filed`);
+    assert.equal(db.log[0].function_name, "report-error");
+  }
+  assert.equal(FILED, "filed");
+  assert.equal(RATE_LIMITED, "rate_limited");
 });
 
 test("a body that is not a report is refused without a write", async () => {

@@ -24,9 +24,16 @@ type DbError = { code?: string; message?: string } | null;
 export type CrashDeps = {
   /** The account behind the Authorization header, or null. Verified, never parsed here. */
   getUser: (authHeader: string) => Promise<{ id: string } | null>;
-  /** Insert into browser_crashes. Returns the database's error, or null on success. */
-  insertCrash: (row: Record<string, unknown>) => Promise<DbError>;
-  /** Insert into function_errors — the log the office already reads. Best effort. */
+  /**
+   * file_browser_crash: the ledger row and the office's copy, in ONE database
+   * transaction. Returns the function's own word for what happened —
+   * "filed" or "rate_limited" — or the database's error. Two PostgREST
+   * inserts could not be wrapped in a transaction, which let the office's
+   * copy be the half that went missing while the rate limit refused every
+   * retry for the rest of the minute.
+   */
+  fileCrash: (args: Record<string, unknown>) => Promise<{ outcome: string | null; error: DbError }>;
+  /** Insert into function_errors. Used for ONE thing: this endpoint's own failure. */
   insertLog: (row: Record<string, unknown>) => Promise<DbError>;
   /** The server's clock. The minute bucket comes from here and never from the body. */
   now: () => Date;
@@ -83,17 +90,27 @@ export async function readBounded(
 
 /** The same sentence the office's log will show, built only from allowlisted slugs. */
 export function logMessage(report: { component_id: string; route_id: string; error_category: string }): string {
-  return `ErrorBoundary (${report.component_id}) on ${report.route_id} — ${report.error_category}`;
+  return `ErrorBoundary (${report.component_id}) on ${report.route_id}: ${report.error_category}`;
 }
 
 export type CrashResult = { status: number; body: Record<string, unknown> };
+
+/** The database function's two answers. Anything else is treated as a failure. */
+export const FILED = "filed";
+export const RATE_LIMITED = "rate_limited";
 
 /**
  * One crash report, start to finish.
  *
  * A collision on the primary key is the rate limit: the caller is told ok
- * and nothing is written — including no second row in the office's log, or
- * a crash-looping phone would fill the log it was meant to inform.
+ * and nothing is written — including no row in the office's log, or a
+ * crash-looping phone would fill the log it was meant to inform.
+ *
+ * Filed and visible are the same event. Both rows land inside one database
+ * transaction, so there is no outcome where the crash is on the ledger —
+ * holding the minute's rate limit — and absent from the screen the office
+ * reads. If the pair cannot be written, the caller is told so and the minute
+ * is still free for the next report.
  */
 export async function handleReport(req: CrashRequest, deps: CrashDeps): Promise<CrashResult> {
   const user = await deps.getUser(req.headers.get("Authorization") ?? "");
@@ -113,38 +130,34 @@ export async function handleReport(req: CrashRequest, deps: CrashDeps): Promise<
   if ("error" in checked) return { status: 400, body: { error: checked.error } };
 
   const report = checked.report;
-  const error = await deps.insertCrash({
+  const { outcome, error } = await deps.fileCrash({
     ...report,
     user_id: user.id,
     minute_bucket: minuteBucket(deps.now())
   });
 
-  if (error && error.code === UNIQUE_VIOLATION) return { status: 200, body: { ok: true, rateLimited: true } };
+  // The collision is caught inside the transaction and comes back as a word,
+  // not an error — but a database that raised it at us means the same thing.
+  if (outcome === RATE_LIMITED || (error && error.code === UNIQUE_VIOLATION)) {
+    return { status: 200, body: { ok: true, rateLimited: true } };
+  }
 
-  if (error) {
+  if (error || outcome !== FILED) {
     // The office reads function_errors; a reporting endpoint that failed
     // quietly would be the same blindness one layer further in.
     try {
       await deps.insertLog({
         function_name: "report-error",
-        message: error.message ?? "browser_crashes insert failed",
-        context: { code: error.code ?? null }
+        message: error?.message ?? `file_browser_crash returned ${JSON.stringify(outcome)}`,
+        context: { code: error?.code ?? null }
       });
     } catch { /* logging is best effort */ }
     return { status: 400, body: { error: "The report could not be filed." } };
   }
 
-  // The row the office can actually see. browser_crashes is the ledger and
-  // the rate limit; function_errors is the screen that is already built, so
-  // a crash appears in the Recent failures panel beside every other one.
-  // Its failure changes nothing the browser is told -- the crash is filed.
-  try {
-    await deps.insertLog({
-      function_name: LOG_FUNCTION_NAME,
-      message: logMessage(report),
-      context: { ...report, source: "browser" }
-    });
-  } catch { /* logging is best effort */ }
-
+  // Both rows are in. The office's copy went in beside the ledger row, in
+  // the same transaction, under LOG_FUNCTION_NAME with logMessage()'s
+  // sentence — built there out of columns the check constraints have already
+  // vetted, so nothing free-text can reach function_errors down this path.
   return { status: 200, body: { ok: true } };
 }

@@ -21,6 +21,13 @@
 // in the same minute collides on the primary key and is swallowed. No count
 // first — two tabs crashing together would both read zero and both write.
 //
+// The write is a single rpc call, not two inserts. PostgREST gives every
+// request its own transaction, so two of them cannot be wrapped in one: the
+// office's copy could fail after the ledger row had landed, and the crash
+// would be missing from the only screen anyone reads while the primary key
+// refused every retry for the rest of the minute. file_browser_crash writes
+// both rows inside one function body, which is one transaction.
+//
 // The judgement itself is handler.ts, which has no network and no database
 // in it, so crashReport.test.mjs runs these paths instead of reading them.
 // This file is the wiring: two clients and a port.
@@ -43,7 +50,17 @@ Deno.serve(async (req) => {
       const { data: { user } } = await asUser.auth.getUser();
       return user ? { id: user.id } : null;
     },
-    insertCrash: async (row) => (await admin.from("browser_crashes").insert(row)).error,
+    fileCrash: async (args) => {
+      const { data, error } = await admin.rpc("file_browser_crash", {
+        p_user_id: args.user_id,
+        p_minute_bucket: args.minute_bucket,
+        p_error_category: args.error_category,
+        p_route_id: args.route_id,
+        p_component_id: args.component_id,
+        p_app_version: args.app_version
+      });
+      return { outcome: typeof data === "string" ? data : null, error };
+    },
     insertLog: async (row) => (await admin.from("function_errors").insert(row)).error,
     now: () => new Date()
   });
