@@ -27,7 +27,14 @@
       "supabase/functions/**/*.ts",
       "!vite-app/node_modules",
       "!vite-app/dist",
-      "!vite-app/dev-dist"
+      "!vite-app/dev-dist",
+      // pdf.js, vendored. It is a minified third-party build that nothing
+      // here writes, and linting it is 1,116 errors about somebody else's
+      // webpack output — none of them actionable, and all of them hiding
+      // the ones that are. Its bytes are checked by hash in
+      // cdnPins.test.mjs instead, which is the question worth asking of a
+      // file we did not write.
+      "!vite-app/public/pdfjs"
     ]
   },
   "formatter": { "enabled": false },

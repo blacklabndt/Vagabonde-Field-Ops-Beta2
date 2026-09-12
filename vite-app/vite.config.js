@@ -76,6 +76,13 @@ export default defineConfig({
         // No `png` here: the plugin already precaches everything the manifest
         // references, and globbing images as well listed each icon twice.
         globPatterns: ["**/*.{js,css,html,svg,woff2}"],
+        // …except pdf.js, which is 1.8 MB of vendored library that only the
+        // Upload dialog ever wants. Precaching it would put it on every
+        // device at install and again at every update, over the same field
+        // connections the precache exists to spare — so it keeps the
+        // bargain it had on the CDN: fetched on the first dropped PDF,
+        // cached by the runtime rule below, offline from then on.
+        globIgnores: ["**/pdfjs/**"],
         navigateFallback: "index.html",
         // …except the client's approval page, which is not part of this app.
         // /approve is served by the Worker (see worker/index.js), and the
@@ -119,8 +126,8 @@ export default defineConfig({
             }
           },
           {
-            // The libraries the app fetches on demand — SheetJS, jsPDF, its
-            // autotable plugin and pdf.js — are pinned to an exact version,
+            // The libraries the app fetches on demand — SheetJS, jsPDF and
+            // its autotable plugin — are pinned to an exact version,
             // so the URL names bytes that never change. Without this every
             // timesheet approval and every dropped report needed a live
             // connection, on the two screens most likely to be opened in a
@@ -129,14 +136,14 @@ export default defineConfig({
             // means each library crosses a field connection once per device,
             // and after that those buttons work with no signal at all.
             //
-            // statuses [200] and nothing else. These four are loaded by
+            // statuses [200] and nothing else. These three are loaded by
             // script tags carrying crossOrigin="anonymous", so the responses
             // are CORS-typed and their real status is visible here — which
             // means a captive portal's login page or a CDN 502 is seen for
             // what it is and refused. Allowing 0 as well would have let an
             // opaque error response be filed under the library's own URL and
             // served back for a year.
-            urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/npm\/(?:xlsx@[^/]+\/dist\/xlsx\.full\.min\.js|jspdf@[^/]+\/dist\/jspdf\.umd\.min\.js|jspdf-autotable@[^/]+\/dist\/jspdf\.plugin\.autotable\.min\.js|pdfjs-dist@[^/]+\/build\/pdf\.min\.js)$/,
+            urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/npm\/(?:xlsx@[^/]+\/dist\/xlsx\.full\.min\.js|jspdf@[^/]+\/dist\/jspdf\.umd\.min\.js|jspdf-autotable@[^/]+\/dist\/jspdf\.plugin\.autotable\.min\.js)$/,
             handler: "CacheFirst",
             options: {
               cacheName: "cdn-libraries",
@@ -145,27 +152,28 @@ export default defineConfig({
             }
           },
           {
-            // pdf.js's worker, which is a route of its own because it is the
-            // one file here that cannot be judged. pdf.js loads it itself as
-            // a Worker, so the fetch is no-cors and the response comes back
-            // opaque: status 0, whether it is the worker or a hotel wifi
-            // sign-in page. Under CacheFirst with statuses [0, 200] that
-            // portal page was stored under the worker's URL and handed back
-            // for the next year, on a device that would then never read a
-            // PDF again — and no amount of reconnecting would dislodge it.
+            // pdf.js, which is ours and same-origin, so this rule replaces
+            // the two the CDN needed — and the worse of those two is simply
+            // gone. pdf.js fetches its own worker as a Worker: from the CDN
+            // that was a no-cors request whose response came back opaque,
+            // status 0 whether it was the worker or a hotel wifi sign-in
+            // page, and CacheFirst would have filed the portal page under
+            // the worker's URL for a year on a device that would then never
+            // read a PDF again. That is why the worker had a NetworkFirst
+            // route of its own, accepting a slower read online as the price
+            // of being able to correct a bad answer.
             //
-            // NetworkFirst inverts the risk: online, the network answer wins
-            // every time, so a bad one is replaced the moment there is a real
-            // connection; offline, the cached copy still answers and the
-            // Upload dialog keeps working in the truck, which is the whole
-            // reason any of this is cached. 0 has to stay allowed — an opaque
-            // response is all this fetch can ever produce.
-            urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/npm\/pdfjs-dist@[^/]+\/build\/pdf\.worker\.min\.js$/,
-            handler: "NetworkFirst",
+            // Same-origin, the response is basic and its status is plain, so
+            // there is nothing left that cannot be judged: both files take
+            // CacheFirst on 200 alone, the truck keeps working offline, and
+            // a captive portal cannot poison either one. The bytes are
+            // pinned in the repo, so the URL naming them never goes stale.
+            urlPattern: ({ url, sameOrigin }) => sameOrigin && url.pathname.startsWith("/pdfjs/"),
+            handler: "CacheFirst",
             options: {
-              cacheName: "cdn-pdf-worker",
-              expiration: { maxEntries: 4, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] }
+              cacheName: "pdfjs",
+              expiration: { maxEntries: 8, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [200] }
             }
           }
         ]

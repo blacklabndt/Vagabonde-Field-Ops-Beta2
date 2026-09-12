@@ -26,11 +26,14 @@
 export const SUPABASE_ORIGIN = "https://eielmvxzdwwprmmfamlq.supabase.co";
 export const SUPABASE_REALTIME = "wss://eielmvxzdwwprmmfamlq.supabase.co";
 
-// pdf.js (Job detail's report viewer), SheetJS and jsPDF (Timesheets'
-// exports), each fetched on first use by a <script> tag carrying its SRI
-// hash. pdf.js also runs its worker through a blob: wrapper whose
-// importScripts reaches back to this host, which is why blob: workers are
-// allowed and the host is allowed for scripts.
+// SheetJS and jsPDF (Timesheets' exports and Ask's files), each fetched on
+// first use by a <script> tag carrying its SRI hash.
+//
+// pdf.js used to be the third and is not any more: it is vendored in
+// public/pdfjs and loads from this origin, which is why worker-src no
+// longer allows blob: — the blob: wrapper was pdf.js's own, minted to
+// reach a cross-origin worker, and nothing else in the app has ever made
+// a Worker of any kind.
 export const SCRIPT_CDN = "https://cdn.jsdelivr.net";
 
 // GIF search: the app fetches api.klipy.com itself with the key gif-search
@@ -90,7 +93,7 @@ export function appPolicy(hashes = []) {
     `media-src ${sources("'self'", "blob:", SUPABASE_ORIGIN)}`,
     "font-src 'self' data:",
     `connect-src ${sources("'self'", SUPABASE_ORIGIN, SUPABASE_REALTIME, GIF_SEARCH, SCRIPT_CDN)}`,
-    "worker-src 'self' blob:",
+    "worker-src 'self'",
     "frame-src 'self' blob:",
     "manifest-src 'self'",
     "object-src 'none'",

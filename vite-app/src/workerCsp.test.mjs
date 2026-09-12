@@ -64,7 +64,11 @@ test("the app's policy allows what the screens load and nothing looser", () => {
   const connect = directive(policy, "connect-src");
   for (const host of [SUPABASE_ORIGIN, SUPABASE_REALTIME, GIF_SEARCH]) assert.ok(connect.includes(host), `connect-src allows ${host}`);
   assert.ok(!connect.includes("https:") && !connect.includes("*"), "connect-src names its hosts");
-  assert.ok(directive(policy, "worker-src").includes("blob:"), "pdf.js runs its worker through a blob: wrapper");
+  // blob: was pdf.js's alone — the wrapper it minted to reach a worker on
+  // another origin. pdf.js is vendored now and builds its worker straight
+  // from this origin, and nothing else in the app makes a Worker at all,
+  // so the allowance went with the need for it.
+  assert.deepEqual(directive(policy, "worker-src"), ["'self'"], "no worker comes from anywhere but this origin");
   assert.ok(directive(policy, "media-src").includes(SUPABASE_ORIGIN), "voice notes play from storage links");
   assert.ok(directive(policy, "img-src").includes("data:"), "the signature inside the invoice viewer is a data: picture");
   // The project the app talks to is the one the policy names.
@@ -77,11 +81,18 @@ test("every CDN script and hand-called API in the screens is a host the policy a
   const script = directive(policy, "script-src");
   const connect = directive(policy, "connect-src");
   const hostsIn = source => [...source.matchAll(/["'`](https:\/\/[^/"'`\s]+)\//g)].map(m => m[1]);
-  for (const p of ["vite-app/src/components/jobDetail.jsx", "vite-app/src/cdnLibs.js"]) {
+  for (const p of ["vite-app/src/cdnLibs.js"]) {
     const hosts = new Set(hostsIn(read(p)));
     assert.ok(hosts.size > 0, `${p} loads something from a CDN`);
     for (const h of hosts) assert.ok(script.includes(h), `${p} loads a script from ${h}, which script-src must allow`);
   }
+  // Job detail names no host at all any more: pdf.js is vendored, and the
+  // reason it had to be is that the CDN build could not be moved past
+  // CVE-2024-4367 while a <script> tag was the loader. Putting a pdf.js URL
+  // back here would quietly undo that, so this asks for silence rather
+  // than for a host the policy allows.
+  assert.deepEqual(hostsIn(read("vite-app/src/components/jobDetail.jsx")), [],
+    "jobDetail.jsx loads from a remote host again: pdf.js is meant to be served from this origin");
   assert.ok(read("vite-app/src/db.js").includes(GIF_SEARCH + "/"), "db.js searches GIFs at the host connect-src allows");
   assert.ok(connect.includes(GIF_SEARCH));
   assert.ok(script.includes(SCRIPT_CDN));

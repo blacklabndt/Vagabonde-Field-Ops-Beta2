@@ -136,3 +136,92 @@ rather than upgrading it** — no vendored megabyte, no fifth pin, no CVE
 to track, and the only cost is that the technician types the weld numbers
 they are already looking at. Kyle decides whether the prefill earns 1.5 MB
 and a dependency with two arbitrary-execution advisories in two years.
+
+---
+
+## What was actually done — and where this proposal was wrong
+
+Kyle kept the prefill, so the alternative above is closed. The move was
+made. It differs from the recommendation on three points, and each
+difference is a correction to something written above.
+
+**The version is `6.3.289`, not `5.4.149`.** Both are outside both
+execution advisories, so either would have closed the flaw. 6.3.289 was
+chosen because 5.x is a branch that no longer receives fixes: a third
+advisory landing on it would leave the app on a version with no upgrade
+path that does not cross the 5.6.83–6.2.107 window. The ranges were
+re-read from OSV directly rather than from this document:
+
+| advisory | introduced | fixed | 6.3.289 |
+|---|---|---|---|
+| CVE-2018-5158 | 0 / 2.0.0 | 1.10.100 / 2.0.550 | outside |
+| CVE-2024-4367 | 0 | 4.2.67 | outside |
+| CVE-2026-16633 | 5.6.83 | 6.2.108 | outside |
+
+The cost of 6.x is the one this document measured: `PDFDocumentProxy`
+has no `destroy()`. `pdfText()` destroys the loading task, which it was
+going to do anyway, so the cost was already paid.
+
+**It buys more than the version.** On 6.3.289 neither vendored file
+contains `new Function(` at all — the code-generation path CVE-2024-4367
+reached is gone from the build, rather than held out of reach by how the
+app calls it. `isEvalSupported: false` is passed regardless and
+`cdnPins.test.mjs` reads the bytes for the sink, because the option is
+the seatbelt and the absent sink is the fix.
+
+**"No CSP change at all" was wrong, in the app's favour.** `worker-src`
+lost `blob:`. The blob wrapper was pdf.js's own, minted only for a
+cross-origin `workerSrc`; same-origin it builds the worker directly, and
+nothing else in this app has ever made a Worker of any kind. So the
+policy got tighter, not unchanged.
+
+**"It is not precached" was accidentally true and then not.** The
+reasoning here rested on the files being `.mjs` and the glob being
+`{js,css,html,svg,woff2}`. They were vendored as `.js` — the names
+jsdelivr serves — so the glob *would* have swept 1.8 MB into every
+device's install. `globIgnores: ["**/pdfjs/**"]` is what actually holds
+it out, and `precache 36 entries (1184 KiB)` is unchanged from before
+the move. A runtime `CacheFirst` rule on `/pdfjs/` keeps the old
+bargain: fetched on the first dropped PDF, offline from then on.
+
+That rule also retires the worst of the two it replaces. From the CDN
+the worker was fetched no-cors, so its response was opaque — status 0
+whether it was the worker or a hotel wifi sign-in page — and it needed
+`NetworkFirst` so a poisoned entry could be corrected. Same-origin the
+response is basic and its status is plain: `CacheFirst` on 200 alone,
+and a captive portal cannot be filed under the worker's name.
+
+`.gitattributes` marks both files `-text`. `core.autocrlf` is on here,
+and a checkout that turned their LFs into CRLFs would change every
+pinned hash and fail the test on a fresh clone for no visible reason.
+
+## Verified in a browser, not only in Node
+
+`pdfjs-version-probe.mjs` runs in Node, where there is no `Worker` —
+pdf.js falls back to running its worker code on the main thread, so a
+passing Node probe says nothing about the two things this change
+actually altered: that the worker is same-origin and direct, and that
+`worker-src` no longer allows `blob:`.
+
+`pdfjs-browser-probe.mjs` serves the built `dist/` under the real
+`appPolicy()` header, drives Chromium, and asserts twelve things — text,
+page count, version, a worker that is same-origin, module-type, and
+**answered**, no blob worker, no policy violation, no console error, and
+`task.destroy()` returning where `doc.destroy` is gone. **12/12.**
+
+Two drafts of that probe passed on a page whose policy had refused the
+worker, and the failure is worth recording because it is the shape of
+the whole risk:
+
+- Draft 1 recorded the Worker's URL *before* `super()`, expecting a
+  refusal to throw.
+- Draft 2 moved the record after `super()` — and still passed, because
+  Chromium blocks a refused worker **asynchronously**. `new Worker(…)`
+  returns an ordinary object that simply never loads.
+
+In both drafts the extracted text was correct, because pdf.js caught the
+failure and read the PDF on the main thread. **A silently correct answer
+is what this failure looks like from the outside** — which is why the
+check is now that the worker *replied*, and why the negative run
+(`worker-src 'none'`) is part of the record: 9/12, failing exactly the
+three checks that are about the worker and none of the ones about text.

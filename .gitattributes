@@ -1,0 +1,8 @@
+# core.autocrlf is true on the build machine, so git rewrites line endings on
+# checkout for anything it reads as text. These are vendored third-party
+# builds whose bytes are pinned by hash in vite-app/src/cdnPins.test.mjs —
+# a checkout that turned their LFs into CRLFs would change every hash and
+# fail the test on a fresh clone, for no reason anybody could see. Leave
+# them exactly as they were downloaded.
+vite-app/public/pdfjs/*.js -text
+vite-app/public/pdfjs/LICENSE -text

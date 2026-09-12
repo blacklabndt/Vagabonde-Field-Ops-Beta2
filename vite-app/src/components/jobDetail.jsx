@@ -1541,39 +1541,51 @@ function SendPdfDialog({ title, file, job, clientContacts, contractorContacts, d
   );
 }
 
-// pdf.js is ~350 KB and only the Upload dialog wants it, so it loads from
-// the CDN on the first dropped PDF — the same bargain the timesheet page
-// strikes with SheetJS. A failed load clears the promise so the next drop
-// retries instead of staying poisoned. 3.11.174 is the last build that
-// loads by script tag; 4.x is ESM-only.
+// pdf.js reads the text layer of a dropped report so the weld numbers can
+// fill themselves in. Only the Upload dialog wants it, so it is fetched on
+// the first dropped PDF and the service worker keeps it after that — the
+// same bargain the timesheet page strikes with SheetJS, minus the CDN.
+//
+// It is OURS now, in public/pdfjs, and the move off the CDN is the fix
+// rather than a preference: 3.11.174 was the last build that loads by
+// <script> tag and it predates the patch for CVE-2024-4367, so the version
+// could not move while the loader was a tag. Every build since is ESM
+// only, and a dynamic import() takes no integrity attribute — so serving
+// the bytes from this origin is what stands in for SRI here, exactly as
+// public/fonts stood in for the webfont URL. cdnPins.test.mjs pins both
+// files by hash, which is the check the attribute used to be.
+//
+// 6.3.289 is outside both of pdf.js's execution advisories (CVE-2024-4367,
+// fixed 4.2.67; CVE-2026-16633, introduced 5.6.83 and fixed 6.2.108) and
+// it holds no `new Function` in either file — the flaw's own sink is gone
+// from the build rather than held out of reach by how we call it. Being
+// same-origin, the worker is built directly instead of through a blob:
+// wrapper, which is why worker-src no longer allows blob: at all.
+const PDFJS_BASE = "/pdfjs/";
 let pdfjsPromise = null;
 function loadPdfjs() {
-  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
   if (!pdfjsPromise) {
-    pdfjsPromise = new Promise((resolve, reject) => {
-      const tag = document.createElement("script");
-      tag.src = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js";
-      // The version is pinned, so the bytes are too: a tampered CDN
-      // response fails the integrity check and never executes in the
-      // signed-in app. The worker below can't carry SRI — it's fetched by
-      // pdf.js itself as a Worker — but a worker runs in its own scope
-      // with no DOM and no cookies, so the main script is the one that
-      // matters. The timeout catches the request that neither loads nor
-      // errors, which otherwise left the drop zone stuck with a poisoned
-      // cached promise.
-      tag.integrity = "sha384-/1qUCSGwTur9vjf/z9lmu/eCUYbpOTgSjmpbMQZ1/CtX2v/WcAIKqRv+U1DUCG6e";
-      tag.crossOrigin = "anonymous";
-      const fail = () => { pdfjsPromise = null; reject(new Error("Couldn't load the PDF reader.")); };
-      const timer = setTimeout(() => { tag.remove(); fail(); }, 30000);
-      tag.onload = () => {
-        clearTimeout(timer);
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-          "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
-        resolve(window.pdfjsLib);
-      };
-      tag.onerror = () => { clearTimeout(timer); fail(); };
-      document.head.appendChild(tag);
+    const loaded = import(/* @vite-ignore */ `${PDFJS_BASE}pdf.min.js`).then(mod => {
+      const lib = mod.getDocument ? mod : mod.default;
+      lib.GlobalWorkerOptions.workerSrc = `${PDFJS_BASE}pdf.worker.min.js`;
+      return lib;
     });
+    // The timeout is for the fetch that neither resolves nor rejects — a
+    // captive portal holding the socket open — which otherwise leaves the
+    // drop zone waiting on a promise that never settles. A failure of
+    // either kind clears the cached promise so the next drop retries
+    // instead of meeting the same dead one.
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Couldn't load the PDF reader.")), 30000);
+    });
+    pdfjsPromise = Promise.race([loaded, timeout])
+      .then(lib => { clearTimeout(timer); return lib; })
+      .catch(() => {
+        clearTimeout(timer);
+        pdfjsPromise = null;
+        throw new Error("Couldn't load the PDF reader.");
+      });
   }
   return pdfjsPromise;
 }
@@ -1583,7 +1595,13 @@ function loadPdfjs() {
 // so the dialog shrugs instead of chewing through three hundred pages.
 async function pdfText(file, maxPages = 40) {
   const pdfjs = await loadPdfjs();
-  const doc = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+  // isEvalSupported is not an option in 6.x, because the code-generation
+  // path it used to switch off was deleted — the test reads the vendored
+  // bytes for `new Function(` and that is the load-bearing half. Passing it
+  // costs nothing and is the seatbelt for the day somebody moves the
+  // version back to a build that still has the sink.
+  const task = pdfjs.getDocument({ data: await file.arrayBuffer(), isEvalSupported: false });
+  const doc = await task.promise;
   try {
     let out = "";
     const n = Math.min(doc.numPages, maxPages);
@@ -1592,7 +1610,13 @@ async function pdfText(file, maxPages = 40) {
       out += content.items.map(it => it.str).join(" ") + "\n";
     }
     return out;
-  } finally { doc.destroy(); }
+    // The loading task, not the document: 6.x removed PDFDocumentProxy's
+    // own destroy(), so the old call threw on the way out of a read that
+    // had in fact succeeded — the dialog would have reported that it could
+    // not read a report whose text it was holding. Destroying the task
+    // tears down the document and the worker port together, and it is the
+    // one spelling that works on every version from 3.x up.
+  } finally { await task.destroy(); }
 }
 
 function UploadReportDialog({ job, jobRecord, currentUser, onClose, onSubmit }) {

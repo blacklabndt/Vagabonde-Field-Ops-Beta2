@@ -384,16 +384,38 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   set by the Worker from `worker/csp.mjs` (pure, node-tested): the app's
   documents from `appPolicy`, the approval page from `approvalPolicy`, the
   Worker's own error page from `errorPagePolicy`. Scripts run from this
-  origin, from `cdn.jsdelivr.net` (pdf.js, SheetJS, jsPDF — each loaded on
-  demand with SRI; those four pins are the dependencies `npm audit`
-  structurally cannot see, so `cdnPins.test.mjs` reads them out of the
-  source and holds them to `docs/reviews/2026-09-11-cdn-pins.md`, which says
-  what each one parses. Three of the four only ever write our own rows;
-  pdf.js alone reads a file somebody dropped, and 3.11.174 predates the fix
-  for CVE-2024-4367 — two invariants keep that sink unreachable and the test
-  pins both: the app calls `getTextContent()` and never draws a page, and
-  `appPolicy` has no `'unsafe-eval'`. A PDF preview or an `'unsafe-eval'`
-  added for anything arms it) and from inline `<script>` blocks the Worker hashes as
+  origin, from `cdn.jsdelivr.net` (SheetJS, jsPDF and its autotable plugin —
+  each loaded on demand with SRI; those three pins are the dependencies
+  `npm audit` structurally cannot see, so `cdnPins.test.mjs` reads them out
+  of the source and holds them to `docs/reviews/2026-09-11-cdn-pins.md`,
+  which says what each one parses. All three only ever write our own rows.
+  pdf.js was the fourth and is not any more: it alone reads a file somebody
+  dropped, and 3.11.174 predated the fix for CVE-2024-4367, so it is
+  vendored in `vite-app/public/pdfjs` at 6.3.289 — outside that advisory
+  and outside CVE-2026-16633's 5.6.83–6.2.107 window — and served from
+  this origin. The move IS the fix: every build after 3.11.174 is ESM only,
+  a dynamic `import()` takes no integrity attribute, and serving the bytes
+  ourselves is what stands in for SRI, as `public/fonts` does for the
+  webfont URL. `cdnPins.test.mjs` pins both files by hash, asserts neither
+  holds `new Function(` — 6.x deleted the sink rather than our holding it
+  out of reach — and keeps the two invariants that made 3.11.174 survivable
+  (`getTextContent()` and never a drawn page; no `'unsafe-eval'` in
+  `appPolicy`), because they are what notices if a preview is added later.
+  `.gitattributes` marks those two files `-text` so a CRLF checkout cannot
+  change every pinned hash. Being same-origin, the worker is built directly
+  rather than through pdf.js's cross-origin blob wrapper, which is why
+  `worker-src` is `'self'` with no `blob:` — nothing else in the app makes
+  a Worker. It is deliberately NOT precached (`globIgnores` in
+  `vite.config.js`; the glob would otherwise sweep 1.8 MB into every
+  install): a runtime `CacheFirst` rule on `/pdfjs/` fetches it on the
+  first dropped PDF and keeps it, and same-origin it can take status 200
+  alone, where the CDN's opaque worker response needed `NetworkFirst` so a
+  captive portal's page could be corrected. `docs/reviews/pdfjs-browser-probe.mjs`
+  is the check that matters and is not in `npm test` (it needs a built
+  `dist/` and a browser): a refused worker does not throw — Chromium blocks
+  it asynchronously and pdf.js reads the PDF on the main thread instead, so
+  the text still comes back right. It asserts the worker ANSWERED)
+  and from inline `<script>` blocks the Worker hashes as
   it serves the document — which is why a request for a document is
   answered whole and never 304 — so an inline event handler (`onclick=`)
   is refused: the approval page's Download button binds its listener in a
