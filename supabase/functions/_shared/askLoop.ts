@@ -58,6 +58,32 @@ export const MAX_TURN_CHARS = 4000;
 // where they are built) and at most MAX_TOOL_TOTAL_CHARS of this.
 export const MAX_TOOL_RESULT_CHARS = 20_000;
 export const MAX_TOOL_TOTAL_CHARS = 80_000;
+// Every one of those is counted in CHARACTERS — the unit the conversation
+// grows in and the one the model is billed on something like. Not bytes:
+// a name outside ASCII is more bytes than characters, and nothing here is
+// bounding a socket.
+//
+// The cost of a call is its input, and with the caps above the input is
+// arithmetic: the system message (~14k), the tool definitions (~24k), the
+// windowed thread (MAX_TURNS x MAX_TURN_CHARS), the notes
+// (MAX_LEARNED_CHARS) and at most MAX_TOOL_TOTAL_CHARS of results plus the
+// single overshoot below — about 255,000 characters in the worst case any
+// legitimate question can reach. This is that sum with room over it, and it
+// is a BACKSTOP and not a working limit: a call that reaches it means the
+// accounting above is wrong somewhere, which it was once already. It
+// refuses rather than logging, because a spending limit that only takes
+// notes is not one, and the words say what to do.
+export const MAX_REQUEST_CHARS = 350_000;
+// A tool the budget will not stretch to is ANSWERED but NOT RUN. The two
+// are not the same act, and reading them as one was the bug: the API
+// refuses a turn that leaves a tool_use unanswered, so every block must
+// come back with a result — but the model may ask for a dozen reads in one
+// reply, and MAX_TOOL_CALLS and MAX_TOOL_TOTAL_CHARS were read only at the
+// top of the round, so all twelve ran and all twelve results went into the
+// conversation whatever the budget said. Judged one at a time, the
+// overshoot is one tool: the first of a batch always runs, because the
+// round would not have begun if the budget were already spent.
+const NOT_RUN = "Not run — this question has already read as much as it may. Answer from what you have, and say you could not read everything.";
 // Room for a file: an answer without one costs what it did.
 const MAX_TOKENS = 8000;
 export const API_URL = "https://api.anthropic.com/v1/messages";
@@ -203,10 +229,17 @@ export async function askLoop(thread: unknown, tools: ToolDef[], system: string,
       body.tools = tools;
       if (done) body.tool_choice = { type: "none" };
     }
+    // Measured on the text that actually goes, and measured on EVERY call:
+    // a thread already too long is refused before a penny is spent, and one
+    // that grew past the bound mid-loop stops there.
+    const payload = JSON.stringify(body);
+    if (payload.length > MAX_REQUEST_CHARS) {
+      throw refuse("This conversation has grown too long for Ask to carry — start a new one and ask the question again.");
+    }
     const res = await deps.fetch(API_URL, {
       method: "POST",
       headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": API_VERSION },
-      body: JSON.stringify(body)
+      body: payload
     });
     if (!res.ok) throw await refusal(res);
     const reply = (await res.json()) as ApiReply;
@@ -224,7 +257,20 @@ export async function askLoop(thread: unknown, tools: ToolDef[], system: string,
     messages.push({ role: "assistant", content });
     toolChars += JSON.stringify(content).length;
     const results: ToolResult[] = [];
+    let skipped = 0;
     for (const u of uses) {
+      // Asked before every tool, not once for the batch. All three are the
+      // same questions the top of the round asks; what changed is that a
+      // reply asking for twelve reads is now twelve decisions.
+      const spent = calls >= MAX_TOOL_CALLS
+        || toolChars >= MAX_TOOL_TOTAL_CHARS
+        || deps.now() - start > ASK_BUDGET_MS;
+      if (spent) {
+        skipped++;
+        toolChars += NOT_RUN.length;
+        results.push({ type: "tool_result", tool_use_id: u.id, content: NOT_RUN });
+        continue;
+      }
       calls++;
       trace.push(deps.trace(u.name, u.input ?? {}));
       let words: string;
@@ -236,13 +282,11 @@ export async function askLoop(thread: unknown, tools: ToolDef[], system: string,
         failed = true;
       }
       toolChars += words.length;
-      // Every block the model asked for is answered whatever the budget now
-      // says: the API refuses a turn that leaves a tool_use unanswered, so a
-      // spent budget is read at the top of the next round and never here.
       results.push(failed
         ? { type: "tool_result", tool_use_id: u.id, content: words, is_error: true }
         : { type: "tool_result", tool_use_id: u.id, content: words });
     }
+    if (skipped) trace.push(`${skipped} more ${skipped === 1 ? "read was" : "reads were"} asked for and not made — the question had read its fill`);
     messages.push({ role: "user", content: results });
   }
 }

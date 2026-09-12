@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import {
   askLoop, windowTurns, systemPrompt, wrapRecords,
   ASK_MODEL, MAX_TOOL_CALLS, MAX_TURNS, MAX_TURN_CHARS, ASK_BUDGET_MS,
-  MAX_TOOL_RESULT_CHARS, MAX_TOOL_TOTAL_CHARS
+  MAX_TOOL_RESULT_CHARS, MAX_TOOL_TOTAL_CHARS, MAX_REQUEST_CHARS
 } from "../../supabase/functions/_shared/askLoop.ts";
 
 const reply = (content, stop_reason = "end_turn") =>
@@ -277,23 +277,77 @@ test("when what it has read fills the conversation the loop stops reading, short
     `the last request carried ${outbound} characters of conversation`);
 });
 
-test("the round that spends the budget still answers every block the model asked for", async () => {
-  // The API refuses a turn that leaves a tool_use unanswered, so the stop is
-  // read at the top of the NEXT round and never in the middle of one.
-  // Five blocks at once: each costs the per-result cap, so the budget is
-  // spent partway through the round.
+test("the round that spends the budget answers every block and runs only what it may", async () => {
+  // Answering a block is not the same act as running it, and reading them
+  // as one was the defect: the API refuses a turn that leaves a tool_use
+  // unanswered, so every block comes back with a result — but a block past
+  // the budget comes back UNRUN. Five at once, each costing the per-result
+  // cap, so the budget goes partway through the round.
   const ids = ["a", "b", "c", "d", "e"];
   const { fetch, sent } = api([
     reply(ids.map(i => use(i, "tracker_stats")), "tool_use"),
     reply([text("Done.")])
   ]);
   const fat = { blob: "x".repeat(MAX_TOOL_RESULT_CHARS + 1000) };
-  await askLoop([{ role: "user", text: "?" }], TOOLS, "s", "k", deps(fetch, async () => fat));
+  let ran = 0;
+  const r = await askLoop([{ role: "user", text: "?" }], TOOLS, "s", "k",
+    deps(fetch, async () => { ran++; return fat; }));
 
   const msgs = sent[1].body.messages;
   const last = msgs[msgs.length - 1];
   assert.equal(last.role, "user");
   assert.deepEqual(last.content.map(c => c.tool_use_id), ids, "every block asked for is answered");
+  assert.equal(ran, Math.ceil(MAX_TOOL_TOTAL_CHARS / (MAX_TOOL_RESULT_CHARS + 1)),
+    "and only the ones inside the budget were actually run");
+  assert.equal(last.content.filter(c => /Not run/.test(c.content)).length, ids.length - ran);
+  assert.match(r.trace[r.trace.length - 2], /not made — the question had read its fill/);
   assert.equal(sent.length, 2, "and the next round does not read again");
   assert.deepEqual(sent[1].body.tool_choice, { type: "none" });
+});
+
+test("a dozen reads asked for in one reply do not spend a dozen reads' worth", async () => {
+  // The bug this is here for: both budgets were read only at the top of the
+  // round, so ONE reply asking for twelve tools ran all twelve and put all
+  // twelve results into the conversation — 12 calls against a cap of 8, and
+  // a quarter of a million characters against a cap of 80,000.
+  const ids = Array.from({ length: 12 }, (_, i) => `u${i}`);
+  const { fetch, sent } = api([
+    reply(ids.map(i => use(i, "tracker_stats")), "tool_use"),
+    reply([text("Done.")])
+  ]);
+  const fat = { blob: "x".repeat(MAX_TOOL_RESULT_CHARS + 5000) };
+  let ran = 0;
+  await askLoop([{ role: "user", text: "?" }], TOOLS, "s", "k",
+    deps(fetch, async () => { ran++; return fat; }));
+
+  assert.ok(ran <= MAX_TOOL_CALLS, `${ran} tools were run against a limit of ${MAX_TOOL_CALLS}`);
+  const msgs = sent[1].body.messages;
+  assert.deepEqual(msgs[msgs.length - 1].content.map(c => c.tool_use_id), ids,
+    "and every block is still answered, so the API takes the turn");
+  // The overshoot is ONE tool: the first of a batch always runs, because
+  // the round would not have begun if the budget were already spent.
+  const outbound = JSON.stringify(msgs).length;
+  assert.ok(outbound < MAX_TOOL_TOTAL_CHARS + MAX_TOOL_RESULT_CHARS + 5000,
+    `the conversation carried ${outbound} characters`);
+});
+
+test("a request past the arithmetic bound is refused in words, before it is sent", async () => {
+  // A backstop, not a working limit: nothing legitimate reaches it, and a
+  // call that does means the accounting is wrong somewhere. It must refuse
+  // rather than log — a spending limit that only takes notes is not one.
+  let called = 0;
+  const fetch = async () => { called++; return reply([text("hi")]); };
+  const huge = [{ role: "user", text: "x".repeat(MAX_TURN_CHARS) }];
+  for (let i = 0; i < MAX_TURNS; i++) huge.push({ role: "assistant", text: "y" }, { role: "user", text: "x".repeat(MAX_TURN_CHARS) });
+  // The thread alone is inside the bound; a system message nobody would
+  // write is what takes it over.
+  await assert.rejects(
+    () => askLoop(huge, TOOLS, "s".repeat(MAX_REQUEST_CHARS), "k", deps(fetch)),
+    e => /grown too long/.test(e.message) && e.plain === true
+  );
+  assert.equal(called, 0, "and nothing was spent finding out");
+
+  // The same thread with an ordinary system message goes.
+  const ok = await askLoop(huge, TOOLS, "s", "k", deps(fetch));
+  assert.equal(ok.answer, "hi");
 });
