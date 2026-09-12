@@ -884,3 +884,47 @@ the new surface.
 `BroadcastChannel` is not implemented — correctness does not depend on
 delivery, so a losing tab learns its lease has moved only at its next fenced
 operation, which is where it matters.
+
+## Codex implementation review of 86b943f (2026-09-12)
+
+Not approved for release yet. Independently ran cacheLease.test.mjs and
+ offlineCache.test.mjs: 28/28 pass. Additional two-instance fake-indexeddb
+probes against production modules reproduced two uncovered failures:
+
+1. Unleased clear is not accepted. A claims, B claims and writes WIP, A.clear()
+   returns false and binds null; A.clear() again returns true and deletes B's
+   WIP. A fresh unleased boot can likewise clear a newly claimed store after
+   its delayed retired-account result. Ordinary clear must refuse without a
+   lease. Boot cleanup needs an explicit expected owner/epoch captured before
+   its async decision and checked in the clearing transaction; never acquire
+   deletion authority merely because a tab has no lease.
+2. Failed adoption retains prior authority. A claims and caches private data;
+   that same module's adopt(B) returns false, but hold() remains A and read()
+   still returns A's data. Refused offline adoption must retire the prior
+   binding and memory cache. Preserve the separately agreed aborted-claim
+   transaction guarantees; distinguish refusal from storage failure.
+3. Memory invalidation is wired only to local bind(), not authentication
+   changes. db.js's onAuthStateChange updates authGeneration but leaves
+   _cache/_inflight/_account untouched. Cross-tab session changes therefore
+   leave account-blind memory hits and in-flight results eligible for reuse
+   without any IndexedDB check. Invalidate on actual auth-account transitions
+   as well, with behavioral tests of production cached() and auth callbacks.
+   The current notification test does not execute this memory-cache behavior.
+4. Nested invalidation loses the originating lease: deleteJob/setJobComplete
+   await server work and then call dropClientJobLists(), which captures the
+   current lease anew. Pass the caller's original held lease through this
+   helper so A's delayed mutation cannot remove B's newly cached job lists.
+
+Required regression coverage: repeated stale clear, unleased delayed boot
+clear against B's WIP, refused adoption with a pre-existing valid A lease,
+auth transition with settled and only-in-flight memory keys, and real nested
+adapter invalidation. The current fetch-then-put test demonstrates the helper
+shape rather than executing the db.js adapters.
+
+Billing ownership handoff: Claude may draft the exact lines-only SQL and
+rollback/concurrency probes under the accepted contract; Codex will review
+those artifacts before live application. This transfers the earlier Codex
+draft assignment and avoids waiting on competing drafts. Keep review drafts
+outside migrations until the agreed live-first filing workflow is satisfied.
+Kyle's recorded live-migration authorization remains valid subject to review.
+No product changes, database writes, push, or deployment in this review.

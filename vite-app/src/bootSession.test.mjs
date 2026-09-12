@@ -24,8 +24,9 @@ const build = deps =>
 
 // One boot's worth of world, with everything destructive recorded rather
 // than done.
-function world({ session, profile, hinted = false, claimThrows = false, identity = null }) {
-  const did = { signedOut: false, forgot: false, cleared: false, identityRemoved: false, claimed: null, user: null, bootError: "", checking: true };
+function world({ session, profile, hinted = false, claimThrows = false, identity = null,
+                 marker = { owner: "A", epoch: 1 }, markerThrows = false }) {
+  const did = { signedOut: false, forgot: false, cleared: false, clearedWith: undefined, identityRemoved: false, claimed: null, user: null, bootError: "", checking: true };
   const store = new Map();
   if (identity) store.set("session.identity", { at: Date.now(), value: identity });
   const deps = {
@@ -45,7 +46,11 @@ function world({ session, profile, hinted = false, claimThrows = false, identity
       // The offline restore's own claim: it never reaches writeIdentity, so
       // this is where a boot with no signal takes the lease its reads need.
       adopt: async id => { did.adopted = id; return true; },
-      clear: async () => { did.cleared = true; store.clear(); },
+      // Read before the server is asked, and handed back to clear() as the
+      // authority for the retired-account wipe — the boot holds no lease of
+      // its own at that point. See OfflineCache.clear.
+      marker: async () => { if (markerThrows) throw new Error("IndexedDB is unavailable"); return marker; },
+      clear: async opts => { did.cleared = true; did.clearedWith = opts; store.clear(); return true; },
       claimFor: async id => { if (claimThrows) throw new Error("IndexedDB is unavailable"); did.claimed = id; },
       noteServingCached: () => {}
     },
@@ -113,6 +118,28 @@ test("the same missing profile with no recovery in play signs out and wipes", as
   assert.equal(did.signedOut, true);
   assert.equal(did.cleared, true);
   assert.equal(did.identityRemoved, true);
+  // Fenced on who this device belonged to before the server was asked. The
+  // boot holds no lease — nothing has been claimed — so this is the whole of
+  // the wipe's authority, and a device claimed by another tab meanwhile is
+  // not emptied by it.
+  assert.deepEqual(did.clearedWith, { expect: { owner: "A", epoch: 1 } });
+});
+
+test("a device nobody has claimed is still the boot's to empty", async () => {
+  const { did, boot } = world({ session: LIVE, profile: NO_PROFILE, marker: null });
+  await boot();
+  assert.equal(did.cleared, true);
+  assert.deepEqual(did.clearedWith, { expect: null }, "no marker is a state, not the absence of one");
+});
+
+test("an unreadable owner leaves the retired account's data alone", async () => {
+  // Unreadable is not nobody: a moment's IndexedDB fault must not become the
+  // authority for a wipe this tab holds no lease for.
+  const { did, boot } = world({ session: LIVE, profile: NO_PROFILE, markerThrows: true });
+  await boot();
+  assert.equal(did.signedOut, true);
+  assert.equal(did.identityRemoved, true);
+  assert.equal(did.cleared, false);
 });
 
 test("a lapsed session forgets the identity and keeps the work", async () => {

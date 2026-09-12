@@ -82,6 +82,16 @@ function matches(markerValue, held) {
   return !!marker && marker.owner === held.owner && marker.epoch === held.epoch;
 }
 
+// The same comparison where BOTH sides may be "no marker at all" — what the
+// boot's own clear is fenced on. `null` there is a real state (a store no
+// account has ever claimed) and not the absence of an expectation, so an
+// ownerless marker left by somebody's sign-out does not answer to it.
+function sameMarker(markerValue, expect) {
+  const marker = asMarker(markerValue);
+  if (!marker || !expect) return !marker && !expect;
+  return marker.owner === expect.owner && marker.epoch === expect.epoch;
+}
+
 let ocDbPromise = null;
 function ocOpenDb() {
   if (ocDbPromise) return ocDbPromise;
@@ -277,7 +287,17 @@ export const OfflineCache = {
     return marker ? marker.owner : null;
   },
 
-  // The boot's two explicit, unfenced doors, and the only ones. Reading who
+  // The whole marker, owner and epoch, for a caller that has to come back to
+  // this exact state later: the boot reads it before it asks the server
+  // anything, and hands it back to clear() as the authority for a wipe it
+  // holds no lease for. Unfenced for the same reason owner() is — it is the
+  // question that decides the claim, so it cannot be behind one.
+  async marker() {
+    const hit = await ocGetRaw(CACHE_OWNER_KEY);
+    return asMarker(hit ? hit.value : null);
+  },
+
+  // The boot's explicit, unfenced doors, and the only ones. Reading who
   // was last signed in here is what DECIDES the claim, so it cannot be
   // behind the claim; forgetting them is never a disclosure.
   async readIdentity() { return ocGetRaw(IDENTITY_KEY); },
@@ -316,7 +336,19 @@ export const OfflineCache = {
   // else's jobs.
   async adopt(userId) {
     const settled = await settleOwner(userId, false);
-    return !!settled;
+    if (!settled) {
+      // Refused, and the refusal RETIRES whatever this tab was holding. The
+      // marker names somebody else, which is proof this device changed hands
+      // since — so the lease from before it did describes a store that is no
+      // longer there, and reading a row under it would serve the previous
+      // account's data to the account that was just refused the device. A
+      // storage FAILURE is not this: settleOwner throws on one, and the
+      // binding is left exactly as it was, because an IndexedDB blip is not
+      // evidence of anything.
+      bind(null);
+      return false;
+    }
+    return true;
   },
 
   // Run something with the fallback switched off: while it runs, a failed
@@ -435,16 +467,29 @@ export const OfflineCache = {
   // tickets of whoever is using the tablet now. It answers false in that case
   // and lets go of its lease: what it meant to delete is already gone.
   //
-  // A tab holding NO lease empties unconditionally — that is the boot's own
-  // wipe for an account the server has just retired, which happens before
-  // anything is claimed and has nothing to compare against. It is the one
-  // clear that is not fenced, and it is deliberate.
-  async clear() {
+  // A tab holding NO lease empties NOTHING. Having no authority is not a
+  // kind of authority: a stale tab that has already been refused once would
+  // otherwise succeed on its second try, and a boot whose answer about a
+  // retired account came back a minute late would empty the store another
+  // tab had claimed and filled meanwhile.
+  //
+  // The boot's own wipe — the account the server has just retired, decided
+  // before anything is claimed — passes `{ expect }`: the marker it read
+  // BEFORE it asked the server, re-read inside this transaction and required
+  // to be unchanged. That is an authority captured at a known moment, not one
+  // conjured out of holding nothing. `expect: null` is itself a state (a
+  // store nobody has ever claimed) and matches only that.
+  async clear(opts) {
     // The guard map has to empty with the store: after a sign-out it still
     // held the last serializations, so the next session's unchanged fetches
     // skipped their writes and the offline fallback was silently gone.
     rtLastWritten.clear();
-    const held = lease;
+    const stated = !!opts && Object.prototype.hasOwnProperty.call(opts, "expect");
+    const expect = stated ? asMarker(opts.expect) : lease;
+    // Neither a lease nor a stated expectation: nothing to be sure of, so
+    // nothing is deleted. The tab is left as it was — it holds no lease
+    // anyway — and the caller is told it emptied nothing.
+    if (!stated && !lease) return false;
     const db = await ocOpenDb();
     const emptied = await new Promise((resolve, reject) => {
       const tx = db.transaction(OC_STORE, "readwrite");
@@ -453,7 +498,7 @@ export const OfflineCache = {
       const req = store.get(CACHE_OWNER_KEY);
       req.onsuccess = () => {
         const value = req.result ? req.result.value : null;
-        if (held && !matches(value, held)) return;
+        if (!sameMarker(value, expect)) return;
         const marker = asMarker(value);
         store.clear();
         store.put({ key: CACHE_OWNER_KEY, value: { owner: OWNERLESS, epoch: (marker ? marker.epoch : 0) + 1 }, at: Date.now() });

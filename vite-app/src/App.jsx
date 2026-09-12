@@ -772,6 +772,17 @@ export function App() {
     // Set by writeIdentity below when this device would not empty itself for
     // the account being restored. See there for why it travels as a flag.
     let claimFailed = null;
+    // Whose this device was BEFORE the server was asked anything. The
+    // retired-account wipe far below runs with no lease — nothing has been
+    // claimed at that point — so this reading, taken now and checked again
+    // inside the clearing transaction, is the whole of its authority. A slow
+    // answer would otherwise empty a store that another tab claimed and
+    // filled while it was in flight. Unreadable is not nobody: a marker that
+    // could not be read means the wipe is not attempted at all.
+    let markerAtBoot = null;
+    let markerRead = false;
+    try { markerAtBoot = await OfflineCache.marker(); markerRead = true; }
+    catch (e) { console.error("Couldn't read who this device's stored data belongs to:", e); }
     try {
       const { user, offline, reason, signedOut, identityUnreadable } = await restoreSession({
           getSession: () => sbClient.auth.getSession(),
@@ -904,7 +915,17 @@ export function App() {
         // nothing and a forged one therefore buys nobody anything.
         if (!Recovery.hinted()) {
           try { await OfflineCache.forgetIdentity(); } catch { /* the clear below tries again */ }
-          try { await OfflineCache.clear(); } catch (e) { console.error("Couldn't clear the offline cache after the account was locked:", e); }
+          // Fenced on the marker read at the top of this boot: if the device
+          // has changed hands since — another tab signed somebody in while
+          // the profile read was in flight — the store is theirs now and the
+          // retired account's wipe is not ours to run over it. Nothing is
+          // emptied either if that marker could not be read.
+          if (markerRead) {
+            try { await OfflineCache.clear({ expect: markerAtBoot }); }
+            catch (e) { console.error("Couldn't clear the offline cache after the account was locked:", e); }
+          } else {
+            console.error("The offline cache was left alone after the account was locked: this device's owner couldn't be read.");
+          }
         }
       } else if (!user) {
         // A session that simply ended — expired, or signed out on another

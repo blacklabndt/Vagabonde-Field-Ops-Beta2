@@ -15,11 +15,17 @@ const end = source.indexOf("\n}", source.indexOf("async function priceRoleAnswer
 assert.ok(start > 0 && end > start, "db.js must still hold the price-role region");
 const region = source.slice(start, end);
 assert.match(region, /now\.gen !== answer\.gen/, "the generation fence must be in the lifted region");
+assert.match(region, /forgetRememberedRows\(\)/, "a change of account must also empty the in-memory row caches");
 
-const build = ({ sbClient, plainError }) =>
-  new Function("sbClient", "plainError", "seesPrices",
+// A change of account also empties db.js's in-memory row caches, which live
+// above this region — see memoryCacheAccount.test.mjs, which lifts that half
+// and runs it. Here it is a spy, asserted on: the fence and the forgetting
+// are one decision, and a rewrite that kept the counter and dropped the call
+// would leave the last account's rows readable.
+const build = ({ sbClient, plainError, forgot = [] }) =>
+  new Function("sbClient", "plainError", "seesPrices", "forgetRememberedRows",
     region + "\nreturn { startPriceRoleLookup, priceRoleAnswer };"
-  )(sbClient, plainError, seesPrices);
+  )(sbClient, plainError, seesPrices, () => forgot.push(true));
 
 // A client whose signed-in account can be changed mid-flight, the way a
 // shared tablet's is, and whose profiles read is held open until the test
@@ -110,4 +116,21 @@ test("a profile that could not be read is raised, never read as 'no prices'", as
   const lookup = startPriceRoleLookup();
   sb.release();
   await assert.rejects(priceRoleAnswer(lookup), /couldn't be checked/);
+});
+
+test("a change of account empties the remembered rows; a refresh does not", async () => {
+  const forgot = [];
+  const sb = fakeClient("A");
+  build({ sbClient: sb, plainError, forgot });
+  // Nothing has been announced yet: the handler learns the account from the
+  // first event, and the account arriving (null -> A) is itself a change.
+  assert.equal(forgot.length, 0);
+  sb.become("A");
+  assert.equal(forgot.length, 1);
+  sb.become("A");            // TOKEN_REFRESHED: same person, same rows
+  assert.equal(forgot.length, 1);
+  sb.become("B");            // the tablet changed hands in another tab
+  assert.equal(forgot.length, 2);
+  sb.become(null);           // and signing out is a change of account too
+  assert.equal(forgot.length, 3);
 });

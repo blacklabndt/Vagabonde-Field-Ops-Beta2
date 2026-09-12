@@ -54,11 +54,16 @@ export const DEFAULT_SCHEDULE = "__default__";
 // (listActiveJobsForClient). Dropped whenever a job leaves the open set —
 // deleted, or marked complete — so a stale list can't offer a job that a
 // ticket would then fail against forever in the outbox.
-const dropClientJobLists = async () => {
+const dropClientJobLists = async (held = OfflineCache.hold()) => {
   // One lease across the read and the removes: a device that changed hands
   // between them would otherwise have the new owner's lists swept by the old
   // owner's edit. See OfflineCache.hold.
-  const held = OfflineCache.hold();
+  //
+  // The CALLER'S lease when it has one. deleteJob and setJobComplete await a
+  // round trip before they get here, which is exactly the window a handover
+  // fits into; taking a fresh lease at this point would hand the old owner's
+  // sweep the new owner's store — the whole thing this helper is fenced
+  // against, one call deeper.
   const keys = await OfflineCache.keys("jobs.client.", held).catch(() => []);
   await Promise.all(keys.map(k => OfflineCache.remove(k, held)));
 };
@@ -260,11 +265,16 @@ const _inflight = {};
 // that lands after the handover finds an account it no longer matches and is
 // answered to its own caller without being remembered for the next one.
 let _account = 0;
-OfflineCache.onLeaseChange(() => {
+// Both doors on to this are the same act: the rows in memory stop being this
+// account's. The lease change is the device's answer, the auth change is the
+// session's, and either can arrive without the other — a tab that did not do
+// the signing in hears only the second.
+function forgetRememberedRows() {
   _account++;
   for (const k of Object.keys(_cache)) delete _cache[k];
   for (const k of Object.keys(_inflight)) delete _inflight[k];
-});
+}
+OfflineCache.onLeaseChange(forgetRememberedRows);
 const CACHE_TTL_MS = 30000;
 async function cached(key, fetcher) {
   const hit = _cache[key];
@@ -363,7 +373,19 @@ let authGeneration = 0;
 let lastAuthUserId = null;
 sbClient.auth.onAuthStateChange((_event, session) => {
   const id = session && session.user ? session.user.id : null;
-  if (id !== lastAuthUserId) { lastAuthUserId = id; authGeneration += 1; }
+  if (id !== lastAuthUserId) {
+    lastAuthUserId = id;
+    authGeneration += 1;
+    // A change of account is a change of what these rows are allowed to be.
+    // The lease announcement covers the tab that DID the signing in; this
+    // covers the one that only heard about it — supabase-js broadcasts a
+    // session across every tab on the origin, so a tab sitting on the board
+    // learns its account changed here and nowhere else, and its remembered
+    // "contacts" and "profiles" are the last account's rows under keys that
+    // name no account at all. Everything settled goes, and the account
+    // counter moves so a walk that is only in flight settles into nothing.
+    forgetRememberedRows();
+  }
 });
 // Who this client is signed in as right now, and under which generation.
 // getSession is local — no round trip — so asking it a second time at the
@@ -1100,7 +1122,7 @@ export const Db = {
       gone.push("jhas." + transferToId, "reports." + transferToId, "tickets." + transferToId, "jha.last." + transferToId);
     }
     await Promise.all(gone.map(k => OfflineCache.remove(k, held)));
-    await dropClientJobLists();
+    await dropClientJobLists(held);
     return { ...(data || {}), filesLeft };
   },
 
@@ -1332,7 +1354,7 @@ export const Db = {
     const { error } = await sbClient.from("jobs")
       .update({ status: complete ? "Complete" : "Active" }).eq("id", jobDbId);
     if (error) throw error;
-    await dropClientJobLists();
+    await dropClientJobLists(held);
     // The remembered board page still calls this job Active, and offline
     // that pill is read as the job's status — a ticket started on it sat in
     // the outbox until the replay was refused. Patched in place rather than

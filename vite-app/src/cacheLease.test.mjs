@@ -254,3 +254,129 @@ test("every change of lease is announced, which is how the memory caches empty",
 
   assert.deepEqual(seen, ["tech-a", "tech-a", null, "tech-b"], "a claim, an adoption and a clear each say so");
 });
+
+test("a stale tab's clear is refused every time it is tried, not just the first", async () => {
+  await tabA.claimFor("tech-a");
+  await tabB.claimFor("tech-b");
+  await tabB.put("ticket.wip.J-77", { weldLines: [{ key: "rt_film:2in", qty: 14 }] });
+
+  // The first refusal lets go of A's lease — it named a store that is gone.
+  assert.equal(await tabA.clear(), false);
+  // Which must NOT leave the tab holding a blank cheque. Having no authority
+  // is not a kind of authority; a second press of Sign out, a retry after the
+  // toast, or the boot's own clean-up would otherwise empty B's store.
+  assert.equal(await tabA.clear(), false, "the second try is refused too");
+  assert.equal(await tabA.clear(), false, "and the third");
+  assert.ok(await rawRead("ticket.wip.J-77"), "B's welds are still there");
+});
+
+test("the boot's own wipe is fenced on the marker it read before asking the server", async () => {
+  await tabA.claimFor("tech-a");
+  await tabA.put("ticket.wip.J-77", { weldLines: [{ key: "rt_film:2in", qty: 14 }] });
+
+  // Tab B boots. It holds no lease yet — nothing has been claimed — and reads
+  // who this device belongs to BEFORE it asks the server about the session.
+  const atBoot = await tabB.marker();
+  assert.deepEqual(atBoot, { owner: "tech-a", epoch: 1 });
+
+  // The profile read is slow, and while it is in flight somebody signs in on
+  // another tab and starts working.
+  await tabA.claimFor("tech-c");
+  await tabA.put("ticket.wip.J-90", { weldLines: [{ key: "rt_film:6in", qty: 3 }] });
+
+  // The answer finally arrives: tech-a is locked out, empty the device. It is
+  // not this device any more, and the wipe does not happen.
+  assert.equal(await tabB.clear({ expect: atBoot }), false);
+  assert.ok(await rawRead("ticket.wip.J-90"), "the new owner's morning is untouched");
+
+  // And with nothing having moved, the same wipe lands.
+  const now = await tabB.marker();
+  assert.equal(await tabB.clear({ expect: now }), true);
+  assert.equal(await rawRead("ticket.wip.J-90"), null);
+});
+
+test("an unleased tab empties nothing unless it says what it expects", async () => {
+  await tabA.claimFor("tech-a");
+  await tabA.put("ticket.wip.J-77", { weldLines: [] });
+  assert.equal(tabB.hold(), null, "B has claimed nothing");
+  assert.equal(await tabB.clear(), false);
+  assert.ok(await rawRead("ticket.wip.J-77"), "and deleted nothing");
+});
+
+test("the boot's wipe of a device nobody has ever claimed", async () => {
+  // `expect: null` is a state of its own — a store with no marker at all —
+  // and not the absence of an expectation.
+  await rawPut("ticket.wip.J-77", { weldLines: [] });
+  assert.equal(await tabA.marker(), null);
+  await tabB.claimFor("tech-b");                    // claimed while the boot thought
+  assert.equal(await tabA.clear({ expect: null }), false);
+  await rawWipe();
+  await rawPut("ticket.wip.J-77", { weldLines: [] });
+  assert.equal(await tabA.clear({ expect: null }), true, "an unclaimed store is the boot's to empty");
+  assert.equal(await rawRead("ticket.wip.J-77"), null);
+});
+
+test("an adoption that is refused retires the lease the tab was holding", async () => {
+  await tabA.claimFor("tech-a");
+  await tabA.put("ticket.wip.J-77", { weldLines: [{ key: "rt_film:2in", qty: 14 }] });
+  assert.ok(tabA.hold());
+
+  // The same tab reopens for somebody else with no signal — a twelve-hour-old
+  // identity for tech-b restored on tech-a's tablet. The store is not emptied
+  // (a boot with no signal is the last moment for that), and the refusal is
+  // not merely "no new lease": the one this tab still holds is A's, and every
+  // fenced read under it would hand A's ticket to B's session.
+  assert.equal(await tabA.adopt("tech-b"), false);
+  assert.equal(tabA.hold(), null, "the old binding is retired by the refusal");
+  assert.equal(await tabA.read("ticket.wip.J-77"), null, "so nothing of A's is read back");
+  assert.deepEqual(await tabA.keys(""), []);
+  await tabA.remove("ticket.wip.J-77");
+  assert.ok(await rawRead("ticket.wip.J-77"), "and nothing of A's is deleted either");
+  assert.equal(await tabA.clear(), false, "and the store is not B's to empty");
+  assert.ok(await rawRead("ticket.wip.J-77"));
+});
+
+test("a same-account adoption keeps the lease it already had", async () => {
+  await tabA.claimFor("tech-a");
+  await tabA.put("ticket.wip.J-77", { weldLines: [] });
+  assert.equal(await tabA.adopt("tech-a"), true);
+  assert.ok(tabA.hold());
+  assert.ok(await tabA.read("ticket.wip.J-77"), "the same person's own drafts survive the restore");
+});
+
+// The one helper db.js calls AFTER a round trip has already been awaited, from
+// inside two adapters that took their lease before it. Lifted out of db.js and
+// run — db.js itself cannot be imported here, config.js builds a live Supabase
+// client at module scope — because the bug it fixes is one call deeper than
+// the adapters' own fences: a helper that takes a FRESH lease at the moment it
+// runs is the old owner's sweep reaching the new owner's store.
+const dbSource = (await import("node:fs")).readFileSync(new URL("./db.js", import.meta.url), "utf8");
+const helperStart = dbSource.indexOf("const dropClientJobLists = async");
+const helperEnd = dbSource.indexOf("\n};", helperStart) + 3;
+assert.ok(helperStart > 0 && helperEnd > helperStart, "db.js must still hold dropClientJobLists");
+const dropSource = dbSource.slice(helperStart, helperEnd);
+const dropClientJobLists = new Function("OfflineCache", dropSource + "\nreturn dropClientJobLists;")(tabA);
+
+test("the per-client job lists are swept under the caller's lease, not a fresh one", async () => {
+  await tabA.claimFor("tech-a");
+  const held = tabA.hold();                       // taken at the top of deleteJob
+  await tabB.claimFor("tech-b");                  // the tablet changes hands
+  await tabB.put("jobs.client.acme", [{ id: "J-1" }]);
+
+  await dropClientJobLists(held);
+  assert.ok(await rawRead("jobs.client.acme"), "A's delete does not sweep B's lists");
+
+  // And under a lease that still stands it does its job.
+  await dropClientJobLists(tabB.hold());
+  assert.equal(await rawRead("jobs.client.acme"), null);
+});
+
+test("both adapters hand that helper the lease they started with", () => {
+  // The threading is at the call sites, which are inside async methods on a
+  // live Supabase client and cannot be run here. Read back instead: a bare
+  // dropClientJobLists() from either of them is the bug returning.
+  const calls = dbSource.match(/dropClientJobLists\([^)]*\)/g) || [];
+  const called = calls.filter(c => c !== "dropClientJobLists(held = OfflineCache.hold())");
+  assert.equal(called.length, 2, "deleteJob and setJobComplete are the two callers");
+  for (const c of called) assert.equal(c, "dropClientJobLists(held)");
+});
