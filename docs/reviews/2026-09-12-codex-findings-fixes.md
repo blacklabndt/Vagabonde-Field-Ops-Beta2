@@ -93,3 +93,26 @@ One additional unverified observation from review: `openTicket()` changes
 the selected job before its asynchronous load finishes. A transition invoked
 from an already open ticket may briefly retain its old ticket ID. This has
 not been reproduced as a user-visible failure and is not marked fixed.
+
+## Release-order miss, found by Kyle and corrected (12 Sept, 23:28 UTC)
+
+Step 3 above was not carried out for `render-invoice`. The enforcement
+migration `20260912210854` went in at 21:08 local while the deployed function
+was still v19 from 11 Sept 18:34 — twenty hours older than `bd88c01`, the
+commit that took `total` out of `TICKET_INVOICE_SELECT` so the function could
+go on reading the base table. Every in-app invoice render therefore met a
+42501 on `tickets.total`, `loadInvoice` returned its error, and Job detail's
+viewer fell through to "Couldn't render this invoice." for every non-draft
+ticket. Drafts open in the editor, so the symptom looked narrower than it was.
+
+No code change was needed: `render-invoice` was redeployed from this branch
+and is now v20. The other readers of `_shared/ticketInvoice.ts` —
+`approve-ticket` and the approval mail — read with the service role, whose
+grants were untouched, and `ask` was deployed after `bd88c01`.
+
+The lesson is the migration header's own trap, one step further out: a grant
+list that names its columns makes a *stale deployed function* a breaking
+change, and the phase-2 header claimed "every reader was deployed" without
+checking a deploy timestamp against the commit that made the reader safe.
+`supabase functions list` prints `updated_at`; compare it with the fix commit
+before applying an enforcement migration.
