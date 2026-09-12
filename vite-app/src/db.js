@@ -561,6 +561,42 @@ const newestFirst = (rows, field) => rows.slice().sort((a, b) => {
   return String(a.id) < String(b.id) ? 1 : -1;
 });
 
+// Every line of one rate card, walked by key.
+//
+// A card is normally sixty-odd lines, and "normally" is not a guarantee: the
+// rate card IS the billing menu, so a read that stops at the response cap
+// takes items off the ticket screen's dropdowns and off the invoice's order
+// without saying so, and the lines it dropped come back as orphans on every
+// saved ticket. Worse in copyDefaultInto, where a truncated `existing` makes
+// every source line past the cap look missing and inserts a second copy of
+// the card — rate_lines has no unique key to refuse it.
+//
+// Keyset and not offset, per the house rule: this is what people are billed
+// from. The walk's order is the key's, which is the only order a keyset walk
+// is safe in; byCardOrder below puts the rows back into the order the screens
+// read them in.
+const allRateLines = (scheduleId, columns = "*") => fetchAllKeyset(async after => {
+  let q = sbClient.from("rate_lines").select(columns).eq("schedule_id", scheduleId);
+  if (after != null) q = q.gt("id", after);
+  const { data, error } = await q.order("id").limit(RESPONSE_ROW_CAP);
+  if (error) throw error;
+  return data || [];
+});
+
+// What `.order("position", { ascending: true, nullsFirst: false }).order("label")`
+// answered: the dragged order first, rows from before the position column
+// (null) at the end, label breaking a tie. The id breaks what label cannot,
+// so two opens of one card read the same way round — the database's own
+// answer for a full tie was whatever it felt like.
+const byCardOrder = rows => rows.slice().sort((a, b) => {
+  const an = a.position == null, bn = b.position == null;
+  if (an !== bn) return an ? 1 : -1;
+  if (!an && Number(a.position) !== Number(b.position)) return Number(a.position) - Number(b.position);
+  const la = a.label || "", lb = b.label || "";
+  if (la !== lb) return la < lb ? -1 : 1;
+  return String(a.id) < String(b.id) ? -1 : 1;
+});
+
 // Everything the archive's job text file says about a ticket, in one row.
 // gst_rate is the rate this ticket was actually billed at, reserved on its
 // first approval attempt or first invoicing. The archive is the record of
@@ -3671,10 +3707,7 @@ export const Db = {
       return null;
     }
 
-    const { data: lines, error: lErr } = await sbClient
-      .from("rate_lines").select("*").eq("schedule_id", schedule.id)
-      .order("position", { ascending: true, nullsFirst: false }).order("label");
-    if (lErr) throw lErr;
+    const lines = byCardOrder(await allRateLines(schedule.id));
 
     // The card's rows, expanded the way a ticket bills them: a size row is
     // three per-weld items (film, CR, DR), a method is one, and the expense
@@ -3734,12 +3767,9 @@ export const Db = {
       if (cErr) throw cErr;
       schedule = created;
     }
-    let { data: lines, error: lErr } = await sbClient.from("rate_lines").select("*")
-      .eq("schedule_id", schedule.id)
-      // The dragged order first; label keeps rows stable for anything from
-      // before the position column, which sorts to the end as null.
-      .order("position", { ascending: true, nullsFirst: false }).order("label");
-    if (lErr) throw lErr;
+    // The dragged order first; label keeps rows stable for anything from
+    // before the position column, which sorts to the end as null.
+    let lines = byCardOrder(await allRateLines(schedule.id));
 
     // The standard card is laid out once, when a schedule is empty — which
     // in practice means it was just created. This used to top up whatever
@@ -3873,15 +3903,15 @@ export const Db = {
         : "This is the default schedule — there is nothing to copy into it.");
     }
 
-    const [{ data: source, error: srcErr }, { data: existing, error: mineErr }] = await Promise.all([
-      sbClient.from("rate_lines").select("*").eq("schedule_id", sourceId),
-      sbClient.from("rate_lines").select("id, kind, label, rate, position").eq("schedule_id", scheduleId)
+    // A read that failed — or a page of one — is not a card with nothing on
+    // it. Dropped, an empty or short `existing` makes every source line look
+    // missing and the copy inserts a second copy of the whole card:
+    // rate_lines has no unique key to stop it. allRateLines throws on both,
+    // so neither can arrive here as an absence.
+    const [source, existing] = await Promise.all([
+      allRateLines(sourceId),
+      allRateLines(scheduleId, "id, kind, label, rate, position")
     ]);
-    // A read that failed is not a card with nothing on it. Dropped, an empty
-    // `existing` makes every source line look missing and the copy inserts a
-    // second copy of the whole card — rate_lines has no unique key to stop it.
-    if (srcErr) throw srcErr;
-    if (mineErr) throw mineErr;
     if (!source || !source.length) {
       throw new Error(fromScheduleId
         ? "That client's rate card has nothing on it yet, so there is nothing to copy."

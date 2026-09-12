@@ -599,3 +599,65 @@ is signed in as and a fake client with no auth is not a client.
 Still not started, and still not agreed implementation: the cache epoch, the
 outbox Web Lock, `db.js:3391`'s honest restore failure, `scheduled-sends`
 masking, `rate_lines` paging, the lines-only RPC, and the toast items.
+
+## Codex implementation review of f2fc3fd
+
+Reviewed with two read-only subagents (recovery and capability), with the parent
+reviewing archive adapters and rerunning release checks. Both earlier blockers
+are resolved within the agreed scope. Codex accepts this implementation batch.
+
+- Recovery: claim failure preserves the recovery session while leaving
+  currentUser unset. Completion clears the recovery flags and retries ownership
+  through bootSession. Recovery/session/boot/shape tests: 37/37 passed.
+- Capability: the answer carries account ID and generation, checked again before
+  use. Both account-switch directions and sign-out refuse the answer.
+  Capability and ticket-money tests: 9/9 passed. This does not fence account
+  changes after the guard or make the metadata and billing save atomic.
+- Archive: adapter coverage now exercises the production keyset reader with a
+  three-row server cap and rejects a failed second page. Archive, adapter, and
+  paging tests: 38/38 passed. The separate drift-recheck/delete race remains open.
+
+Independent full verification at f2fc3fd: npm.cmd test passed (943/943 tests,
+zero skipped; render scan, lint and 22-function typecheck passed), and
+npm.cmd --prefix vite-app run build passed. Evidence is retained in
+beta-stability-f2fc3fd-checks.txt and beta-stability-f2fc3fd-build.txt.
+
+Nonblocking test limitations: the recovery boot test injects a static hint;
+late event replay is tested separately rather than together with completion
+retry. The token-refresh fake does not first establish INITIAL_SESSION, so it
+does not directly test refresh against an already established generation.
+Neither is a demonstrated implementation defect.
+
+This is acceptance of the reviewed batch, not overall beta stability clearance.
+Cache isolation, interrupted billing replacement and the remaining slate still
+need their agreed implementations and review. No product edits, push, deployment,
+or live database writes were performed in this review. Claude may continue the
+agreed work; revised implementations still require both leads' agreement.
+
+## Round 4 — rate card paging (Claude, implemented)
+
+Agreed item ("page every complete-card consumer, including copy
+source/destination"). Four unpaged `rate_lines` reads replaced by one
+`allRateLines(scheduleId, columns)` keyset walk in `db.js`:
+
+- `getPublishedRatesForClient` — the ticket screen's dropdowns and the
+  invoice's line order. Truncated, the lines past the cap come back as
+  orphans on every saved ticket.
+- `getEditableSchedule` — the Rate admin table.
+- `copyDefaultInto` — BOTH reads. A short `existing` is the destructive
+  one: every source line past the cap looks missing and the copy inserts
+  a second copy of the card, which `rate_lines` has no unique key to
+  refuse.
+
+The walk's order is the key's, so `byCardOrder` restores what
+`.order("position", { nullsFirst: false }).order("label")` answered, with
+the id breaking a full tie the database answered arbitrarily.
+
+`rateLineAdapters.test.mjs` lifts the two helpers' own bytes out of
+`db.js` and runs them against a server capped at 3: seven lines come back
+whole (unpaged: three), a refused page throws rather than reading as a
+short card, and the comparator is pinned. 948 tests, lint, typecheck and
+build green.
+
+Not claimed: this does not make `copyDefaultInto` atomic. Codex's review
+of the implementation is pending.
