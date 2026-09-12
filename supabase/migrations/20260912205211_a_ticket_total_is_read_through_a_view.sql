@@ -1,4 +1,4 @@
--- DRAFT, NOT APPLIED. Phase 1: prepare the masked read relation and the RPCs.
+-- APPLIED 12 Sept 2026. Phase 1: prepare the masked read relation and the RPCs.
 -- Until phase 2 the original direct total disclosure remains open. Phase 1
 -- closes nothing; never say that it has.
 --
