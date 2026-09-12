@@ -1,481 +1,651 @@
-# Handing VagaboNDE Field Ops over
+# VagaboNDE Field Ops: handover guide
 
-The setup document ("Things to do to get set up") is the installation
-manual. This is the owner's manual: what the system is made of, how it
-changes hands, and what the new owner's admin does on day one.
+This guide explains how to take over the app, set up the office, and handle
+common problems. If the app already works, start with **Day one**. You do
+not need to install it again.
 
----
+**Click** also means **tap** on a phone. The **drawer** is the side menu.
+An **Admin** is someone allowed to change the app's settings. A **backup**
+is a saved copy of business records and files. **Restore** means putting
+that information back into the app.
 
-## What the system is made of
+## Find your task
 
-| Piece | What it does | Where it lives |
-|---|---|---|
-| The app | React PWA the crew installs on phones | Built from `vite-app/`, served by the Cloudflare Worker |
-| The Worker | Serves the app + renders client approval pages at `/approve` | `worker/index.js`, deployed with `npx wrangler deploy` |
-| Database, sign-in, files | Everything the app stores | Supabase project `eielmvxzdwwprmmfamlq` (Postgres + Auth + Storage) |
-| Server functions | Email sending, approvals, user provisioning and unlocking, chat push, nightly cleanup, the automatic backup, the morning digest, feature requests | `supabase/functions/`, deployed with the Supabase CLI |
-| Email | Reports and billing approval links | Resend (key entered on the in-app **Admin** screen) |
-| Chat GIFs | Team chat's GIF search | KLIPY (key on the **Admin** screen, optional) |
-| The backup drive | Where the app copies itself on a schedule, and restores from | One Google Drive / OneDrive / Dropbox account of the business's own, connected on the **Admin** screen |
+- [Day one](#day-one)
+- [Connect a backup drive](#connect-a-backup-drive)
+- [Recover a deleted job](#recover-a-deleted-job)
+- [Backup and restore problems](#backup-and-restore-problems)
+- [Everyday problems](#everyday-problems)
+- [Transfer ownership](#transfer-ownership)
+- [Developer instructions](#developer-instructions)
+- [Release status](#release-status)
 
-Everything an admin configures day-to-day lives **inside the app**:
-drawer → **Admin** (Resend key and addresses, the app's public address for
-approval links, the KLIPY key, the archive and the automatic backup) and
-**Users & access**, **Rate admin**,
-**Contacts**. Only two settings live in the Supabase dashboard because
-they guard sign-in itself: the **Site URL** (Authentication → URL
-Configuration — where password-reset links land) and **leaked-password
-protection** (Authentication → Policies).
+## Day one
 
-## Changing hands — two paths
+Have your Admin sign-in, the app's web address, the business's sending email
+addresses, invoice details, prices, and staff list ready.
 
-**Path A — transfer (recommended): keep everything, move the accounts.**
-1. The client makes free accounts at supabase.com and cloudflare.com.
-2. Supabase: their account creates an organization, and the current owner
-   transfers the project into it (Project Settings → General → Transfer
-   project). Data, functions, secrets and URLs all move unchanged;
-   nothing redeploys, nothing breaks, the app doesn't notice.
-3. Cloudflare: the Worker is stateless, so it isn't "moved" — it's just
-   deployed again from this repo while logged into their account
-   (`npx wrangler login`, then `npm run build && npx wrangler deploy`).
-   Their copy gets its own URL; update the **Site URL**, the Admin
-   screen's **App address**, and have the crew reinstall the PWA from the
-   new address. Doing this at the same time as a custom domain (below)
-   means the crew only ever installs once.
-4. Run the seed wipe (below) somewhere between transfer and go-live.
+### 1. Set up email and invoices
 
-**Path B — fresh install: new project, empty history.**
-The migration history is built for this — `supabase/migrations/` starts
-with a baseline that recreates the whole schema in a fresh project (and
-must never run against an existing one). The extra steps beyond the setup
-doc: point the app at the new project (copy `vite-app/.env.example` to
-`.env` with the new URL and publishable key), generate a fresh push
-keypair (`npx web-push generate-vapid-keys` — public key into
-`vite-app/src/config.js`, private key + subject into the function
-secrets), then `supabase db push`, deploy all functions, set secrets, and
-deploy the Worker. Path A avoids all of this.
+1. Sign in to the app as an Admin.
+2. Open the side menu. Click **Admin**.
+3. Enter the business's Resend key and its two sending addresses. A key is
+   a private code that lets the app use the email service. Verify the sending
+   domain in Resend first; see the [setup document](Things%20to%20do%20to%20get%20set%20up.md).
+4. Find **App address**. Enter the full address people use to open the app,
+   starting with `https://`. Use the app address, not the Supabase address.
+5. Find **Invoices**. Enter the payment terms, GST number, and the name and
+   address clients should send payment to.
+6. Click **Save settings**.
+7. Under **Send a test email**, enter an inbox you can check. Click
+   **Send test email**.
+8. Open that inbox. Check that the message arrived, including in junk mail.
 
-> **Check the `.env` actually took.** `vite-app/src/config.js` falls back
-> to this beta project's URL and publishable key when
-> `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` are missing — which is
-> what keeps a fresh `npm run dev` working, and also means a `.env` that
-> is absent, misnamed, or added after the build silently produces an app
-> pointed at the original live project rather than one that refuses to
-> start. It is a build-time substitution, so it is settled when
-> `npm run build` runs, not when the Worker serves. Verify before handing
-> the address out: sign in on the new deployment and confirm the data is
-> the new project's, or grep the built bundle in `vite-app/dist/` for the
-> old project ref (`eielmvxzdwwprmmfamlq`) and expect no hits.
->
-> **The moment `supabase db push` finishes, the new project starts calling
-> this one.** Six migrations bake the live project's function URL and
-> publishable key into the text of three cron jobs and the chat push
-> trigger: `20260818155616_chat_messages_expire.sql`,
-> `20260818190952_chat_push_subscriptions.sql`,
-> `20260826041947_the_database_signs_its_own_calls.sql` (both the push and
-> the retention job), `20260905080604_the_project_backs_itself_up.sql`,
-> `20260906143757_the_office_hears_about_failures.sql` and
-> `20260910213858_a_send_can_wait_for_its_time.sql`.
-> So a fresh project stands up a `backup-tick` job posting at *this*
-> project's `backup-run` every five minutes, a `chat-retention-nightly`
-> job posting at its `chat-retention`, an `admin-digest-daily` job posting
-> at its `admin-digest` every morning, a `scheduled-sends-tick` job posting
-> at its `scheduled-sends` every five minutes, and a trigger on `chat_messages`
-> posting every insert at its `chat-push`. They are rejected — the
-> `x-internal-secret` is minted per project — but the requests are real
-> and the protection is one shared secret deep. Before anything else, run
-> `select cron.unschedule(jobid) from cron.job;` on the new project and
-> re-point the chat push trigger at the new project's own function URL,
-> then re-create the three jobs against it. (Reading the URL from a setting
-> the way `edge_shared_secret` already is would end this; it has not been
-> written yet.)
->
-> Before `supabase db push`, look in `supabase/handover/` for a draft
-> schema fix — that is where one lives once it is written and before it
-> has been applied anywhere. Anything still sitting there is not in
-> `migrations/` and will not be in the fresh project. Nothing is waiting
-> there today: the last one went live as
-> `20260905105635_a_patch_is_an_update_not_an_upsert.sql`, and the probes
-> it was checked with stayed behind as
-> `probes-20260905105635-a-patch-is-an-update-not-an-upsert.sql`.
+**Finished when:** the settings are saved and the test email arrives.
+If it does not arrive, use the email steps under **Everyday problems**.
 
-## The custom domain
+### 2. Check password settings
 
-Client-facing links currently use the Worker's `workers.dev` address. A
-custom domain (say `app.vagabonde.ca`) needs its DNS zone on Cloudflare —
-vagabonde.ca is on GoDaddy today, so that's either moving nameservers or
-living with workers.dev. **Decide before the crew installs the PWA
-widely**: the old URL keeps working alongside a new domain (nothing sent
-breaks), but installed PWAs and push subscriptions are bound to their
-address — change it later and every device reinstalls and re-allows
-notifications. Changing it early costs nothing.
+Do this with the person handing over. Supabase is the service that handles
+sign-in and stores the app's records.
 
-## Connecting a backup drive
+1. Sign in to the Supabase dashboard. Open the correct project.
+2. Open **Authentication**, then **URL Configuration**.
+3. Check that **Site URL** is the app's current address. Save any change.
+4. Find the password security settings under **Authentication**. Check
+   **leaked-password protection**. If the project's plan does not offer it,
+   record that with the person handing over.
+5. Send a password-reset link to an account you control. Check that the
+   link opens the correct app.
 
-The app can copy itself — every record, every PDF — to one drive account on
-a schedule, and restore from it. The drive account is the business's own and
-stays the business's own: the app holds nothing but the access it was
-granted, which the provider's own security page can withdraw at any moment.
-The copying happens on the app's server, so nothing passes through anybody's
-browser and the machine that pressed the button can be shut afterwards.
+**Finished when:** password-reset links reach the right app and the password
+protection setting has been checked.
 
-Two things follow from what is in it. A backup carries the crew's hours and
-dose readings and every client's pricing, so the drive account should belong
-to the business rather than to a person. And it deliberately does **not**
-carry the Resend key, the KLIPY key or the drive's own credentials — those
-are blanked on the way in, so a restore never overwrites the live ones and a
-backup on somebody's laptop is not a set of keys.
+### 3. Add the crew
 
-Each provider needs a free app registration under your own account. That is
-what lets the app write to your drive without anybody holding your password.
-Do the one you intend to use and ignore the other two — only one drive is
-ever connected, and switching later means Disconnect first.
+1. Open the app's side menu. Click **Users & access**.
+2. Create an account for each crew member.
+3. Choose their role. This sets the sections they can use.
+4. Check their section permissions and adjust them if needed.
+5. Tick **Subcontractor** for anyone who invoices the business instead of
+   being paid through payroll.
+6. Have one crew member sign in and check their access.
 
-**Before you start**, open the app, sign in as an Admin, go to **Admin →
-Automatic backup → App registration**, and copy the redirect URI shown
-beneath the provider you have chosen. It reads
-`https://<your app address>/backup/oauth/google` (or `/microsoft`, or
-`/dropbox`) and it has to be pasted into the registration character for
-character. Those boxes fall back to whatever address this window happens to
-be on when the **App address** field further up the Admin screen is blank —
-and Connect refuses outright until that field is filled in ("The App address
-isn't set on the Admin screen"), so fill it in first.
+**Finished when:** the crew can sign in and see the sections they need.
+
+### 4. Add contacts and prices
+
+1. Open **Contacts**. Add the real clients, contractors, and contact people.
+2. Choose each business's primary contact. The app uses this person to fill
+   in contacts on jobs and emails.
+3. Open **Rate admin**. Replace the house card's example prices with real prices.
+4. Set up each client's card. It can follow the house card, use its own
+   prices, or start as a copy of another client's card.
+5. Check each client's **GST rate**. The default is 5; enter the correct
+   rate for an exempt client.
+6. Click **Publish schedule** for each new card. Once a card is published,
+   later edits take effect when saved.
+
+**Finished when:** each client has the right contact, prices, and GST rate.
+Existing tickets keep their saved prices. A ticket's GST rate is saved on
+its first approval attempt, or when first invoiced if it has no saved rate.
+Older tickets without a saved GST rate still use the client's current rate.
+
+### 5. Start backups
+
+1. Follow **Connect a backup drive** below.
+2. Choose the schedule and how many backups to keep.
+3. Run a backup yourself and wait for it to finish.
+
+**Finished when:** the panel shows a completed backup and the next scheduled
+run. A connected drive alone does not prove a backup worked.
+
+### 6. Check the app together
+
+1. Open a job and check its details.
+2. Open a ticket and check its prices and tax.
+3. Open a report or invoice PDF and check that it is readable.
+4. Open **Timesheets** and check the expected people are listed.
+5. Write down who the office should contact for help.
+
+Use agreed test records. Sending an approval sends a real email, so use
+a test recipient if checking that step.
+
+## Connect a backup drive
+
+Use a Google Drive, OneDrive, or Dropbox account owned by the business.
+Backups contain private information, including hours, dose readings, and
+client prices. Only one drive can be connected at a time.
+
+The backup contains the records and files supported by the app's backup
+system. It does not replace ownership of the code or hosting accounts.
+The error log, audit trail, and private service keys are left out. A restore
+does not replace the live Resend, KLIPY, or drive credentials with backup values.
+
+### Start here for all providers
+
+1. Open **Admin**. Check **App address** and click **Save settings**.
+2. Find **Automatic backup**, then **App registration**.
+3. Choose the drive provider.
+4. Copy its **redirect URI**. This is the return address the drive uses to
+   send you back to the app after signing in.
+5. Leave the app open. Follow just one provider section below in another tab.
+
+An **app registration** gives the backup system permission to use your drive
+without knowing your drive password. Copy its ID and secret into the app;
+do not put secrets in this guide or send them in chat.
 
 ### Google Drive
 
-1. <https://console.cloud.google.com/projectcreate> — make a project.
-2. <https://console.cloud.google.com/apis/library/drive.googleapis.com> —
-   **Enable** the Google Drive API in that project.
-3. <https://console.cloud.google.com/auth/overview> — fill in the OAuth
-   consent screen. **External**, your own email as the support and developer
-   contact. Then, on the same **Audience** page, set the publishing status
-   to **In production**. An app left in Testing refuses every account not
-   listed under Test users with "Access blocked: … has not completed the
-   Google verification process", and even a listed one is signed out after
-   seven days, because Google expires a Testing app's refresh tokens. The
-   only permission asked for, `drive.file`, is one Google does not review,
-   so publishing needs no verification; the first sign-in may show an
-   "unverified app" page — Advanced → continue. The app name on that page
-   is whatever you typed as the consent screen's name.
-4. <https://console.cloud.google.com/apis/credentials> — **Create
-   credentials → OAuth client ID → Web application**. Under *Authorised
-   redirect URIs* paste `https://<your app address>/backup/oauth/google`.
-5. Copy the **Client ID** (the string ending `.apps.googleusercontent.com`
-   — the console's copy sometimes brings its helper text along; the app
-   keeps only the id) and **Client secret** into the app's Google boxes,
-   press **Save backup settings**, then **Connect Google Drive**.
+1. Open [Google Cloud](https://console.cloud.google.com/projectcreate).
+   Create a project for the business's backup connection.
+2. Select that project. Open the
+   [Google Drive API page](https://console.cloud.google.com/apis/library/drive.googleapis.com)
+   and click **Enable**.
+3. Open [Google Auth Platform](https://console.cloud.google.com/auth/overview).
+   Enter the app name and the business's contact email.
+4. Set the audience to **External** for a connection using an ordinary Google
+   account. Set the publishing status to **In production** when ready.
+   Testing mode normally limits access to listed test users and expires
+   this connection after seven days.
+5. Open [Credentials](https://console.cloud.google.com/apis/credentials).
+   Choose **Create credentials**, **OAuth client ID**, then **Web application**.
+6. Under **Authorised redirect URIs**, paste the address copied from the app.
+   Save the registration.
+7. Copy the **Client ID** and **Client secret** into the app's Google boxes.
+8. Click **Save backup settings**, then **Connect Google Drive**.
+9. Sign in with the business's Google account, review the permission request,
+   and complete the connection.
 
-The app asks for one permission, `drive.file`. That scope only lets it see
-files it created itself: it cannot read anything else in your Drive.
+The app requests `drive.file`, a limited file permission, to manage its backup
+files. If Google blocks sign-in, check the audience, publishing status, and
+the business's Google Workspace restrictions. See
+[Google's publishing guidance](https://developers.google.com/identity/protocols/oauth2/production-readiness/overview)
+and [Drive permissions](https://developers.google.com/workspace/drive/api/guides/api-specific-auth).
 
 ### OneDrive
 
-1. <https://entra.microsoft.com> → **Applications → App registrations → New
-   registration**.
-2. Supported account types: *Accounts in any organizational directory and
-   personal Microsoft accounts*.
-3. **Redirect URI**: platform **Web**, value
-   `https://<your app address>/backup/oauth/microsoft`.
-4. After it is created, **Certificates & secrets → New client secret**. Copy
-   the *Value* (not the Secret ID) immediately — it is shown once.
-5. The **Application (client) ID** is on the Overview page. Put both into the
-   app's OneDrive boxes, save, then **Connect OneDrive**.
+1. Open [Microsoft Entra](https://entra.microsoft.com).
+2. Open **App registrations** and click **New registration**.
+3. Enter a name for the business's backup connection.
+4. Choose **Accounts in any organizational directory and personal Microsoft
+   accounts** as the account type.
+5. For **Redirect URI**, choose **Web**. Paste the address copied from the
+   app. Create the registration.
+6. On **Overview**, copy the **Application (client) ID** into the app's
+   OneDrive ID box.
+7. Open **Certificates & secrets**, then **New client secret**. Create one.
+8. Copy the secret's **Value**, not its Secret ID, into the app's secret box.
+   Copy it now; it is only shown once. Record its expiry date in the
+   business's reminder system so it can be replaced in time.
+9. Click **Save backup settings**, then **Connect OneDrive**.
+10. Sign in with the business's Microsoft account and complete the connection.
 
-The app asks for `Files.ReadWrite` and `offline_access` — permission to work
-with your files, and permission to keep working without you signing in again.
+The app asks for file access and permission to stay connected between runs.
+If the menus differ, use [Microsoft's registration guide](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app).
 
 ### Dropbox
 
-1. <https://www.dropbox.com/developers/apps> → **Create app** → **Scoped
-   access** → **Full Dropbox** → give it a name.
-2. On the app's **Permissions** tab tick `files.content.write`,
-   `files.content.read` and `files.metadata.read`, then **Submit**.
-3. On the **Settings** tab, under *OAuth 2 → Redirect URIs*, add
-   `https://<your app address>/backup/oauth/dropbox`.
-4. Copy the **App key** and **App secret** into the app's Dropbox boxes,
-   save, then **Connect Dropbox**.
+1. Open [Dropbox's app console](https://www.dropbox.com/developers/apps).
+2. Click **Create app**. Choose **Scoped access**, then **Full Dropbox**.
+3. Give the registration a name and create it.
+4. Open **Permissions**. Tick `files.content.write`, `files.content.read`,
+   and `files.metadata.read`. Click **Submit**.
+5. Open **Settings**. Under **OAuth 2**, add the return address copied from
+   the app to **Redirect URIs**.
+6. Copy the **App key** and **App secret** into the app's Dropbox boxes.
+7. Click **Save backup settings**, then **Connect Dropbox**.
+8. Sign in with the business's Dropbox account and complete the connection.
 
-### Setting the schedule
+See [Dropbox's connection guide](https://developers.dropbox.com/oauth-guide)
+for an explanation of its permission choices.
 
-Pick how often (every day, weekdays only, once a week, once a month), at
-what hour — Grande Prairie time, always, whatever clock the person setting
-it is on — and how many backups to keep. The panel prints the schedule back
-in words and, once a drive is connected, when the next one is due. Older
-folders beyond the keep count are removed after each *successful* run;
-copies taken automatically just before a restore are never tidied away.
+### Set the schedule and check the first backup
 
-Then press **Back up now** once and watch it through. The first backup is
-the slow one and can take an hour on a busy database; it keeps going on the
-server whether the screen is open or not, so the panel can be closed and
-reopened. A run that is going shows its phase and a running count of records
-and files.
+1. Return to **Admin**, then **Automatic backup**.
+2. Check that the drive is connected.
+3. Choose how often to back up: daily, weekdays, weekly, or monthly.
+4. Choose the hour. The app uses **Grande Prairie time**, even if you are
+   setting it up somewhere else.
+5. Choose how many backups to keep. Save the backup settings.
+6. Read the schedule shown in words. Check that it matches your choice.
+7. Click **Back up now**.
+8. Wait for completion. A large first backup can take an hour. You may close
+   the screen; the server keeps working.
+9. Reopen the panel if needed. Read the result and click **Show backups**
+   to find the completed copy.
 
-### Rehearsing a restore
+**Finished when:** the backup completed and the next run is shown.
+After a successful run, older backups beyond the keep count are removed.
+Safety copies taken before a restore are not removed by that count.
+To switch providers, disconnect the old drive first.
 
-**Done once, on 5 September 2026**, against the first real backup
-(`2026-09-05 08-47`: 23 tables, 203,838 rows, 26 files) — a full restore
-over an empty project, a full restore over a populated one (the wipe path),
-and a restore of two chosen jobs run twice (the second a no-op). Every row,
-file, total and timestamp came back identical to live; it took four to six
-minutes each. It found four defects before they reached live, all fixed:
-the safety copy pruning the drive, a one-statement wipe that the database's
-eight-second limit refused, a retry reusing the most damaged safety copy,
-and a restore that waited on the cron instead of starting itself. Do it
-again after any change to the restore code, and never on the live project.
+## Recover a deleted job
 
-Branching needs the Pro plan, which this project is not on. What worked
-instead — and is simpler than the second-Worker route below — was a
-throwaway free project in the same organisation: apply every migration to
-it, unschedule its cron jobs, deploy the three backup functions, copy the
-drive connection's `backup_*` columns from live's `app_settings` into
-its own row with one SQL `format()` statement run in each project's SQL
-editor (leave the Resend key out so it cannot mail), bootstrap one Admin by
-inserting an `auth.users` row with every token column set to `''`, sign
-that Admin in with the token endpoint, and call `backup-restore` directly.
-The scripted version of that is in the session notes; the shape is what
-matters. Delete the project afterwards. The original route, for a plan that
-has branches:
+Use this when a completed backup still contains the missing job.
 
-1. Connect the drive on the live app and let one backup complete.
-2. In the Supabase dashboard, create a branch off the project (Branches →
-   Create branch). A branch gets the schema and its own empty data.
-3. Stand the app up against that branch and connect the drive from it. This
-   is the fiddly step and it is worth knowing why before starting: the
-   drive's callback arrives at `/backup/oauth/<provider>`, which is a
-   *Worker* route, so a plain `npm run dev` cannot receive it. Deploy a
-   second Worker instead — a copy of `wrangler.jsonc` with a different
-   `name`, built with the branch's URL and publishable key in
-   `vite-app/.env` — deploy the three backup functions to the branch, put
-   that Worker's address into the branch app's **App address**, and add its
-   `/backup/oauth/<provider>` to the registration's redirect URIs. All three
-   providers accept several.
-4. **Restore everything** from the folder the live app wrote. Type the
-   folder name when it asks. Watch the phases go past: safety, wipe,
-   accounts, tables, files, activity.
-5. Then check the branch the way an admin would: sign in, open the board, a
-   job, one of its tickets, its invoice PDF, and the timesheet ledger.
-6. Delete the branch and the second Worker, and take the extra redirect URI
-   back out of the registration.
+1. Ask anyone working on that job to pause while you recover it.
+2. Open **Admin**, then **Automatic backup**.
+3. Click **Show backups**.
+4. Find a completed backup from before the job was deleted.
+5. Click **Restore jobs** on that backup.
+6. Select the missing job and start the restore.
+7. Wait for completion. Read any notes about items that could not be restored.
+8. Open the job. Check its tickets, reports, and crew records.
 
-What to expect, so none of it reads as a fault: the restore's own first
-phase writes a `before-restore …` folder into the same drive, and that one
-is kept for ever rather than tidied away by the retention count; the error
-log and the audit trail come back empty (they are not backed up, and their
-links to the staff list mean they have to be cleared before the wipe can
-finish); accounts are re-created in Auth with passwords nobody knows, and
-each active one is mailed a set-password link — so do this on a branch whose
-Resend key you are content to have send, or take the key out of the branch's
-Admin screen first; and any account that could not be re-created is named on
-the run rather than stopping it.
+**Finished when:** the missing records are back and checked.
+This option adds missing records. It does not overwrite existing records,
+so it is not a way to undo an edit to a job that is still there.
 
-### When a run fails
+## Backup and restore problems
 
-The panel says so in place of the last-run line, with the reason the run
-recorded, and — this is the important half — **the next scheduled backup
-still runs**. A failure does not stop the schedule and does not have to be
-cleared by hand. Read it in this order:
+Open **Admin**, then **Automatic backup**, and read the run's message.
+A failed backup does not turn off the schedule. A failed restore needs
+attention because it may have changed data.
 
-- **"The drive needs reconnecting."** The provider has withdrawn the app's
-  access, or the client secret has been rotated or has expired. Press
-  **Disconnect**, check the client secret in the registration, and connect
-  again. Nothing backs up while that message is showing.
-- **A run that says it could not open a folder or upload a file.** The drive
-  is full, or the provider was having a bad hour. The next run will try
-  again; **Back up now** tries immediately.
-- **A folder in the list tagged "didn't finish".** It has no index, so it is
-  not offered for restoring. A run that died partway leaves one; it is
-  harmless and retention will clear it in time.
-- **A run that stays "in progress" with nothing moving.** The five-minute
-  tick picks up a run whose slice died and carries on with it, so give it
-  ten minutes before doing anything. If it is still stuck, the reason will
-  be in `function_errors` (Supabase → Table Editor) under `backup-run` or
-  `backup-restore`.
-- **A restore that failed.** This is the one failure where the next
-  scheduled backup is not the answer, because the app itself may be
-  half-way through being replaced — so the panel says which it is, in the
-  failed-run line, and it is worth reading before anything else is pressed.
-  - *"It stopped before the app was emptied."* Nothing has been changed;
-    everything is as it was. Deal with the reason it gives — nearly always
-    the drive — and press **Restore** again.
-  - *"The app was emptied before this failed."* What is in the app now is a
-    part-restored copy, and there are two ways out. Either press **Restore**
-    on the same backup again, which carries on from where it stopped; or
-    restore the `before-restore …` folder the panel names, which is the copy
-    taken automatically just before this started and puts back exactly what
-    was here before. Both are ordinary restores from the list. The safety
-    copy is never tidied away by the retention count, so it is still there
-    however long it takes to decide.
-  - **Restoring jobs** never empties anything — it only adds — so a per-job
-    restore that fails has left the rest of the app alone. Press Restore on
-    those jobs again. Its notes are printed under the failed line too, and
-    they name each job, ticket or crew row that did not come back.
-- **Nothing has run at all and no failure is shown.** Either no drive is
-  connected, or the `backup-tick` cron job is not there — it arrives with
-  the migration, so a project restored from `supabase db push` has it and an
-  older one may not. Check `select * from cron.job` in the SQL editor.
+### The drive needs reconnecting
 
-A restore's own report is worth reading even when the run says complete: the
-panel prints the notes underneath, naming each job, ticket or crew row it
-could not put back and why.
+1. Click **Disconnect**.
+2. Check whether the provider's client secret expired or changed.
+3. Save a replacement secret if needed.
+4. Connect again and run **Back up now**.
 
-## Wiping the seed data
+### A folder or file could not be saved
 
-Every job, ticket, client, contractor, contact and account in the system
-today (except blacklabndt@gmail.com) is generated test data. The wipe is
-staged, reviewed, and run by hand exactly once:
+1. Check the drive has space.
+2. Check the drive provider is working.
+3. Click **Back up now** to retry.
 
-    supabase/handover/wipe-seed-data.sql
+An unfinished backup cannot be used for a restore. Choose a completed copy.
 
-Read its header before running — it says what survives (the owner
-account, the house rate card, the schema itself) and what to do about the
-storage buckets afterwards. Despite its name it empties everything, not
-only the seed rows, so it refuses to run until the session has said so:
-`set app.confirm_total_wipe = 'yes';` first, in the same SQL session.
-**It also retires the Playwright e2e suite**, which signs in as two of the
-seed technicians; keep a pair of test accounts if the suite should outlive
-handover.
+### Progress has stopped, or nothing has run
 
-To remove only the generated rows and keep real records, run
-`supabase/handover/wipe-seed-only.sql` instead — it works by the seed
-markers (S-1… jobs, @seed.vagabonde.ca accounts, organisations that only
-ever appeared on seed jobs) and prints a preview of the organisations it
-will remove before the deletes.
+1. For a stuck run, wait ten minutes. The automatic five-minute check may
+   resume it.
+2. Refresh the panel.
+3. Check that a drive is connected and the schedule is saved.
+4. If still stuck, ask support to check `function_errors` for `backup-run`
+   or `backup-restore`. If scheduled backups never start, the developer
+   should also check the `backup-tick` scheduled job.
 
-## Invoice numbers
+### A restore failed
 
-An approved ticket becomes an invoice the moment an Admin presses **Mark
-invoiced** on the billing tracker: the app stamps it with the next number in
-its own series — starting at **1000** — and the client's copy prints as
-INVOICE, with that number, the date it was raised, and the terms, GST number
-and remit-to block set on the Admin screen. Nothing else in the app writes
-that number.
+1. Read whether the app was emptied before the failure.
+2. If it says **before the app was emptied**, fix the reported problem
+   and retry. The existing records were not emptied.
+3. If it says **the app was emptied before this failed**, ask the crew to
+   stop entering data and contact support. Retry the same backup to continue,
+   or restore the named `before-restore` safety copy to recover the previous data.
+4. If **Restore jobs** failed, read which records failed, fix the cause,
+   and retry those jobs. Other jobs were not emptied.
 
-A number is never reused. Pulling a ticket back to Approved to correct
-something leaves the number on it, so the corrected bill goes out under the
-number the client already has in their system rather than appearing as a
-second invoice for one day's work.
+Read the final notes even when a restore says complete. They may name
+individual records or accounts that could not be put back.
 
-To carry on a series that started somewhere else — an accounting package, a
-pad of paper invoices — run this once in the Supabase SQL editor **before**
-the first ticket is marked invoiced, never after, or the next invoice takes a
-number a client has already been given:
+## Everyday problems
 
-    alter sequence public.invoice_number_seq restart with 4001;
+### A screen crashes
 
-The same command is what to run after restoring into a fresh Supabase project
-(Path B): a backup carries the tickets and the numbers on them, not the series
-they came from, so set it past the highest number restored —
-`select max(invoice_number) from public.tickets;`.
+1. Note the screen and time. If possible, note the version at the bottom
+   of the side menu.
+2. Use **Reload** on the problem screen. Tell the office if it happens again.
+3. In the office, sign in as an Admin and open **Admin**.
+4. Find **Recent background errors** and click **Refresh**. This is the panel
+   called "Recent failures" in earlier handover discussions.
+5. Look for an entry marked `browser`. If a task filter is shown, choose
+   `browser` or **All tasks**. Use **Load 20 more** for older entries.
+6. Give support the entry and the steps taken before the crash.
 
-## Day one, for the new admin
+The report records the screen, error category, app version, and whether
+the whole app or one screen caught the error. It does not send raw error
+text, screen contents, or screenshots. Reporting needs a signed-in session
+and a working connection. Reports are limited to prevent flooding the log.
+A missing report does not prove nothing crashed.
 
-1. **Admin screen** (drawer → Admin): Resend key, then the two sending
-   addresses once the domain verifies; the app's public address; KLIPY
-   key if the crew wants GIFs; the **Invoices** section — terms, GST
-   number and remit-to block — so the first invoice prints complete. Send
-   the test email.
-2. **Supabase dashboard**, five minutes: Site URL, leaked-password
-   protection.
-3. **Users & access**: create the crew's accounts — role sets the tabs,
-   tabs can be tuned per person afterwards. Tick Subcontractor for anyone
-   who invoices rather than draws payroll.
-4. **Rate admin**: replace the house card's placeholder prices with real
-   ones, per client add their card (or let it follow the house card, or
-   copy another client's card as a starting point), and **Publish
-   schedule** once per card — after that, edits go live as they save.
-   Tickets snapshot their rates when raised, so publishing never reprices
-   anything already out. Set the **GST rate** on any client that is exempt
-   (it is 5 unless changed) — the invoice, the approval email and the
-   receipt all charge the client's own rate.
-5. **Contacts**: the real clients, contractors, and the people at each —
-   the primary contact is what jobs, report emails and approvals pre-fill.
-6. **Automatic backup**, once the app address is set: register one drive
-   app, connect it, set the schedule, and press Back up now — see
-   "Connecting a backup drive" above. It is the only step here that needs an
-   account outside Supabase and Cloudflare, and the only one that protects
-   everything the other five set up.
+Reporting is deployed. A deliberate signed-in screen crash followed through
+to this panel has **not yet been checked end to end**.
 
-## When something looks wrong
+### Email did not arrive
 
-- **"What version is everyone on?"** — bottom of the drawer, on every
-  device: version, build, date. Updates announce themselves with a
-  banner (Restart now / Postpone) within half an hour of a deploy.
-- **"N queued" in the top bar** — work saved on a device that hasn't
-  reached the database yet; it syncs itself when signal returns. **"N
-  won't sync"** is different: tap it, read the reason, fix and retry.
-- **An email didn't arrive** — Resend's dashboard → Emails shows every
-  attempt and why it failed. The app-side reasons are on the **Admin
-  screen**, under **Recent background errors**: the newest twenty failures
-  from the functions that send mail, render PDFs and remove accounts, with
-  **Refresh** beside them and **Clear** to empty the log once they have been
-  dealt with.
-- **An approval link opens as a plain text-looking page** — the Admin
-  screen's App address is blank or wrong.
-- **A ticket went to the client by mistake, or with the wrong figures** —
-  **Cancel approval** on its row (Job detail, the field-invoice viewer or
-  the tracker) makes the client's link stop working and the ticket a draft
-  again; **Cancel and edit** does that and opens it. A ticket the client
-  has already signed cannot be pulled back this way.
-- **A technician needs to see how the last person billed a job** — open
-  the job, tap the other technician's ticket or its **View** button, and the
-  field invoice opens to read. Only the technician who raised a ticket, or
-  an Admin, can edit it; a Helper sees the list without prices, by design.
-- **A client is GST exempt, or charged the wrong rate** — Rate admin, the
-  client's card, **GST rate**. Admin only; it changes every ticket priced
-  from then on and nothing already sent.
-- **"How old is the unsigned money?"** — the tracker's aging tiles and
-  **By client** view. The two export buttons beside them are for the
-  accountant: one row per ticket, GST and invoice number included.
-- **A technician says their ticket changed under them** — two devices
-  saved the same draft and the later save won, whole. If the later one was
-  a queued save replaying after signal came back, that device was told at
-  the time and shows a banner on the draft until it is dismissed. Reopen
-  the ticket and check the welds, charges and crew.
-- **Somebody wants the app to do something it doesn't** — the drawer's
-  **Feature request** button mails the owner with the sender's name and
-  role on top. The **?** in the top bar explains the open screen.
-- **"What happened overnight?"** — an Admin sees a **Needs attention**
-  strip above the board when something needs doing, and gets the same
-  by email each morning (admin-digest); silence means nothing is wrong.
-- **Chat push isn't arriving on one device** — notifications are allowed
-  per device from Team chat; on shared tablets the next tech's sign-in
-  claims the device's subscription automatically.
-- **Chat history fades** — by design: unpinned messages expire after 30
-  days, swept nightly.
-- **"The drive needs reconnecting"** on the Admin screen — the backup
-  provider has withdrawn the app's access or the client secret has been
-  rotated. Nothing backs up until it is reconnected; see "When a run fails"
-  above.
-- **Somebody who left is back** — an account with tickets, JHAs or jobs on
-  file is locked rather than deleted when it is removed, so the records keep
-  their name. Users & access shows "Locked out" on that account, and
-  **Unlock account** on the same card is the way back: they sign in again
-  with the password they had, at the role they left at, with that role's
-  sections. If they have forgotten the password, **Email a set-password
-  link** once the account is unlocked. Neither one needs the Supabase
-  dashboard.
-- **Somebody deleted a job that should not have gone** — Admin → Automatic
-  backup → Show backups → **Restore jobs** on the last backup that still
-  had it. It puts back only what is missing and leaves everything else
-  exactly as it is.
-- **"It reloaded everything the first time I signed in"** — possible once
-  per device after this release, and only on some of them. The offline
-  cache now records which account it belongs to, and no existing device
-  has that on file yet. On that first sign-in the app looks at who the
-  device last had signed in: if it is the same person, the device is
-  simply marked as theirs and everything on it — including a half-entered
-  ticket or assessment — is kept. If it last belonged to somebody else, or
-  it doesn't remember anyone, it is emptied at the door and fetches the
-  jobs, rates and contacts again, so a tablet that gets passed around
-  should have anything in progress finished and saved before the update
-  lands. A device that does reload needs signal that one time; afterwards
-  it behaves as before, and only a *different* person signing in clears
-  it. Going out of range, or the session timing out overnight, never
-  empties a device — sign back in and the morning's work is still there.
+1. Check the recipient address and junk folder.
+2. Open **Admin**, then **Recent background errors**. Click **Refresh**.
+3. Read any entry for the failed send.
+4. Open the business's Resend dashboard. Check **Emails** for the attempt.
+5. Correct the reported problem, then retry the intended send.
+
+**Clear** only removes log entries. It does not fix the cause or resend mail.
+
+### Work is waiting to upload
+
+1. **N queued** in the top bar means work is saved on this device and waiting
+   to reach the database. Restore the connection and give it time to send.
+2. If it says **N won't sync**, click it, read the reason, fix it, and retry.
+3. Finish saving before handing a shared device to another person. A
+   different person's sign-in clears the previous person's local app data.
+
+Losing signal or having a session expire does not itself empty the device.
+Sign back in as the same person to continue. Older devices may need a
+one-time reload when the app cannot identify who owned their old local data;
+finish and sync work before changing accounts or updating a shared device.
+
+### An approval was sent by mistake
+
+1. Open the ticket from the job or **Billing tracker**.
+2. If it is unsigned, click **Cancel approval**. This stops the client's
+   link working and returns the ticket to a draft.
+3. Use **Cancel and edit** if you also want to open it for changes.
+4. Check figures and recipient before sending again.
+
+A signed ticket cannot be pulled back this way. If an approval link displays
+page code, check **App address** and ask support to check the Worker route.
+
+### A ticket's figures changed or its tax is wrong
+
+1. Open the ticket. Check its lines, charges, and crew details.
+2. Ask an Admin to check the client's card in **Rate admin**.
+3. Remember that rate-card edits do not replace saved ticket prices.
+4. For tax, ask support whether the ticket has a saved GST rate. A client
+   rate change does not replace a saved ticket tax rate.
+
+When two devices save the same draft, the later save wins. An offline save
+that later replaces another edit can show a warning on the device that
+sent it. Reopen and check the whole ticket before sending it.
+
+### Someone needs an account unlocked
+
+1. An Admin opens **Users & access**.
+2. Find the person's account marked **Locked out**.
+3. Click **Unlock account**. Check their role and permissions.
+4. Have them sign in with their existing password.
+5. If they forgot it, use **Email a set-password link** after unlocking.
+
+Accounts linked to business records are locked instead of erased so old
+records still show who did the work.
+
+### Other quick answers
+
+| Task or question | What to do |
+|---|---|
+| Check someone's version | Read the version, build, and date at the bottom of the side menu. Use **Restart now** when the update banner appears. |
+| Read another technician's ticket | Open the job and click its ticket or **View**. Helpers do not see prices. Only its technician or an Admin can edit it. |
+| Find unsigned money | Open **Billing tracker**. Check the aging tiles and **By client**. Use its exports for the accountant. |
+| Find work needing attention | Check **Needs attention** above the board and the Admin morning email. No email alone does not prove all is well; email can fail. |
+| Enable chat notifications | Open Team chat and allow notifications on each device. |
+| Find old chat messages | Unpinned messages expire after 30 days and are removed nightly. |
+| Suggest a feature | Use **Feature request** in the side menu. It emails the owner. |
+| Understand the current screen | Click **?** in the top bar. |
+
+## What runs the app
+
+| Part | What it does | Where it lives |
+|---|---|---|
+| App | The screens the crew and office use | Code in `vite-app/` |
+| Cloudflare Worker | Delivers the app, approval pages, and backup sign-in returns | `worker/index.js` and `wrangler.jsonc` |
+| Supabase | Stores records and files; handles sign-in | Current project `eielmvxzdwwprmmfamlq` |
+| Server functions | Carry out email, backups, crash reporting, Ask, and other tasks | `supabase/functions/` |
+| Resend | Sends email | Business account; settings in **Admin** |
+| KLIPY | Finds chat GIFs; optional | Key in **Admin** |
+| Backup drive | Stores copies for recovery | Business's Google Drive, OneDrive, or Dropbox |
+| GitHub | Holds code and runs release checks | `blacklabndt/Vagabonde-Field-Ops-Beta2` |
+
+## Transfer ownership
+
+The business owner and developer should do this together. Choose whether
+to keep the existing database (Path A) or build a new one (Path B).
+
+### Path A: keep the existing database
+
+1. Confirm the business can access its GitHub, Supabase, Cloudflare, email,
+   and backup accounts. Record who controls billing and account recovery.
+2. Make a backup and check it completed.
+3. Have the new owner create a Supabase organization. Give the person
+   transferring the project the required access to that organization.
+4. In the existing project's **General settings**, use **Transfer project**.
+   Check the destination and plan. Plan changes can affect features or
+   briefly interrupt service. Follow
+   [Supabase's transfer checklist](https://supabase.com/docs/guides/platform/project-transfer).
+5. Have the developer deploy the Worker in the business's Cloudflare
+   account. Update GitHub's deployment credentials and account setting too;
+   the current workflow explicitly names the original Cloudflare account.
+6. Decide the final app address before the crew installs it.
+7. If it changes, update **Admin / App address**, Supabase's **Site URL** and
+   allowed redirects, and the backup provider's return address. Reconnect
+   the backup drive.
+8. Test sign-in, password reset, a test email, an approval link to a test
+   recipient, and a backup from the final address.
+9. Have the crew install from that address and allow notifications.
+10. Decide whether test records need removing. A transfer does not require
+    erasing data. Use the developer cleanup steps if needed.
+
+**Finished when:** the business controls the accounts and the app works
+from the final address.
+
+### Choose the web address
+
+1. Decide whether to use a `workers.dev` address or a business address
+   such as `app.vagabonde.ca`.
+2. Have the developer check the current DNS arrangement, configure the
+   domain in Cloudflare, and verify it opens the right app.
+3. Complete Path A's address changes and checks.
+4. Give the final address to the crew.
+
+Installed apps and notification permissions belong to an address. A later
+change means reinstalling and allowing notifications again. Keep the old
+address available for existing approval links until the developer has
+checked how those links will continue to work.
+
+## Developer instructions
+
+These tasks change hosting, database structure, or stored records. The
+office can use the earlier sections without running these commands.
+
+Run terminal commands from the repository root, the folder containing this
+file. Run each separately and check its result before continuing.
+The [setup document](Things%20to%20do%20to%20get%20set%20up.md) covers initial
+service setup. Use [README: Deploying](README.md#deploying) for releases;
+older setup examples are not a complete list of today's functions.
+
+### Path B: fresh install
+
+This needs developer preparation. The repository contains the original
+project's addresses; a new `.env` file alone does not redirect everything.
+
+1. Create a new, empty Supabase project. Record its reference, URL, and
+   public key. Label it clearly so it cannot be confused with live.
+2. Inspect `supabase/handover/`. Read headers: `draft-*` may mean pending
+   work or a historical copy; `probes-*` are checks, not migrations.
+   Compare these with migrations and release notes.
+3. Prepare reviewed installation SQL for the new project. Preserve the
+   original project's applied migration files. The baseline
+   `20260817040000_beta1_baseline.sql` is for an empty project only.
+   Never apply it to the existing live database.
+4. Before running the installation SQL, replace the old URLs and public
+   keys in its scheduled jobs and chat push function. Otherwise timers
+   start calling the old project as soon as the database is created.
+   Check all four jobs: `chat-retention-nightly`, `backup-tick`,
+   `admin-digest-daily`, and `scheduled-sends-tick`. Also check the
+   chat-message trigger calling `chat-push`.
+5. If unmodified migrations already ran on the new project, immediately
+   stop its schedules with the SQL below. Correct its chat push function
+   before inserting chat messages. Run this only in the **new** project:
+
+   ```sql
+   select cron.unschedule(jobid) from cron.job;
+   ```
+
+6. Apply the reviewed schema to the new project. Once its functions are
+   ready, recreate its four schedules using its own URLs and credentials.
+   Inspect the resulting schedules and chat push function.
+7. Copy `vite-app/.env.example` to `vite-app/.env`. Set
+   `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for the new project.
+8. Update `FUNCTIONS_ORIGIN` in `worker/index.js` to its function address.
+   This controls approval pages and backup sign-in returns.
+9. Generate a push key pair with `npx web-push generate-vapid-keys`.
+   Put the public key in `vite-app/src/config.js`. Set matching
+   `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT`
+   function secrets in the new project. Keep private keys out of Git.
+10. Configure the remaining function secrets and authentication settings.
+    Review `supabase/config.toml`, authentication hooks, and the project's
+    internal shared secret. Deploy every actual function directory,
+    including `report-error`; `_shared` is library code, not a function.
+11. Create the first Admin and verify its profile and permissions.
+12. Build the app for the new project. Prepare a separately named Worker
+    in the intended account. Configure its release workflow for the new
+    account and project too; a local `.env` file is not automatically
+    available in GitHub Actions. Do not deploy until the next check passes.
+13. Search `vite-app/dist/` for `eielmvxzdwwprmmfamlq` and investigate
+    any match. Missing build settings silently fall back to the old live
+    project. Rebuild after correcting them. Once this check passes, deploy
+    the new app and Worker.
+14. Complete **Day one**. Test sign-in, permissions, password reset, email,
+    approval links, chat push, backup connections, and scheduled tasks.
+    Confirm the records and requests belong to the new project.
+15. If restoring old tickets, set the invoice sequence below before any
+    new invoices are created.
+
+**Finished when:** the deployment works independently and no app request,
+Worker route, or scheduled task still points at the original project.
+
+### Remove test records or empty the app
+
+Do not assume all current records are test data. The owner must decide what
+to keep. These are one-off deletion scripts, not migrations.
+
+1. Make a backup and verify it completed.
+2. Confirm the project and deletion scope with the owner.
+3. Choose the script:
+
+   | Goal | Script |
+   |---|---|
+   | Remove generated test records; keep real work | `supabase/handover/wipe-seed-only.sql` |
+   | Empty business records and remove accounts except the original owner | `supabase/handover/wipe-seed-data.sql` |
+
+4. Read the full header and SQL. Seed-only cleanup uses markers such as
+   `S-1` jobs and `@seed.vagabonde.ca` accounts. Review its organization
+   preview before running deletion statements.
+5. For a full wipe, check the preserved owner address
+   `blacklabndt@gmail.com`. The house rate card and database structure
+   survive. Review the optional settings-clear block separately.
+   The required confirmation is `set app.confirm_total_wipe = 'yes';`
+   in the same SQL session as the wipe.
+6. Run the agreed script in the confirmed project's SQL editor.
+7. After a full wipe, follow its storage cleanup instructions. Removing
+   file records does not remove stored file bytes. Do not empty buckets
+   after seed-only cleanup that must retain real files.
+8. Check the surviving account and records. Replace the seed test accounts
+   if automated browser tests must continue; the tests use seed technicians.
+
+**Finished when:** the agreed records are gone, intended records remain,
+and the owner can still sign in.
+
+### Set the next invoice number
+
+An Admin assigns an invoice number by clicking **Mark invoiced** on an
+approved ticket in **Billing tracker**. The default series starts at 1000.
+Returning a ticket to Approved keeps its number.
+
+Use this when continuing an existing numbering series or restoring into
+a fresh project. Pause invoicing while doing it.
+
+1. In the correct project's SQL editor, check the highest ticket number:
+
+   ```sql
+   select max(invoice_number) from public.tickets;
+   ```
+
+2. Check the accounting records for higher numbers issued outside the app.
+   Check the current sequence too. Never move an existing series backwards.
+3. Choose the next unused number above those values. For example, after
+   4000, choose 4001.
+4. Replace the example `4001` with the agreed number and run:
+
+   ```sql
+   alter sequence public.invoice_number_seq restart with 4001;
+   ```
+
+5. Record the change. Check the next legitimate invoice gets the expected
+   number. Do not issue a real invoice just for a test.
+
+A backup carries ticket numbers but not the sequence's position.
+
+### Rehearse a full restore
+
+Use a separate test project, never live. Full restore empties the
+destination's business records before putting the backup back.
+
+1. Make a completed backup of the source app.
+2. Prepare a separate project using Path B, including correcting timers
+   and chat push. Keep automated sends disabled during the rehearsal.
+3. Deploy a separate Worker pointing only to that project.
+4. Add its backup return address to the drive registration. Set the test
+   app's **App address** and connect the drive.
+5. Disable real email sending in the test project, including fallback
+   Resend secrets. Restored active accounts may otherwise receive password
+   emails. Use a controlled mail setup if testing those emails.
+6. Open **Show backups**. Choose **Restore everything** on the agreed
+   backup. Type the folder name when asked.
+7. Wait for completion and read the notes. The stages include taking a
+   safety copy, emptying the destination, and restoring accounts, records,
+   files, and activity totals.
+8. Compare record and file counts, PDFs, job details, ticket totals, dates,
+   account access, and timesheets with the source. Set the invoice sequence
+   before testing new invoicing.
+9. Test **Restore jobs** twice for the same missing jobs. Check the second
+   run does not duplicate them.
+10. Record the results. Remove the test project, Worker, and extra return
+    address when finished.
+
+The `before-restore` safety copy is not removed by normal retention.
+Error logs and the audit trail are not restored. Re-created accounts need
+a set-password process; old passwords are not recovered. Read account
+failures in the final notes.
+
+**Past verification:** on 5 September 2026, a backup of 23 tables, 203,838
+rows, and 26 files was restored into empty and populated test projects.
+The recorded checks passed, including repeated selected-job restores.
+That result does not verify later changes. Repeat after restore-code changes.
+
+### Release an update
+
+1. Review the changes and run the required tests and build.
+2. Commit the reviewed changes.
+3. When release is authorized, push to `room/37dbe6165f-beta-2-review`.
+4. Open the repository's **Actions** page. Open the **CI** run for that
+   commit and wait for tests, build, and deployment to succeed.
+5. Check the live app serves the intended build.
+
+A push to that branch automatically deploys the app and Worker after checks
+pass, including a documentation-only push. To rerun manually, choose
+**Actions**, **CI**, **Run workflow**, and that branch.
+
+Supabase functions and database changes are released manually. Pushing
+does not deploy them. Follow [README: Deploying](README.md#deploying) and
+[CLAUDE.md](CLAUDE.md). Never deploy the old Beta 1 repository; it shares
+the live services and would replace this app.
+
+## Release status
+
+Recorded status as of 12 September 2026:
+
+| Item | Status |
+|---|---|
+| Browser crash reporting | Released: `20260912160845_browser_crashes.sql`, live probes, `report-error`, and app/Worker `b3c15b8`. |
+| Signed-in screen crash appearing in the office panel | Not checked end to end. Database probes and unit tests do not complete this check. |
+| Ask spending ceiling | Filed as `20260912034222_the_ceiling_is_charged_before_the_call.sql`, with follow-up fixes. Under the apply-live-first convention it is shipped; this doc review did not independently query live. |
+| Saved GST rate per ticket | Applied as `20260911204844_a_ticket_remembers_its_gst_rate.sql`. The old handover draft was deleted; no further SQL needs applying for this change. |
+
+For the crash check, use an agreed test account and controlled screen-render
+failure. Confirm a `browser` entry in **Admin / Recent background errors**,
+remove the test fault, and record the result. Throwing an error in the
+browser console alone does not prove the screen error handler sent a report.
 
 ## Support access
 
-Keeping the developer's account (blacklabndt@gmail.com) as an Admin for
-the first months means logs, settings and fixes stay one sign-in away.
-Remove it any time from Users & access — the RLS rules make every screen
-answer to roles, not to hard-coded names.
+1. Agree who supports the app and how the office contacts them.
+2. Decide whether to keep `blacklabndt@gmail.com` as an Admin during handover.
+3. Remove that access through **Users & access** when no longer needed.
+4. Check the business still has a working Admin and controls its hosting,
+   code, email, and backup accounts.
+
+App access follows roles and permissions. The developer's email address
+does not grant special access by itself.
