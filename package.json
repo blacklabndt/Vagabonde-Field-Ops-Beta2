@@ -7,6 +7,8 @@
     "build": "npm --prefix vite-app ci && npm --prefix vite-app run build",
     "lint": "npm --prefix vite-app run lint",
     "typecheck": "npm --prefix vite-app run typecheck",
-    "test": "npm --prefix vite-app test"
+    "test": "npm --prefix vite-app test",
+    "//deploy": "Local deploy safeguard, not CI: a red test stops the deploy on the one path that actually ships. Deploys are run by hand from this machine (wrangler CLI), so this is the gate. Direct `npx wrangler deploy` still bypasses it, and Supabase Edge Functions deploy separately via the supabase CLI.",
+    "deploy": "npm test && npm run build && npx wrangler deploy"
   }
 }
