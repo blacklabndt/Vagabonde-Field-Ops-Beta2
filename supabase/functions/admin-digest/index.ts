@@ -29,6 +29,12 @@
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendMail, appSettings, corsHeaders, wrapEmail, esc } from "../_shared/mail.ts";
 import { secretsMatch } from "../_shared/constantTime.ts";
+import { refuse, publicWords, loggedWords } from "../_shared/publicError.ts";
+// The one sentence anything unmarked comes back as. A refusal of ours says
+// what to do and is shown as written; a message from Postgres, Auth, Resend
+// or a drive names columns, constraints and accounts, so it is logged and not
+// shown. Deny by default: the cost of forgetting is silence.
+const TROUBLE = "The digest could not be sent.";
 
 const SUBJECT = "VagaboNDE Field Ops — needs attention";
 
@@ -208,7 +214,7 @@ Deno.serve(async (req) => {
     if (!to.length) {
       // Worth recording rather than returning quietly: an install with no
       // reachable Admin has nobody to tell, which is itself the problem.
-      throw new Error("There is nothing wrong with the digest, but no active Admin has an email address to send it to.");
+      throw refuse("There is nothing wrong with the digest, but no active Admin has an email address to send it to.");
     }
 
     const html = wrapEmail(`
@@ -247,17 +253,17 @@ ${items.map(i => `
         });
         sent++;
       } catch (e) {
-        refused.push(`${address}: ${(e as Error).message}`);
+        refused.push(`${address}: ${publicWords(e, "the mail provider refused it")}`);
       }
     }
 
-    if (!sent) throw new Error(`The digest reached nobody. ${refused.join(" · ")}`);
+    if (!sent) throw refuse(`The digest reached nobody. ${refused.join(" · ")}`);
     if (refused.length) await logError("admin-digest", `Some Admins did not get the digest. ${refused.join(" · ")}`);
 
     return json({ ok: true, sent, items: items.length, refused: refused.length });
   } catch (e) {
-    await logError("admin-digest", (e as Error).message);
-    return json({ error: (e as Error).message }, 400);
+    await logError("admin-digest", loggedWords(e));
+    return json({ error: publicWords(e, TROUBLE) }, 400);
   }
 });
 

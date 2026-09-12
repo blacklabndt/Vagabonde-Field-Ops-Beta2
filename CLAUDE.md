@@ -350,13 +350,26 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   point: an unmarked error came from PostgREST, Postgres, Resend or
   Anthropic, names columns, constraints and functions, and a Helper's
   session provoking one was mapping the schema an error at a time
-  (seventeen functions did this; the seven staff-reachable ones and Ask
-  are fixed). The failure mode of forgetting is now silence, not
+  (seventeen functions did this; ALL of them are fixed, and
+  `publicError.test.mjs` reads every door back so a new one cannot drift).
+  The Admin-gated and internal-secret ten went the same way rather than
+  being left as the smaller exposure: a rule with an exception is the one
+  that gets forgotten, and an Admin's browser is still a browser. The one
+  door a stranger can reach is backup-oauth's callback — the provider
+  redirects a browser to it with no token — and its no-app-address path
+  rethrew PostgREST's own error to anyone who asked; it now judges the mark
+  like the rest and still writes nothing to the log, because a door anyone
+  can knock on must not be a way to fill function_errors. backup-run and
+  backup-restore keep their RUN sentences unmasked on purpose ("Emptying
+  ticket_lines failed: …"): those land on the run row and the backup panel,
+  which is an Admin's own diagnostic record of a restore, not an answer to a
+  request. The failure mode of forgetting is now silence, not
   disclosure. `detail` is the second argument — the raw reason, logged and
   never shown — so masking loses nothing; a function with no error log at
-  all gains one rather than going quiet (gif-search, feature-request).
-  publicError.ts is the ONE definition for anything that can import; the
-  import-free guard-list modules spell the same three lines themselves and
+  all gains one rather than going quiet (gif-search, feature-request,
+  mail-test). publicError.ts is the ONE definition for anything that can
+  import; the import-free guard-list modules — drive.ts and backupOauth.ts
+  among them — spell the same three lines themselves and
   `askThread.test.mjs` holds them to it. Two sentences stay public on
   purpose: mail.ts's `transient` refusals, because the bulk chase tells
   "slow down" from "that address is wrong" by reading the message and only

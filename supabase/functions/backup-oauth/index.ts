@@ -26,6 +26,17 @@ import { BACKUP_ROOT_NAME } from "../_shared/backupManifest.ts";
 import { nextRunAt } from "../_shared/backupSchedule.ts";
 import { callbackUri, credentialsFrom, nonceRefusal, providerInPath, providerRefusal } from "../_shared/backupOauth.ts";
 import { adminClient, corsHeaders, json, logError, requireAdmin } from "../_shared/backupCommon.ts";
+import { refuse, publicWords, loggedWords } from "../_shared/publicError.ts";
+// The one sentence anything unmarked comes back as. A refusal of ours says
+// what to do and is shown as written; a message from Postgres, Auth, Resend
+// or a drive names columns, constraints and accounts, so it is logged and not
+// shown. Deny by default: the cost of forgetting is silence.
+const TROUBLE = "The drive connection could not be set up. Try again, and tell the office if it keeps happening.";
+
+// What the provider's redirect answers a stranger with. No Admin is
+// necessarily reading it, so it names the one thing an Admin could fix
+// and nothing about this project.
+const ANON_TROUBLE = "The drive could not be connected. An Admin can check the App address on the Admin screen and try connecting again.";
 
 // Everything the two doors read out of the one settings row. Selected by
 // name rather than with * so it is visible here exactly which columns this
@@ -126,9 +137,9 @@ Deno.serve(async (req) => {
       return json({ ok: true });
     }
 
-    if (body.action !== "start") throw new Error("action must be \"start\" or \"disconnect\"");
+    if (body.action !== "start") throw refuse("action must be \"start\" or \"disconnect\"");
     const wanted = String(body.provider ?? "");
-    if (!PROVIDERS.includes(wanted)) throw new Error(`provider must be one of: ${PROVIDERS.join(", ")}`);
+    if (!PROVIDERS.includes(wanted)) throw refuse(`provider must be one of: ${PROVIDERS.join(", ")}`);
 
     const settings = await readSettings(db);
     const { id } = credentialsFrom(settings as Record<string, string | null>, wanted);
@@ -144,8 +155,8 @@ Deno.serve(async (req) => {
 
     return json({ url: authorizeUrl(wanted, id, uri, state) });
   } catch (e) {
-    await logError("backup-oauth", (e as Error).message);
-    return json({ error: (e as Error).message }, 400);
+    await logError("backup-oauth", loggedWords(e));
+    return json({ error: publicWords(e, TROUBLE) }, 400);
   }
 });
 
@@ -162,8 +173,15 @@ async function callback(provider: string, url: URL): Promise<Response> {
   } catch (e) {
     // With no app address configured there is nowhere to send them; say so
     // in the one place that can still be read. The Worker re-serves this
-    // body as its own error page. Not logged: this is reachable by anyone.
-    return new Response((e as Error).message, {
+    // body as its own error page. Not logged: this is reachable by anyone,
+    // and a door anyone can knock on must not be a way to fill the log.
+    //
+    // Which is also why the words are judged. This is the ONE anonymous
+    // path in the backup functions, and readSettings rethrows PostgREST's
+    // own error, so a database blink used to answer a stranger with the
+    // column list of app_settings. callbackUri's refusal is ours and is
+    // shown; anything else is not.
+    return new Response(publicWords(e, ANON_TROUBLE), {
       status: 400, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" }
     });
   }

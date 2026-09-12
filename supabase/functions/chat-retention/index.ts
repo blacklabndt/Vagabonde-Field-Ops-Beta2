@@ -20,6 +20,12 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { secretsMatch } from "../_shared/constantTime.ts";
+import { publicWords, loggedWords } from "../_shared/publicError.ts";
+// The one sentence anything unmarked comes back as. A refusal of ours says
+// what to do and is shown as written; a message from Postgres, Auth, Resend
+// or a drive names columns, constraints and accounts, so it is logged and not
+// shown. Deny by default: the cost of forgetting is silence.
+const TROUBLE = "The nightly chat clean-up failed.";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -117,8 +123,8 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
-    await logError("chat-retention", (e as Error).message);
-    return new Response(JSON.stringify({ error: (e as Error).message }), {
+    await logError("chat-retention", loggedWords(e));
+    return new Response(JSON.stringify({ error: publicWords(e, TROUBLE) }), {
       status: 400,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

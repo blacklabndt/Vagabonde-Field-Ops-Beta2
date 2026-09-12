@@ -18,6 +18,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendPush, type PushSub } from "../_shared/webPush.ts";
 import { secretsMatch } from "../_shared/constantTime.ts";
+import { refuse, publicWords, loggedWords } from "../_shared/publicError.ts";
+// The one sentence anything unmarked comes back as. A refusal of ours says
+// what to do and is shown as written; a message from Postgres, Auth, Resend
+// or a drive names columns, constraints and accounts, so it is logged and not
+// shown. Deny by default: the cost of forgetting is silence.
+const TROUBLE = "The notification could not be sent.";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -49,7 +55,7 @@ Deno.serve(async (req) => {
     }
 
     const { messageId } = await req.json();
-    if (!messageId) throw new Error("messageId is required");
+    if (!messageId) throw refuse("messageId is required");
 
     const { data: msg, error } = await admin
       .from("chat_messages")
@@ -95,8 +101,8 @@ Deno.serve(async (req) => {
     const { sent, pruned } = await sendPush(admin, subs as unknown as PushSub[], { title: `${name} — Team chat`, body, url: "/?goto=chat" });
     return json({ ok: true, sent, pruned });
   } catch (e) {
-    await logError("chat-push", (e as Error).message);
-    return json({ error: (e as Error).message }, 400);
+    await logError("chat-push", loggedWords(e));
+    return json({ error: publicWords(e, TROUBLE) }, 400);
   }
 });
 

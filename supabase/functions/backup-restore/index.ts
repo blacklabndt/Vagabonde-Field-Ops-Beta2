@@ -60,6 +60,13 @@ import {
 import type { RestoreCursor, JobRestoreCursor } from "../_shared/backupRestore.ts";
 import { gunzip } from "../_shared/gzip.ts";
 import { sendSetPasswordLink } from "../_shared/setPassword.ts";
+import { refuse, publicWords, loggedWords } from "../_shared/publicError.ts";
+// The one sentence anything unmarked comes back as. The refusals this
+// function writes itself — a name typed wrong, a backup from a newer
+// version, something already running — say what to do and are shown as
+// written. A message from Postgres or a drive is logged and not shown.
+// Deny by default: the cost of forgetting is silence.
+const TROUBLE = "The restore could not be started. Try again, and tell the office if it keeps happening.";
 
 type Part = { id: string; name: string };
 
@@ -100,21 +107,21 @@ Deno.serve(async (req) => {
     }
     return json({ error: `Unknown action "${action}"` }, 400);
   } catch (e) {
-    await logError("backup-restore", (e as Error).message, { action });
-    return json({ error: (e as Error).message }, 400);
+    await logError("backup-restore", loggedWords(e), { action });
+    return json({ error: publicWords(e, TROUBLE) }, 400);
   }
 });
 
 // ── Before anything is offered ───────────────────────────────────────────
 
 async function preflight(db: SupabaseClient, folderId: string): Promise<Record<string, unknown>> {
-  if (!folderId) throw new Error("folderId is required");
+  if (!folderId) throw refuse("folderId is required");
   const conn = await connectDrive(db);
   // The folder's real name, from the drive. The request carries a copy of
   // it, but a restore's typed-name gate and retention's spare-by-name both
   // need the name the drive holds, not the one the browser was told.
   const folder = (await conn.drive.listFolders(conn.rootFolderId)).find(f => f.id === folderId);
-  if (!folder) throw new Error("That backup is not in the drive any more.");
+  if (!folder) throw refuse("That backup is not in the drive any more.");
   const m = await readManifest(conn.drive, folderId);
   const { data: live } = await db.rpc("backup_schema_version");
   const liveVersion = live ? String(live) : null;
@@ -144,7 +151,7 @@ async function startRestoreAll(
   db: SupabaseClient, body: Record<string, unknown>, adminId: string, secret: string
 ): Promise<Record<string, unknown>> {
   const folderId = String(body.folderId ?? "");
-  if (!folderId) throw new Error("folderId is required");
+  if (!folderId) throw refuse("folderId is required");
 
   // The name is the drive's, read by preflight, never the request's: held
   // against a name the same caller supplied, the typed word checked nothing
@@ -155,10 +162,10 @@ async function startRestoreAll(
   // The typed name, character for character. The browser checks it too, but
   // the browser's copy of a gate is a courtesy and this one is the gate.
   if (!typedNameMatches(body.confirm, folderName)) {
-    throw new Error(`To restore, type the backup's name exactly: ${folderName}`);
+    throw refuse(`To restore, type the backup's name exactly: ${folderName}`);
   }
   if (check.tooNew) {
-    throw new Error(tooNewRefusal(
+    throw refuse(tooNewRefusal(
       check.schema_version as string | null, check.live_schema_version as string | null
     ));
   }
@@ -166,7 +173,7 @@ async function startRestoreAll(
   const { data: open, error: openErr } = await db.from("backup_runs")
     .select("id, kind").in("status", ["queued", "running"]).limit(1).maybeSingle();
   if (openErr) throw openErr;
-  if (open) throw new Error("Something is already running — wait for it to finish before starting a restore.");
+  if (open) throw refuse("Something is already running — wait for it to finish before starting a restore.");
 
   const now = new Date().toISOString();
   const cursor = newRestoreCursor({ folderId, folderName, keepProfileId: adminId });
@@ -201,12 +208,12 @@ async function startRestoreJobs(
   const jobIds = Array.isArray(body.jobIds)
     ? [...new Set((body.jobIds as unknown[]).map(String).filter(Boolean))]
     : [];
-  if (!folderId) throw new Error("folderId is required");
-  if (!jobIds.length) throw new Error("Pick at least one job to restore.");
+  if (!folderId) throw refuse("folderId is required");
+  if (!jobIds.length) throw refuse("Pick at least one job to restore.");
 
   const check = await preflight(db, folderId);
   if (check.tooNew) {
-    throw new Error(tooNewRefusal(
+    throw refuse(tooNewRefusal(
       check.schema_version as string | null, check.live_schema_version as string | null
     ));
   }
@@ -214,7 +221,7 @@ async function startRestoreJobs(
   const { data: open, error: openErr } = await db.from("backup_runs")
     .select("id, kind").in("status", ["queued", "running"]).limit(1).maybeSingle();
   if (openErr) throw openErr;
-  if (open) throw new Error("Something is already running — wait for it to finish before restoring anything.");
+  if (open) throw refuse("Something is already running — wait for it to finish before restoring anything.");
 
   const now = new Date().toISOString();
   // The drive's name for the folder, from preflight — see startRestoreAll.
@@ -239,7 +246,7 @@ const RUN_COLUMNS = "id, kind, status, phase, cursor, counts, folder_id, folder_
 async function advance(
   db: SupabaseClient, runId: string, secret: string, chained: boolean
 ): Promise<Record<string, unknown>> {
-  if (!runId) throw new Error("runId is required");
+  if (!runId) throw refuse("runId is required");
   const { data: run, error } = await db.from("backup_runs")
     .select(RUN_COLUMNS).eq("id", runId).maybeSingle();
   if (error) throw error;
@@ -290,7 +297,7 @@ async function advance(
       if (parts) return parts;
       const d = await opened();
       const tables = await subFolder(d, c.folderId, TABLES_FOLDER);
-      if (!tables) throw new Error("That backup has no tables folder — there is nothing in it to restore.");
+      if (!tables) throw refuse("That backup has no tables folder — there is nothing in it to restore.");
       const listed = (await d.listFiles(tables)).map(f => ({ id: f.id, name: f.name }));
       parts = listed;
       return listed;

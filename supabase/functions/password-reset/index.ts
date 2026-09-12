@@ -11,6 +11,13 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendSetPasswordLink } from "../_shared/setPassword.ts";
 import { requireActiveAdmin } from "../_shared/adminGate.ts";
+import { refuse, publicWords, loggedWords } from "../_shared/publicError.ts";
+
+// The one sentence anything unmarked comes back as. Our own refusals above
+// say what to do and are shown as they are written; a message from Postgres,
+// Auth or Resend names columns, constraints and accounts, so it is logged and
+// not shown. Deny by default: the cost of forgetting is silence.
+const TROUBLE = "The set-password link could not be sent. Try again, and tell the office if it keeps happening.";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -38,24 +45,24 @@ Deno.serve(async (req) => {
     const { userId } = await req.json();
     // A guard against a client bug, so it should never fire — but whoever
     // reads it pressed a button, and a variable name tells them nothing.
-    if (!userId) throw new Error("This request didn't say which account to send the link to. Reload the app and try again.");
+    if (!userId) throw refuse("This request didn't say which account to send the link to. Reload the app and try again.");
 
     const admin = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
     const { data: target, error: tErr } = await admin.auth.admin.getUserById(userId);
-    if (tErr || !target?.user?.email) throw new Error("That account has no email address on file.");
+    if (tErr || !target?.user?.email) throw refuse("That account has no email address on file.");
     const { data: profile } = await admin.from("profiles").select("name, deactivated_at").eq("id", userId).maybeSingle();
     if (profile?.deactivated_at) {
-      throw new Error("That account is locked out — it can't sign in until it is unbanned in the Supabase dashboard.");
+      throw refuse("That account is locked out — it can't sign in until it is unbanned in the Supabase dashboard.");
     }
 
     await sendSetPasswordLink(admin, target.user.email, profile?.name ?? "", "reset");
     return json({ ok: true, sentTo: target.user.email });
   } catch (e) {
-    await logError("password-reset", (e as Error).message);
-    return json({ error: (e as Error).message }, 400);
+    await logError("password-reset", loggedWords(e));
+    return json({ error: publicWords(e, TROUBLE) }, 400);
   }
 });
 

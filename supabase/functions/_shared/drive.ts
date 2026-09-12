@@ -44,6 +44,17 @@ export interface DriveClient {
 
 // A refusal the caller should not retry: the drive answered, and the answer
 // is no. backup-run's withRetry reads the flag and stops.
+// A refusal written to be READ by whoever asked. A function's top-level catch
+// shows a `plain` error's own words and replaces anything else with one fixed
+// sentence, so an unmarked throw — a provider's body, a database message —
+// cannot carry an account or a schema out to the browser. Defined here rather
+// than imported because this file holds no imports of its own.
+function refuse(words: string): Error {
+  const e = new Error(words);
+  (e as Error & { plain?: boolean }).plain = true;
+  return e;
+}
+
 function plainRefusal(message: string): DriveError {
   const e = new Error(message) as DriveError;
   e.status = 0;
@@ -89,7 +100,7 @@ const TOKEN: Record<string, string> = {
 
 function assertProvider(provider: string): void {
   if (!PROVIDERS.includes(provider)) {
-    throw new Error(`"${provider}" is not a drive provider this app knows — it is one of ${PROVIDERS.join(", ")}.`);
+    throw refuse(`"${provider}" is not a drive provider this app knows — it is one of ${PROVIDERS.join(", ")}.`);
   }
 }
 
@@ -137,7 +148,7 @@ export async function exchangeCode(
   }, `${provider} token exchange`);
   const refreshToken = String(body.refresh_token ?? "");
   if (!refreshToken) {
-    throw new Error(
+    throw refuse(
       `${provider} sent an access token but no refresh token, so the connection would stop working within the hour. ` +
       `Remove the app's access in the provider's account settings and connect again.`
     );
@@ -161,7 +172,7 @@ export async function refreshAccessToken(
     ...(provider === "microsoft" ? { scope: SCOPES.microsoft } : {})
   }, `${provider} token refresh`);
   const token = String(body.access_token ?? "");
-  if (!token) throw new Error(`${provider} refused to refresh the connection. Reconnect the drive on the Admin screen.`);
+  if (!token) throw refuse(`${provider} refused to refresh the connection. Reconnect the drive on the Admin screen.`);
   return token;
 }
 
@@ -291,7 +302,7 @@ export class GoogleDrive implements DriveClient {
       body: JSON.stringify({ name, parents: [folderId] })
     }), "Google Drive upload session");
     const session = start.headers.get("Location");
-    if (!session) throw new Error("Google Drive opened no upload session.");
+    if (!session) throw refuse("Google Drive opened no upload session.");
 
     let at = 0;
     let id = "";
@@ -440,7 +451,7 @@ export class OneDrive implements DriveClient {
       await res.body?.cancel();
       const found = await this.childByName(parentId, name);
       if (found && found.folder) return found.id;
-      throw new Error(`OneDrive already holds a file called "${name}" where this backup needs a folder.`);
+      throw refuse(`OneDrive already holds a file called "${name}" where this backup needs a folder.`);
     }
     return String((await (await ok(res, "OneDrive folder")).json() as { id: string }).id);
   }
@@ -462,7 +473,7 @@ export class OneDrive implements DriveClient {
       body: JSON.stringify({ item: { "@microsoft.graph.conflictBehavior": "replace" } })
     }), "OneDrive upload session");
     const uploadUrl = String((await session.json() as { uploadUrl?: string }).uploadUrl ?? "");
-    if (!uploadUrl) throw new Error("OneDrive opened no upload session.");
+    if (!uploadUrl) throw refuse("OneDrive opened no upload session.");
 
     let at = 0;
     let id = "";
@@ -636,7 +647,7 @@ export class Dropbox implements DriveClient {
     }
     if (meta) {
       if (meta[".tag"] === "folder") return String((meta as { path_display?: string }).path_display ?? path);
-      throw new Error(`Dropbox already holds a file at "${path}" where this backup needs a folder.`);
+      throw refuse(`Dropbox already holds a file at "${path}" where this backup needs a folder.`);
     }
 
     try {

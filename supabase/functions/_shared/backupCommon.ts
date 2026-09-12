@@ -17,6 +17,7 @@ import type { FileRecord } from "./backupRun.ts";
 import { gunzip } from "./gzip.ts";
 import { secretsMatch } from "./constantTime.ts";
 import { requireActiveAdmin } from "./adminGate.ts";
+import { refuse } from "./publicError.ts";
 
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -177,7 +178,7 @@ export async function connectDrive(db: SupabaseClient): Promise<Connection> {
   const provider = String(row.backup_provider ?? "");
   const refresh = String(row.backup_refresh_token ?? "");
   if (!provider || !refresh) {
-    throw new Error("No drive is connected. Connect one on the Admin screen before a backup can run.");
+    throw refuse("No drive is connected. Connect one on the Admin screen before a backup can run.");
   }
   const clientId = String(row[`backup_client_id_${provider}`] ?? "");
   const clientSecret = String(row[`backup_client_secret_${provider}`] ?? "");
@@ -188,7 +189,10 @@ export async function connectDrive(db: SupabaseClient): Promise<Connection> {
   } catch (e) {
     const why = (e as Error).message;
     await db.from("app_settings").update({ backup_connection_error: why }).eq("id", true);
-    throw new Error(`The drive connection needs renewing: ${why}`);
+    // `why` can be up to 400 characters of the provider's own answer, so it
+    // travels as detail — logged, and already on backup_connection_error for
+    // the panel — and never as the sentence the browser is shown.
+    throw refuse("The drive connection needs renewing. Reconnect the drive on the Admin screen.", why);
   }
   // A refresh that worked clears a stale complaint — when there is one.
   // This runs at the top of every slice, and an unconditional write here
@@ -269,9 +273,9 @@ export async function readFileIndex(
 export async function readManifest(
   drive: DriveClient, folderId: string
 ): Promise<Record<string, unknown>> {
-  if (!folderId) throw new Error("folderId is required");
+  if (!folderId) throw refuse("folderId is required");
   const file = (await drive.listFiles(folderId)).find(f => f.name === MANIFEST_NAME);
-  if (!file) throw new Error("That backup has no manifest — it did not finish, so there is nothing to restore from.");
+  if (!file) throw refuse("That backup has no manifest — it did not finish, so there is nothing to restore from.");
   return JSON.parse(new TextDecoder().decode(await drive.download(file.id))) as Record<string, unknown>;
 }
 

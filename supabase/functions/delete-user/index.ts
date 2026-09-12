@@ -10,6 +10,13 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireActiveAdmin } from "../_shared/adminGate.ts";
+import { refuse, publicWords, loggedWords } from "../_shared/publicError.ts";
+
+// The one sentence anything unmarked comes back as. Our own refusals above
+// say what to do and are shown as they are written; a message from Postgres,
+// Auth or Resend names columns, constraints and accounts, so it is logged and
+// not shown. Deny by default: the cost of forgetting is silence.
+const TROUBLE = "That account could not be removed. Try again, and tell the office if it keeps happening.";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -33,7 +40,7 @@ Deno.serve(async (req) => {
     const { userId } = await req.json();
     // A guard against a client bug, so it should never fire — but whoever
     // reads it pressed a button, and a variable name tells them nothing.
-    if (!userId) throw new Error("This request didn't say which account to remove. Reload the app and try again.");
+    if (!userId) throw refuse("This request didn't say which account to remove. Reload the app and try again.");
 
     if (userId === callerId) {
       return new Response(JSON.stringify({ error: "You can't remove your own account" }), {
@@ -92,8 +99,8 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   } catch (e) {
-    await logError("delete-user", (e as Error).message);
-    return new Response(JSON.stringify({ error: (e as Error).message }), {
+    await logError("delete-user", loggedWords(e));
+    return new Response(JSON.stringify({ error: publicWords(e, TROUBLE) }), {
       status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
   }

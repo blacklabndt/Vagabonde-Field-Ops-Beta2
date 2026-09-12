@@ -54,6 +54,13 @@ import { FILES_INDEX_NAME, VERIFY_KIND, addVerifyNote, carryOverId, chooseBaseFo
 import type { RunCursor } from "../_shared/backupRun.ts";
 import { gzip } from "../_shared/gzip.ts";
 import { nextRunAt } from "../_shared/backupSchedule.ts";
+import { refuse, publicWords, loggedWords } from "../_shared/publicError.ts";
+// The one sentence anything unmarked comes back as. The refusals this
+// function writes itself — a name typed wrong, a backup from a newer
+// version, something already running — say what to do and are shown as
+// written. A message from Postgres or a drive is logged and not shown.
+// Deny by default: the cost of forgetting is silence.
+const TROUBLE = "The backup could not be run. Try again, and tell the office if it keeps happening.";
 
 const APP_VERSION = "0.92-beta 2";
 
@@ -135,10 +142,13 @@ Deno.serve(async (req) => {
     }
     return json({ error: `Unknown action "${action}"` }, 400);
   } catch (e) {
+    // gatewayRefusal has already turned Cloudflare's HTML page into a
+    // sentence of our own, so that one is the answer. Anything else
+    // unmarked came from Postgres or a drive and is logged, not shown.
     const plain = gatewayRefusal((e as Error).message);
-    const message = plain ? `${plain}; the next tick retries in five minutes.` : (e as Error).message;
-    await logError("backup-run", message, { action });
-    return json({ error: message }, 400);
+    const logged = plain ? `${plain}; the next tick retries in five minutes.` : loggedWords(e);
+    await logError("backup-run", logged, { action });
+    return json({ error: plain ? logged : publicWords(e, TROUBLE) }, 400);
   }
 });
 
@@ -356,7 +366,7 @@ async function tendWaitingRestore(db: SupabaseClient, safety: Run, secret: strin
 async function advanceById(
   db: SupabaseClient, runId: string, secret: string, chained: boolean
 ): Promise<Record<string, unknown>> {
-  if (!runId) throw new Error("runId is required");
+  if (!runId) throw refuse("runId is required");
   const { data, error } = await db.from("backup_runs")
     .select(RUN_COLUMNS).eq("id", runId).maybeSingle();
   if (error) throw error;
@@ -1232,7 +1242,10 @@ async function listBackups(db: SupabaseClient): Promise<Record<string, unknown>[
       // A folder with no manifest is a run that never finished. Say so
       // rather than offering it as something to restore from.
       entry.incomplete = true;
-      entry.error = (e as Error).message;
+      // The drive answered with up to 400 characters of its own body; the
+      // panel gets the fact, not the body. Nothing is logged here: one
+      // unfinished folder would write a row every time the list is opened.
+      entry.error = publicWords(e, "Its manifest could not be read.");
     }
     return entry;
   });

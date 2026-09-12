@@ -12,6 +12,13 @@
 
 import { sendMail, appSettings, corsHeaders, wrapEmail, esc, recipients } from "../_shared/mail.ts";
 import { requireActiveAdmin } from "../_shared/adminGate.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { publicWords, loggedWords } from "../_shared/publicError.ts";
+// The one sentence anything unmarked comes back as. A refusal of ours says
+// what to do and is shown as written; a message from Postgres, Auth, Resend
+// or a drive names columns, constraints and accounts, so it is logged and not
+// shown. Deny by default: the cost of forgetting is silence.
+const TROUBLE = "The test send failed. Try again, and tell the office if it keeps happening.";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -56,6 +63,17 @@ Deno.serve(async (req) => {
 
     return json({ ok: true, from: settings.fromReports });
   } catch (e) {
-    return json({ error: (e as Error).message || "The test send failed." }, 400);
+    await logError("mail-test", loggedWords(e));
+    return json({ error: publicWords(e, TROUBLE) }, 400);
   }
 });
+
+// Masking without logging would only move the blindness: the office would
+// lose what the browser stopped being told. A throwaway service-role client,
+// best effort, never masking the real error.
+async function logError(functionName: string, message: string) {
+  try {
+    const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    await admin.from("function_errors").insert({ function_name: functionName, message });
+  } catch { /* logging is best-effort */ }
+}

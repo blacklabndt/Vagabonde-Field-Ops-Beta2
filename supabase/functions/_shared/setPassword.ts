@@ -7,6 +7,7 @@
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sendMail, appSettings, wrapEmail, esc } from "./mail.ts";
+import { refuse } from "./publicError.ts";
 
 export async function sendSetPasswordLink(admin: SupabaseClient, email: string, name: string, reason: "invite" | "reset") {
   const settings = await appSettings();
@@ -26,7 +27,7 @@ export async function sendSetPasswordLink(admin: SupabaseClient, email: string, 
   const link: string | undefined = data?.properties?.action_link;
   // Read by the Admin who pressed the button, so it says what happened and
   // what to do rather than naming the service that let them down.
-  if (!link) throw new Error("No set-password link came back, so nothing could be emailed. Try again in a moment.");
+  if (!link) throw refuse("No set-password link came back, so nothing could be emailed. Try again in a moment.");
 
   const first = String(name || "").trim().split(/\s+/)[0] || "";
   const greeting = `Hi${first ? " " + first : ""},`;

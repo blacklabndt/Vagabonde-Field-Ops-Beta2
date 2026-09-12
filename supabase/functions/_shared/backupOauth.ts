@@ -43,7 +43,7 @@ export function callbackUri(configuredBaseUrl: string, provider: string): { uri:
     try { base = new URL(configured).origin; } catch { base = ""; }
   }
   if (!base || base === "null") {
-    throw new Error(
+    throw refuse(
       "The App address isn't set on the Admin screen. Fill it in first — the drive has to be told where to send you back to."
     );
   }
@@ -54,6 +54,17 @@ export function callbackUri(configuredBaseUrl: string, provider: string): { uri:
 // or neither: a client ID with no secret gets as far as the consent screen
 // and then fails at the exchange, which is a long way to walk for a message
 // that could have been given here.
+// A refusal written to be READ by whoever asked. A function's top-level catch
+// shows a `plain` error's own words and replaces anything else with one fixed
+// sentence, so an unmarked throw — a provider's body, a database message —
+// cannot carry an account or a schema out to the browser. Defined here rather
+// than imported because this file holds no imports of its own.
+function refuse(words: string): Error {
+  const e = new Error(words);
+  (e as Error & { plain?: boolean }).plain = true;
+  return e;
+}
+
 export function credentialsFrom(
   row: Record<string, string | null | undefined>, provider: string
 ): { id: string; secret: string } {
@@ -63,7 +74,7 @@ export function credentialsFrom(
   if (!id || !secret) {
     const missing = !id && !secret ? "client ID and client secret"
       : !id ? "client ID" : "client secret";
-    throw new Error(
+    throw refuse(
       `The ${provider} app registration is incomplete — its ${missing} has to be filled in on the Admin screen before you can connect.`
     );
   }

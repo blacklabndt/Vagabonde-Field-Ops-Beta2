@@ -19,6 +19,13 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireActiveAdmin } from "../_shared/adminGate.ts";
+import { refuse, publicWords, loggedWords } from "../_shared/publicError.ts";
+
+// The one sentence anything unmarked comes back as. Our own refusals above
+// say what to do and are shown as they are written; a message from Postgres,
+// Auth or Resend names columns, constraints and accounts, so it is logged and
+// not shown. Deny by default: the cost of forgetting is silence.
+const TROUBLE = "That account could not be unlocked. Try again, and tell the office if it keeps happening.";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -47,7 +54,7 @@ Deno.serve(async (req) => {
     const { userId } = await req.json();
     // A guard against a client bug, so it should never fire — but whoever
     // reads it pressed a button, and a variable name tells them nothing.
-    if (!userId) throw new Error("This request didn't say which account to unlock. Reload the app and try again.");
+    if (!userId) throw refuse("This request didn't say which account to unlock. Reload the app and try again.");
 
     // Nobody unlocks themselves. The gate above should already have refused
     // a locked caller, but these are two different failures and either one
@@ -68,11 +75,11 @@ Deno.serve(async (req) => {
     const { data: target, error: readErr } = await admin.from("profiles")
       .select("id, name, role, deactivated_at").eq("id", userId).maybeSingle();
     if (readErr) throw readErr;
-    if (!target) throw new Error("That account is no longer in the list — it may have been removed outright. Reload Users & access.");
+    if (!target) throw refuse("That account is no longer in the list — it may have been removed outright. Reload Users & access.");
     // deactivated_at is the app's own record of a lock, written by the same
     // function that set the ban. Nothing to put back if it was never set.
     if (!target.deactivated_at) {
-      throw new Error(`${target.name ?? "That account"} isn't locked, so there is nothing to unlock. If they can't sign in, send them a set-password link instead.`);
+      throw refuse(`${target.name ?? "That account"} isn't locked, so there is nothing to unlock. If they can't sign in, send them a set-password link instead.`);
     }
 
     // The ban first, then the profile. Half of this landing is possible, and
@@ -108,8 +115,8 @@ Deno.serve(async (req) => {
       ...(warning ? { warning } : {})
     });
   } catch (e) {
-    await logError("unlock-user", (e as Error).message);
-    return json({ error: (e as Error).message }, 400);
+    await logError("unlock-user", loggedWords(e));
+    return json({ error: publicWords(e, TROUBLE) }, 400);
   }
 });
 
