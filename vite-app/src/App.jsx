@@ -703,7 +703,7 @@ export function App() {
       // range is not a reason to throw away a half-entered ticket without
       // asking, and the next sign-in empties the store anyway if it is
       // somebody else (OfflineCache.claimFor).
-      try { await OfflineCache.remove(IDENTITY_KEY); } catch (e) { console.error("Couldn't forget this device's remembered identity:", e); }
+      try { await OfflineCache.forgetIdentity(); } catch (e) { console.error("Couldn't forget this device's remembered identity:", e); }
       // The stored session too: this branch is reached for any answer that
       // is not a network failure, a 5xx from the token endpoint included, and
       // auth-js only removes the session itself when the server said "no
@@ -791,9 +791,9 @@ export function App() {
           // and this is where the promise is kept: a remembered identity
           // older than that is not an identity, it is a lost tablet's last
           // user. Every successful online restore writes it afresh.
-          readIdentity: () => OfflineCache.read(IDENTITY_KEY).then(hit => {
+          readIdentity: () => OfflineCache.readIdentity().then(hit => {
             if (!hit) return null;
-            if (Date.now() - (hit.at || 0) > IDENTITY_TTL_MS) { OfflineCache.remove(IDENTITY_KEY).catch(() => {}); return null; }
+            if (Date.now() - (hit.at || 0) > IDENTITY_TTL_MS) { OfflineCache.forgetIdentity().catch(() => {}); return null; }
             return hit.value;
           }),
           // The same claim the sign-in screen makes, for the same reason:
@@ -848,7 +848,7 @@ export function App() {
         if (!Recovery.hinted()) {
           try { const { error } = await sbClient.auth.signOut(); if (error) forgetStoredSession(); }
           catch { forgetStoredSession(); }
-          try { await OfflineCache.remove(IDENTITY_KEY); } catch { /* nothing more to try */ }
+          try { await OfflineCache.forgetIdentity(); } catch { /* nothing more to try */ }
         }
         setCurrentUser(null);
         setBootError("This device couldn't clear the previous person's data — try again.");
@@ -862,6 +862,16 @@ export function App() {
       if (offline) {
         console.warn("Starting without a connection (" + reason + ")" + (user ? " — signed in from this device's last session." : "."));
         if (user) {
+          // The offline restore never reaches writeIdentity — there was no
+          // successful online read to write — so this is where the tab takes
+          // the lease it needs to read a single remembered row. `adopt` and
+          // not `claimFor`: a boot with no signal is the last moment to empty
+          // a store on the strength of a twelve-hour-old identity, so a
+          // device whose marker names somebody else is left whole and simply
+          // not adopted, and every fenced read refuses for the rest of the
+          // session. An error here is the same: nothing bound, nothing lost.
+          try { await OfflineCache.adopt(user.id); }
+          catch (e) { console.error("Couldn't read who this device's stored data belongs to:", e); }
           OfflineCache.noteServingCached(Date.now());
           restoredOffline.current = true;
         } else {
@@ -893,7 +903,7 @@ export function App() {
         // The hint is enough to hold off on, because a wipe not done costs
         // nothing and a forged one therefore buys nobody anything.
         if (!Recovery.hinted()) {
-          try { await OfflineCache.remove(IDENTITY_KEY); } catch { /* the clear below tries again */ }
+          try { await OfflineCache.forgetIdentity(); } catch { /* the clear below tries again */ }
           try { await OfflineCache.clear(); } catch (e) { console.error("Couldn't clear the offline cache after the account was locked:", e); }
         }
       } else if (!user) {
@@ -905,7 +915,7 @@ export function App() {
         // half-entered ticket for a lapsed token is the thing sign-out asks
         // permission for. Whoever signs in next settles it — a different
         // account empties the store at the door (OfflineCache.claimFor).
-        try { await OfflineCache.remove(IDENTITY_KEY); } catch (e) { console.error("Couldn't forget this device's remembered identity:", e); }
+        try { await OfflineCache.forgetIdentity(); } catch (e) { console.error("Couldn't forget this device's remembered identity:", e); }
       }
       if (user) {
         setCurrentUser(user);
@@ -1250,7 +1260,7 @@ export function App() {
     // The remembered identity goes first, on its own: it is the one record
     // that lets the next person open this tablet as the last one with no
     // signal, so it must not wait on — or be lost behind — the bulk clear.
-    try { await OfflineCache.remove(IDENTITY_KEY); } catch { /* the clear below tries again */ }
+    try { await OfflineCache.forgetIdentity(); } catch { /* the clear below tries again */ }
     // Signing out always completes — nobody gets trapped in a session because
     // a cache would not empty. But a wipe that failed is not a wipe, and the
     // person holding the tablet is the only one who can act on it, so it is

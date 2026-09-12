@@ -233,6 +233,9 @@ test("a read the network could not answer is a gap in the archive, not an empty 
   // This device remembers this job's tickets from before. Outside the
   // archive that copy is the right answer and the cache serves it...
   await OfflineCache.clear();
+  // Somebody signs in: nothing is read or written from this store without a
+  // lease on it (see cacheLease.test.mjs).
+  await OfflineCache.claimFor("tech-a");
   await OfflineCache.put("tickets.1", [{ id: "KK-0818-26-01" }]);
   assert.deepEqual(await OfflineCache.readThrough("tickets.1", failedFetch), [{ id: "KK-0818-26-01" }],
     "the cache really would have answered this");

@@ -55,8 +55,12 @@ export const DEFAULT_SCHEDULE = "__default__";
 // deleted, or marked complete — so a stale list can't offer a job that a
 // ticket would then fail against forever in the outbox.
 const dropClientJobLists = async () => {
-  const keys = await OfflineCache.keys("jobs.client.").catch(() => []);
-  await Promise.all(keys.map(k => OfflineCache.remove(k)));
+  // One lease across the read and the removes: a device that changed hands
+  // between them would otherwise have the new owner's lists swept by the old
+  // owner's edit. See OfflineCache.hold.
+  const held = OfflineCache.hold();
+  const keys = await OfflineCache.keys("jobs.client.", held).catch(() => []);
+  await Promise.all(keys.map(k => OfflineCache.remove(k, held)));
 };
 
 // Zero-byte object that makes an otherwise-empty folder exist in Storage.
@@ -246,6 +250,21 @@ const _generation = {};
 // (invalidate) drops the in-flight entry too, so the next caller reads
 // fresh rather than joining a walk that started before the write.
 const _inflight = {};
+// The same question as the generation counter, asked about the DEVICE rather
+// than the table: which account's app is this. These keys are account-blind
+// — "contacts", "profiles", "clients" are the same rows to everybody who may
+// read them, and that is true right up until the tablet changes hands. The
+// IndexedDB fence cannot see this layer at all, so it is told directly: every
+// lease change empties both maps and moves the account on, which retires the
+// walks that are only in flight as well as the rows already settled. A reply
+// that lands after the handover finds an account it no longer matches and is
+// answered to its own caller without being remembered for the next one.
+let _account = 0;
+OfflineCache.onLeaseChange(() => {
+  _account++;
+  for (const k of Object.keys(_cache)) delete _cache[k];
+  for (const k of Object.keys(_inflight)) delete _inflight[k];
+});
 const CACHE_TTL_MS = 30000;
 async function cached(key, fetcher) {
   const hit = _cache[key];
@@ -255,13 +274,14 @@ async function cached(key, fetcher) {
   // not be the thing that repopulates the cache — it fetched the old rows.
   // The generation counter is what tells the two apart.
   const startedAt = _generation[key] || 0;
+  const startedFor = _account;
   // Declared before the async body runs, so a fetcher that threw
   // synchronously could not hit the finally below before `read` exists.
   let read;
   read = (async () => {
     try {
       const value = await fetcher();
-      if ((_generation[key] || 0) === startedAt) _cache[key] = { value, at: Date.now() };
+      if ((_generation[key] || 0) === startedAt && _account === startedFor) _cache[key] = { value, at: Date.now() };
       return value;
     } finally {
       if (_inflight[key] === read) delete _inflight[key];
@@ -996,6 +1016,9 @@ export const Db = {
   // Storage removal is best effort — the rows are gone by then, and an
   // orphaned object in a private bucket is untidy, not a record.
   async archiveClearJobs(jobIds) {
+    // Taken before the delete, not after it: what this sweeps is the cache of
+    // the account that asked for the clear.
+    const held = OfflineCache.hold();
     const { data, error } = await sbClient.rpc("archive_clear_jobs", { p_job_ids: jobIds });
     if (error) throw error;
     const result = data || {};
@@ -1012,11 +1035,11 @@ export const Db = {
     // whose screen can no longer be opened to finish or discard it.
     const cleared = new Set((jobIds || []).map(String));
     const wipJob = k => { const m = /^(?:ticket|jha)\.wip\.(.+)$/.exec(k); return m ? m[1] : null; };
-    const keys = await OfflineCache.keys("").catch(() => []);
+    const keys = await OfflineCache.keys("", held).catch(() => []);
     await Promise.all(keys
       .filter(k => k === "jobs.recent" || /^(job|jhas|reports|tickets|jha\.last|jobs\.client)\./.test(k)
         || cleared.has(wipJob(k)))
-      .map(k => OfflineCache.remove(k)));
+      .map(k => OfflineCache.remove(k, held)));
     return {
       jobs: Number(result.jobs || 0), tickets: Number(result.tickets || 0),
       jhas: Number(result.jhas || 0), reports: Number(result.reports || 0), filesLeft
@@ -1034,6 +1057,8 @@ export const Db = {
   // the job. Neither one set, and the database refuses if anything is
   // attached — see 20260815000000.
   async deleteJob({ jobId, transferToId = null, discard = false }) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     const { data, error } = await sbClient.rpc("delete_job", {
       p_job_id: jobId,
       p_transfer_to: transferToId,
@@ -1074,7 +1099,7 @@ export const Db = {
     if (transferToId) {
       gone.push("jhas." + transferToId, "reports." + transferToId, "tickets." + transferToId, "jha.last." + transferToId);
     }
-    await Promise.all(gone.map(k => OfflineCache.remove(k)));
+    await Promise.all(gone.map(k => OfflineCache.remove(k, held)));
     await dropClientJobLists();
     return { ...(data || {}), filesLeft };
   },
@@ -1169,6 +1194,8 @@ export const Db = {
   // served whatever was asked for, and `fromCache` tells Home to say so
   // rather than pretending the filter was applied.
   async searchJobs({ page = 0, pageSize = 10, status = "All", search = "", searchField = "any" } = {}) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     const shape = data => {
       const rows = (data || []).map(j => ({
         dbId: j.id, id: j.job_number, project: j.project,
@@ -1191,10 +1218,10 @@ export const Db = {
       const result = shape(data);
       OfflineCache.markLive();
       if (isBoardDefault) {
-        OfflineCache.put("jobs.recent", result);
+        OfflineCache.put("jobs.recent", result, held);
         // Each job on its own key too, so opening one offline works even
         // though Job detail fetches it by id rather than off the list.
-        result.rows.forEach(j => { OfflineCache.put("job." + j.dbId, j); });
+        result.rows.forEach(j => { OfflineCache.put("job." + j.dbId, j, held); });
         // And the contents of each — deliberately not awaited, so the board
         // paints on the first response rather than the fourth.
         this.prefetchJobDetails(result.rows.map(j => j.dbId));
@@ -1202,7 +1229,7 @@ export const Db = {
       return result;
     } catch (e) {
       if (!isNetworkError(e)) throw e;
-      const hit = await OfflineCache.read("jobs.recent");
+      const hit = await OfflineCache.read("jobs.recent", held);
       if (!hit) throw e;
       OfflineCache.noteServingCached(hit.at);
       return { ...hit.value, fromCache: true, cachedAt: hit.at };
@@ -1218,6 +1245,8 @@ export const Db = {
   // Best effort and non-blocking: it runs after the board has already
   // rendered, and a failure means the old behaviour, not a broken board.
   async prefetchJobDetails(jobIds) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     const ids = (jobIds || []).filter(Boolean);
     if (!ids.length) return;
     if (Date.now() - _lastDetailPrefetch < DETAIL_PREFETCH_GAP_MS) return;
@@ -1253,7 +1282,7 @@ export const Db = {
           const bucket = byJob.get(row.job_id);
           if (bucket) bucket.push(shape(row));
         });
-        byJob.forEach((value, id) => { OfflineCache.put(prefix + id, value); });
+        byJob.forEach((value, id) => { OfflineCache.put(prefix + id, value, held); });
       };
       spread("jhas.", jhas, shapeJha);
       spread("reports.", reports, shapeReport);
@@ -1290,6 +1319,8 @@ export const Db = {
   // edits. Only an admin can close or reopen one (the button is admin-only, and
   // this is checked again here rather than trusted from the screen).
   async setJobComplete(jobDbId, complete) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     const { data: auth } = await sbClient.auth.getUser();
     // A dead session used to surface as "cannot read property id of null",
     // which reads like an app bug rather than "you've been signed out".
@@ -1307,15 +1338,15 @@ export const Db = {
     // the outbox until the replay was refused. Patched in place rather than
     // dropped: dropping the page would leave a truck with no board at all.
     const status = complete ? "Complete" : "Active";
-    const board = await OfflineCache.read("jobs.recent").catch(() => null);
+    const board = await OfflineCache.read("jobs.recent", held).catch(() => null);
     if (board && board.value && Array.isArray(board.value.rows)) {
-      OfflineCache.put("jobs.recent", { ...board.value, rows: board.value.rows.map(r => r.dbId === jobDbId ? { ...r, status } : r) });
+      OfflineCache.put("jobs.recent", { ...board.value, rows: board.value.rows.map(r => r.dbId === jobDbId ? { ...r, status } : r) }, held);
     }
     // The job's own key too — that is what Db.getJob serves out of range,
     // and App.openJob reads it behind every board tap for the client's GST
     // rate, so an unpatched copy put "Active" back over the board's.
-    const one = await OfflineCache.read("job." + jobDbId).catch(() => null);
-    if (one && one.value) OfflineCache.put("job." + jobDbId, { ...one.value, status });
+    const one = await OfflineCache.read("job." + jobDbId, held).catch(() => null);
+    if (one && one.value) OfflineCache.put("job." + jobDbId, { ...one.value, status }, held);
   },
 
   // Anything that adds to a job goes through here first. A job someone marked
@@ -1519,6 +1550,8 @@ export const Db = {
   // the new id — would die on the job number's unique index for ever, taking
   // the day's JHA and ticket with it.
   async queueNewJob({ id: givenId, jobNumber, project, clientId, clientName, lsd, afe, createdBy, createdByName, clientRep, contractorName, contractorRep }) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     const id = givenId || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
 
     const contractors = await this.listContractors().catch(() => []);
@@ -1541,10 +1574,10 @@ export const Db = {
     // Make it a real job as far as this device is concerned: on the board,
     // openable, and with empty history rather than absent history — an
     // absent key reads as "couldn't load", an empty one as "none on file yet".
-    OfflineCache.put("job." + id, job);
-    OfflineCache.put("jhas." + id, []);
-    OfflineCache.put("reports." + id, []);
-    OfflineCache.put("tickets." + id, []);
+    OfflineCache.put("job." + id, job, held);
+    OfflineCache.put("jhas." + id, [], held);
+    OfflineCache.put("reports." + id, [], held);
+    OfflineCache.put("tickets." + id, [], held);
     // The two rep columns as well, which the record reads from a key of their
     // own. Not a stand-in: createJob never sets client_contact_id or
     // contractor_contact_id, so the organisations' primaries genuinely are
@@ -1552,13 +1585,13 @@ export const Db = {
     // what the row will say when it syncs. Without it, getJobRecord's read
     // fails out of range and the job comes back repsUnknown — Create ticket
     // and Edit greyed out on a job the crew raised in the field minutes ago.
-    OfflineCache.put("job.reps." + id, { client_contact_id: null, contractor_contact_id: null });
-    const board = await OfflineCache.read("jobs.recent").catch(() => null);
+    OfflineCache.put("job.reps." + id, { client_contact_id: null, contractor_contact_id: null }, held);
+    const board = await OfflineCache.read("jobs.recent", held).catch(() => null);
     const rows = board && board.value && board.value.rows ? board.value.rows : [];
     OfflineCache.put("jobs.recent", {
       rows: [job, ...rows.filter(r => r.dbId !== id)],
       total: (board && board.value ? board.value.total : 0) + 1
-    });
+    }, held);
     // And the client's open-jobs list, which is the New ticket dialog's only
     // source out of range: without this the crew can raise a job in the field
     // and then not be able to bill against it until the queue drains.
@@ -1569,9 +1602,9 @@ export const Db = {
     // retried createJob comes back here with the id it already minted.
     if (clientId) {
       const listKey = "jobs.client." + clientId;
-      const list = await OfflineCache.read(listKey).catch(() => null);
+      const list = await OfflineCache.read(listKey, held).catch(() => null);
       if (list && Array.isArray(list.value)) {
-        OfflineCache.put(listKey, [job, ...list.value.filter(r => r.dbId !== id)]);
+        OfflineCache.put(listKey, [job, ...list.value.filter(r => r.dbId !== id)], held);
       }
     }
 
@@ -2550,6 +2583,8 @@ export const Db = {
   // and created if it's new — same behaviour as the New job dialog, so typing
   // a contractor here doesn't silently do nothing.
   async updateJobRecord(job, record) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     await this.assertJobOpen(job.dbId);
     let contractorId = job.contractorId ?? null;
     const name = (record.contractor || "").trim();
@@ -2592,7 +2627,7 @@ export const Db = {
     // the next time the panel opens out of range it would show them as
     // though they were the edit that just landed. Removed rather than
     // rewritten: the next read in range fills it again.
-    await OfflineCache.remove("job.reps." + job.dbId);
+    await OfflineCache.remove("job.reps." + job.dbId, held);
     return contractorId;
   },
 
@@ -3219,6 +3254,8 @@ export const Db = {
   // save time — same function either way, so the preview can't disagree with
   // what actually gets written.
   async nextTicketNumber(initials, workDate) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     const prefix = initials + "-" + ticketDateStamp(localDate(workDate)) + "-";
     try {
       const { data, error } = await sbClient.rpc("next_ticket_number", {
@@ -3227,7 +3264,7 @@ export const Db = {
       if (error) throw error;
       // Remember where the sequence had got to, so the offline path below can
       // carry on from the same place instead of guessing.
-      OfflineCache.put("ticketno." + prefix, data);
+      OfflineCache.put("ticketno." + prefix, data, held);
       return data;
     } catch (e) {
       if (!isNetworkError(e)) throw e;
@@ -3241,7 +3278,7 @@ export const Db = {
       // sharing initials, raises one while this is out of range — and no
       // client-side count can know that. So the number is provisional, the
       // screen says so, and the database mints the real one on replay.
-      const hit = await OfflineCache.read("ticketno." + prefix).catch(() => null);
+      const hit = await OfflineCache.read("ticketno." + prefix, held).catch(() => null);
       const lastKnown = hit ? parseInt(String(hit.value).slice(prefix.length), 10) : NaN;
       const base = Number.isNaN(lastKnown) ? 1 : lastKnown;
 
@@ -3362,6 +3399,8 @@ export const Db = {
   // Approved and invoiced tickets are never cancellable — by then it is the
   // client's document, and a correction is a new ticket.
   async deleteTicket(ticketId) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     // A reopened draft's recovery copy is keyed by the ticket id
     // (ticketMobile's wipKey). Left behind, a cancelled ticket went on
     // appearing in Open tickets' "half-entered on this device" strip,
@@ -3371,8 +3410,8 @@ export const Db = {
     // ticket that no longer exists would be read on a number a later ticket
     // may reuse.
     const forgetTicketWip = async id => {
-      try { await OfflineCache.remove("ticket.wip." + id); } catch (_) { /* the copy is a convenience */ }
-      try { await OfflineCache.remove("ticket.overwrote." + id); } catch (_) { /* likewise */ }
+      try { await OfflineCache.remove("ticket.wip." + id, held); } catch (_) { /* the copy is a convenience */ }
+      try { await OfflineCache.remove("ticket.overwrote." + id, held); } catch (_) { /* likewise */ }
     };
     const { data: row, error: rErr } = await sbClient.from("tickets").select("status").eq("id", ticketId).maybeSingle();
     if (rErr) throw rErr;

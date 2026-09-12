@@ -40,6 +40,11 @@ function world({ session, profile, hinted = false, claimThrows = false, identity
       read: async k => store.get(k) || null,
       put: async (k, v) => { store.set(k, v); },
       remove: async k => { if (k === "session.identity") did.identityRemoved = true; store.delete(k); },
+      readIdentity: async () => store.get("session.identity") || null,
+      forgetIdentity: async () => { did.identityRemoved = true; store.delete("session.identity"); },
+      // The offline restore's own claim: it never reaches writeIdentity, so
+      // this is where a boot with no signal takes the lease its reads need.
+      adopt: async id => { did.adopted = id; return true; },
       clear: async () => { did.cleared = true; store.clear(); },
       claimFor: async id => { if (claimThrows) throw new Error("IndexedDB is unavailable"); did.claimed = id; },
       noteServingCached: () => {}

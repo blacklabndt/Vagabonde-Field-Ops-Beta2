@@ -28,7 +28,7 @@ function harness(total) {
     };
   } };
   const Db = new Function("sbClient", "OfflineCache", "localDate", "dayMonth", "ageInDays", "isNetworkError", "Toasts", `${source}; return Db;`)(
-    sbClient, { readThrough: (_key, read) => read() }, x => x, x => x, () => 0, () => false, { show() {} });
+    sbClient, { readThrough: (_key, read) => read(), onLeaseChange: () => () => {}, hold: () => null }, x => x, x => x, () => 0, () => false, { show() {} });
   return { Db, calls };
 }
 

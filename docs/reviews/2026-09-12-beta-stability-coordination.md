@@ -809,3 +809,78 @@ item:
 
 Unchanged: no live database writes, no push, no deployment. Implementation of
 either item waits on Kyle's authorization to proceed.
+
+## Cache isolation implemented (Claude), awaiting Codex's implementation review
+
+Built to the contract above. Evidence at this commit: **962 tests pass**, lint
+clean, typecheck clean (Deno, zero), `vite build` green — the build run before
+the commit, per the house rule. No live database write, no push, no deployment.
+
+### The lease
+
+`cache.owner` now holds `{ owner, epoch }` (a bare string is read as that
+owner at epoch 0, so a device claimed by an older build needs no migration).
+A tab holds a LEASE — the exact pair it claimed — and:
+
+- **`leased(mode, run, held)`** is every fenced operation. The marker is read
+  FIRST and the work is issued from inside that read's own success handler, so
+  the check and the access are ONE IndexedDB transaction with nothing between
+  them. Fenced: `read`, `keys`, `put`, `remove`, `readThrough`'s write AND its
+  offline fallback read, and `clear`.
+- **`hold()`** is the lease captured before async work begins. `readThrough`
+  takes one itself; `db.js`'s eleven fetch-then-put paths take one at the top
+  of the function and pass it to every later `put`/`read`/`remove`/`keys`
+  (`searchJobs`, `prefetchJobDetails`, `setJobComplete`, `queueNewJob`,
+  `deleteJob`, `archiveClearJobs`, `updateJobRecord`, `deleteTicket`,
+  `nextTicketNumber`, `dropClientJobLists`).
+- **`claimFor`** is ONE readwrite transaction: marker, remembered identity,
+  clear, new marker. The lease binds only after it commits, so an aborted
+  claim leaves the data, the marker and this tab's binding exactly as they
+  were. A read or write that faults inside it aborts the whole transaction and
+  is reported as itself — the documented "unreadable is not nobody" rule.
+- **`adopt(userId)`** is the same decision without the clear, for the offline
+  restore, which never reaches `writeIdentity` and so never reached `claimFor`.
+  Same-owner and legacy adoption keep WIP exactly as today; a stranger's marker
+  is neither emptied nor adopted — the tab binds nothing and every fenced
+  operation refuses for the rest of the session. Fail closed.
+- **`clear()`** leaves an ownerless marker at the NEXT epoch, so an
+  A -> clear -> A cycle cannot make an old token valid again. A tab that HOLDS
+  a lease may only empty the store that lease names — a stale tab's sign-out is
+  not the current owner's sign-out. A tab holding NO lease empties
+  unconditionally; that is the boot's own wipe for an account the server has
+  just retired, which happens before anything is claimed. It is the one
+  unfenced clear and it is deliberate.
+- **Unfenced, explicitly**: `owner()`, `readIdentity()`, `forgetIdentity()`.
+  The boot has to read who owns this device and who it last had signed in
+  BEFORE it can claim anything, and neither is a row of anybody's work.
+  App.jsx's seven `OfflineCache.remove(IDENTITY_KEY)` / `read(IDENTITY_KEY)`
+  sites now go through those two names.
+- **Memory caches**: `onLeaseChange` fires from the one place a lease can
+  change. `db.js` registers at module load and empties `_cache` AND `_inflight`
+  and moves an `_account` counter, which `cached()` captures at the start of a
+  walk and re-checks before storing — so a read that was only in flight when
+  the device changed hands settles into nothing.
+
+### Tests
+
+`cacheLease.test.mjs` (10 new, 962 total) runs **two module instances over one
+IndexedDB** — `import("./offlineCache.js?tab=a")` and `?tab=b` — because the
+bug is not a same-tab one and a module-scoped fence passes none of them:
+A's delayed success after B claims; A's delayed network failure (serves
+neither B's copy nor its own from the old store); A's late `remove` and late
+`clear` against B's WIP; A -> clear -> A; the ownerless-epoch marker; an
+aborted claim preserving data, marker and A's binding; same-owner and legacy
+adoption; a stranger's device refused by `adopt` with nothing emptied and
+every fenced operation inert; the db.js fetch-then-put shape; and the lease
+announcement the memory caches hang off.
+
+`offlineCache.test.mjs` gained raw-IndexedDB fixtures (`rawPut`/`rawWipe`),
+since a store left by an older build can now only be set up from outside the
+module. `archive`, `bootSession` and `ticketMoneyRead` harnesses were taught
+the new surface.
+
+### Known limitation, stated rather than implied
+
+`BroadcastChannel` is not implemented — correctness does not depend on
+delivery, so a losing tab learns its lease has moved only at its next fenced
+operation, which is where it matters.

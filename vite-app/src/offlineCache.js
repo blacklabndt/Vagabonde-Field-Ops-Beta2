@@ -32,6 +32,56 @@ const OC_STORE = "reads";
 // It is never an answer to "who is allowed in" — only to "whose is this".
 export const CACHE_OWNER_KEY = "cache.owner";
 
+// ---------------------------------------------------------------------------
+// The lease.
+//
+// IndexedDB is shared by every tab on the origin, and the owner marker on its
+// own only ever answered "whose is this *now*". That is not enough for work
+// that STARTED earlier: tab A asks for a job's tickets, tab B signs in as
+// somebody else and empties the store, A's answer lands a second later and is
+// written under B's name — and B, out of range that afternoon, reads A's
+// client totals off their own device. Nothing about A's screen explains that
+// away; the row is on the disk after A has gone.
+//
+// So a marker is `{ owner, epoch }` and a tab holds a LEASE: the exact pair it
+// claimed. Every fenced read and every fenced write re-reads the marker inside
+// the SAME IndexedDB transaction as the data it is touching and compares. A
+// write whose lease no longer matches is dropped — never merged — and a read
+// whose lease no longer matches is a miss, not a stale answer. The lease is
+// captured before the async work starts, so what is compared is the state the
+// work was begun under and not whatever happens to be true when it finishes.
+//
+// The epoch is what makes an A -> clear -> A cycle safe: the store the second
+// A claims is a different store, empty, and every token minted against the
+// first one is dead for good. It only ever goes up.
+//
+// A tab with no lease does nothing fenced at all. It may still ask who owns
+// the device and what identity was remembered — that is the boot's explicit
+// business, below — but it may not read or write a row, and it never adopts
+// a lease another tab took. Binding is only ever `claimFor` or `adopt`.
+const OWNERLESS = null;
+
+function asMarker(value) {
+  // Devices that were claimed before the epoch existed hold the bare user id.
+  // They are epoch 0 of that owner — the same store, honestly described.
+  if (typeof value === "string") return { owner: value, epoch: 0 };
+  if (value && typeof value === "object" && typeof value.epoch === "number") {
+    return { owner: typeof value.owner === "string" ? value.owner : OWNERLESS, epoch: value.epoch };
+  }
+  return null;
+}
+
+// The lease this tab holds, or null. Set only after a claim has actually
+// committed: a claim that aborted leaves the marker, the data and this tab's
+// binding exactly as they were.
+let lease = null;
+
+function matches(markerValue, held) {
+  if (!held) return false;
+  const marker = asMarker(markerValue);
+  return !!marker && marker.owner === held.owner && marker.epoch === held.epoch;
+}
+
 let ocDbPromise = null;
 function ocOpenDb() {
   if (ocDbPromise) return ocDbPromise;
@@ -44,7 +94,39 @@ function ocOpenDb() {
   return ocDbPromise;
 }
 
-async function ocGet(key) {
+// Marks the answer of a transaction that found the lease had moved on. It is
+// deliberately its own value and not `null`/`undefined`, so a caller can tell
+// "the store says nothing is there" from "this was not yours to ask".
+const REFUSED = Symbol("lease-moved-on");
+
+// Every fenced operation. The marker is read FIRST and the work is issued from
+// inside that read's own success handler, so the check and the access are one
+// transaction and nothing can slip between them. `run(store)` issues its
+// requests synchronously and returns a thunk read after the commit.
+async function leased(mode, run, held = lease) {
+  if (!held) return REFUSED;
+  const db = await ocOpenDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(OC_STORE, mode);
+    const store = tx.objectStore(OC_STORE);
+    let answer = () => REFUSED;
+    const req = store.get(CACHE_OWNER_KEY);
+    req.onsuccess = () => {
+      if (!matches(req.result ? req.result.value : null, held)) return;
+      answer = run(store);
+    };
+    tx.oncomplete = () => resolve(answer());
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
+// The two unfenced reads, and the one unfenced delete: the boot has to be able
+// to ask who owns this device and who it last had signed in before it can
+// claim anything, and a session that has lapsed has to be able to forget the
+// identity whether or not this tab ever held a lease. Neither is a row of
+// anybody's work. Nothing else bypasses the fence.
+async function ocGetRaw(key) {
   const db = await ocOpenDb();
   const tx = db.transaction(OC_STORE, "readonly");
   const req = tx.objectStore(OC_STORE).get(key);
@@ -54,18 +136,7 @@ async function ocGet(key) {
   });
 }
 
-async function ocPut(key, value) {
-  const db = await ocOpenDb();
-  const tx = db.transaction(OC_STORE, "readwrite");
-  tx.objectStore(OC_STORE).put({ key, value, at: Date.now() });
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
-  });
-}
-
-async function ocDelete(key) {
+async function ocDeleteRaw(key) {
   const db = await ocOpenDb();
   const tx = db.transaction(OC_STORE, "readwrite");
   tx.objectStore(OC_STORE).delete(key);
@@ -96,6 +167,22 @@ function setState(next) {
   notify();
 }
 
+// Every change of lease empties the skip-unchanged guard. It is keyed by
+// cache key alone, so a serialization remembered under the last account would
+// let the next one's identical fetch skip the write it actually needs.
+const onBind = new Set();
+function bind(next) {
+  lease = next;
+  rtLastWritten.clear();
+  // Everything else in the app that remembers a row in MEMORY is told at the
+  // same instant, from the one place a lease can change, so no transition can
+  // be missed by a call site forgetting to say so. db.js's reference-data
+  // cache is the one that matters: it has no owner concept at all, its keys
+  // are account-blind ("contacts", "profiles"), and a walk already in flight
+  // when the device changes hands would otherwise settle into it.
+  onBind.forEach(fn => { try { fn(next); } catch { /* a listener is not the claim's problem */ } });
+}
+
 export const OfflineCache = {
   get state() { return state; },
 
@@ -112,23 +199,51 @@ export const OfflineCache = {
   // readThrough (the jobs board, which serves one cached page for any query).
   noteServingCached(at) { setState({ servingCached: true, at }); },
 
+  // Told whenever this tab's lease changes — a claim, an adoption, a clear.
+  // For anything holding rows in memory, which the fence cannot reach: see
+  // bind() above. Registered once at module load and never removed.
+  onLeaseChange(fn) { onBind.add(fn); return () => onBind.delete(fn); },
+
+  // The lease to write an answer under, taken BEFORE the work that produces
+  // it starts. A caller that fetches and then puts must hold one across the
+  // fetch — passing it to put/remove/read is what makes the answer land (or
+  // be dropped) according to who this device belonged to when it was asked
+  // for, rather than who it belongs to when the radio finally replies.
+  hold() { return lease; },
+
   // Store without reading — for values fetched as part of a bigger response
   // (the jobs page carries every job on it, so each one is worth keeping).
-  put(key, value) { return ocPut(key, value).catch(() => {}); },
+  async put(key, value, held = lease) {
+    // Stamped when the caller asked, not when the transaction opened: the
+    // fence puts a real IndexedDB read in front of every write now, and the
+    // banner's "this is what was here at 14:32" is about the answer, not
+    // about the disk.
+    const at = Date.now();
+    try {
+      await leased("readwrite", store => {
+        store.put({ key, value, at });
+        return () => true;
+      }, held);
+    } catch { /* a cache write is never worth failing a read over */ }
+  },
 
-  read(key) { return ocGet(key); },
+  async read(key, held = lease) {
+    const hit = await leased("readonly", store => {
+      const req = store.get(key);
+      return () => req.result || null;
+    }, held);
+    return hit === REFUSED ? null : hit;
+  },
 
   // Every remembered key that starts with `prefix`. How sign-out finds the
   // half-entered tickets and assessments it is about to wipe, and how a
   // job's deletion finds the per-client job lists that still name it.
-  async keys(prefix = "") {
-    const db = await ocOpenDb();
-    const tx = db.transaction(OC_STORE, "readonly");
-    const req = tx.objectStore(OC_STORE).getAllKeys();
-    const all = await new Promise((resolve, reject) => {
-      req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => reject(req.error);
-    });
+  async keys(prefix = "", held = lease) {
+    const all = await leased("readonly", store => {
+      const req = store.getAllKeys();
+      return () => req.result || [];
+    }, held);
+    if (all === REFUSED) return [];
     return all.filter(k => typeof k === "string" && k.startsWith(prefix));
   },
 
@@ -137,9 +252,14 @@ export const OfflineCache = {
   // offered back the next time that job's ticket screen opens.
   // The skip-unchanged guard forgets the key too, or the next identical
   // fetch would skip the write and leave the offline copy missing.
-  remove(key) {
+  async remove(key, held = lease) {
     rtLastWritten.delete(key);
-    return ocDelete(key).catch(() => {});
+    try {
+      await leased("readwrite", store => {
+        store.delete(key);
+        return () => true;
+      }, held);
+    } catch { /* likewise */ }
   },
 
   // The account this device's cache belongs to, or null if nobody has
@@ -152,9 +272,16 @@ export const OfflineCache = {
   // throws instead; the callers already refuse the sign-in and say so, the
   // same as for a clear that would not land.
   async owner() {
-    const hit = await ocGet(CACHE_OWNER_KEY);
-    return hit ? hit.value : null;
+    const hit = await ocGetRaw(CACHE_OWNER_KEY);
+    const marker = asMarker(hit ? hit.value : null);
+    return marker ? marker.owner : null;
   },
+
+  // The boot's two explicit, unfenced doors, and the only ones. Reading who
+  // was last signed in here is what DECIDES the claim, so it cannot be
+  // behind the claim; forgetting them is never a disclosure.
+  async readIdentity() { return ocGetRaw(IDENTITY_KEY); },
+  async forgetIdentity() { return ocDeleteRaw(IDENTITY_KEY); },
 
   // Called wherever an account takes this device over — signing in, and the
   // quiet restore of a session on start — before anything of theirs is
@@ -168,35 +295,28 @@ export const OfflineCache = {
   // new signer's to see. A device with no owner recorded falls back to the
   // remembered identity — see below.
   //
-  // The new owner is recorded only once the clear has actually landed — a
-  // clear that failed must not leave this device claiming to belong to
-  // someone whose data is not on it. clear() throws in that case; the caller
-  // decides what to say.
+  // The whole decision is ONE transaction: the marker, the remembered
+  // identity, the clear and the new marker. Read-then-write across two would
+  // let a second tab claim between them, and the loser would empty a store
+  // the winner had already filled. The lease is bound only once that
+  // transaction has committed — a claim that aborted leaves this tab holding
+  // nothing, which is the same refusal as before, and leaves the data and
+  // the marker untouched.
   async claimFor(userId) {
-    if (!userId) return false;
-    const owner = await this.owner();
-    if (owner === userId) return false;
-    // "Nobody has claimed this" is not the same as "this is a stranger's".
-    // Owners started being recorded after the store did, so the first online
-    // start once that shipped finds every tablet in the crew unclaimed — and
-    // clearing on that basis would empty the store of the very person signing
-    // in, half-entered tickets and all. The remembered identity settles it:
-    // if this device's last identity is already this account, it is theirs,
-    // so record the claim and keep the work. A remembered stranger, or no
-    // identity at all, is still emptied at the door.
-    if (owner === null) {
-      // Faults out for the same reason owner() does: this read is the whole
-      // of the "it is already theirs" case, so an unreadable one must not
-      // quietly become "a stranger's" and take the clear below with it.
-      const hit = await ocGet(IDENTITY_KEY);
-      if (hit && hit.value && hit.value.id === userId) {
-        await ocPut(CACHE_OWNER_KEY, userId);
-        return false;
-      }
-    }
-    await this.clear();
-    await ocPut(CACHE_OWNER_KEY, userId);
-    return true;
+    const settled = await settleOwner(userId, true);
+    return settled ? settled.cleared : false;
+  },
+
+  // The same claim without the clear, for a session restored from this
+  // device's own memory with no network: the owner is normally this same
+  // person, and a boot with no signal is exactly when a wipe would be
+  // unrecoverable. A stranger's store is not emptied and not adopted — the
+  // tab simply binds nothing, and every fenced read and write refuses for
+  // the rest of it. Fail closed: the screens show an error, not somebody
+  // else's jobs.
+  async adopt(userId) {
+    const settled = await settleOwner(userId, false);
+    return !!settled;
   },
 
   // Run something with the fallback switched off: while it runs, a failed
@@ -232,6 +352,9 @@ export const OfflineCache = {
   // write keeps the older saved-at stamp, which is honest — the content
   // really is from then.
   async readThrough(key, fetcher) {
+    // Taken before the fetch, not at the write: the answer belongs to
+    // whoever this device belonged to when it was asked for. See the lease.
+    const held = lease;
     try {
       const value = await fetcher();
       this.markLive();
@@ -251,7 +374,17 @@ export const OfflineCache = {
         // silenced that key for the life of the tab: every identical fetch
         // afterwards compared equal and skipped the write it still needed,
         // so the offline copy the guard was protecting was never there.
-        ocPut(key, value).then(() => rtLastWritten.set(key, serialized), () => rtLastWritten.delete(key));
+        //
+        // The guard is only updated while the lease still stands, or a write
+        // the fence dropped would be remembered as one that landed.
+        const at = Date.now();
+        leased("readwrite", store => {
+          store.put({ key, value, at });
+          return () => true;
+        }, held).then(
+          done => { if (done === true) rtLastWritten.set(key, serialized); else rtLastWritten.delete(key); },
+          () => rtLastWritten.delete(key)
+        );
       }
       return value;
     } catch (e) {
@@ -259,8 +392,14 @@ export const OfflineCache = {
       // said a remembered copy would be worse than an error.
       if (liveOnlyDepth > 0) throw e;
       if (!isNetworkError(e)) throw e;
-      const hit = await ocGet(key).catch(() => null);
-      if (!hit) throw e;
+      // Fenced on the lease this read began under: a device that changed
+      // hands mid-request has no remembered copy to offer this caller, and
+      // the failure is the honest answer.
+      const hit = await leased("readonly", store => {
+        const req = store.get(key);
+        return () => req.result || null;
+      }, held).catch(() => null);
+      if (!hit || hit === REFUSED) throw e;
       setState({ servingCached: true, at: hit.at });
       return hit.value;
     }
@@ -285,19 +424,131 @@ export const OfflineCache = {
   // app open twice is far more likely than the aborted transaction it was
   // meant to rescue. Trading a rare silent failure for a common noisy one is
   // not a trade.
+  //
+  // What it leaves behind is one ownerless marker at the NEXT epoch. An empty
+  // store with no marker at all would let every lease minted against the old
+  // one match again the moment the same person signed back in — the store
+  // would be a different store and the tokens for it would still be good.
+  // A tab that HOLDS a lease may only empty the store that lease names. A
+  // sign-out arriving late from a tab whose account was replaced an hour ago
+  // is not this device's sign-out, and emptying on it takes the half-entered
+  // tickets of whoever is using the tablet now. It answers false in that case
+  // and lets go of its lease: what it meant to delete is already gone.
+  //
+  // A tab holding NO lease empties unconditionally — that is the boot's own
+  // wipe for an account the server has just retired, which happens before
+  // anything is claimed and has nothing to compare against. It is the one
+  // clear that is not fenced, and it is deliberate.
   async clear() {
     // The guard map has to empty with the store: after a sign-out it still
     // held the last serializations, so the next session's unchanged fetches
     // skipped their writes and the offline fallback was silently gone.
     rtLastWritten.clear();
+    const held = lease;
     const db = await ocOpenDb();
-    const tx = db.transaction(OC_STORE, "readwrite");
-    tx.objectStore(OC_STORE).clear();
-    await new Promise((resolve, reject) => {
-      tx.oncomplete = resolve;
+    const emptied = await new Promise((resolve, reject) => {
+      const tx = db.transaction(OC_STORE, "readwrite");
+      const store = tx.objectStore(OC_STORE);
+      let did = false;
+      const req = store.get(CACHE_OWNER_KEY);
+      req.onsuccess = () => {
+        const value = req.result ? req.result.value : null;
+        if (held && !matches(value, held)) return;
+        const marker = asMarker(value);
+        store.clear();
+        store.put({ key: CACHE_OWNER_KEY, value: { owner: OWNERLESS, epoch: (marker ? marker.epoch : 0) + 1 }, at: Date.now() });
+        did = true;
+      };
+      tx.oncomplete = () => resolve(did);
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);
     });
+    // This tab's own lease went with the store it named, whether or not the
+    // store was this tab's to empty. Whoever signs in next binds a new one;
+    // until then nothing fenced is read or written.
+    bind(null);
     setState({ servingCached: false, at: null });
+    return emptied;
   }
 };
+
+// The one place an owner marker is decided and written. `mayClear` is the
+// difference between signing in (a stranger's store is emptied at the door)
+// and restoring this device's own remembered session with no signal (a
+// stranger's store is left alone and simply not adopted).
+//
+// Answers the marker it settled on, or null for "not this tab's to hold".
+async function settleOwner(userId, mayClear) {
+  if (!userId) return null;
+  const db = await ocOpenDb();
+  const settled = await new Promise((resolve, reject) => {
+    const tx = db.transaction(OC_STORE, "readwrite");
+    const store = tx.objectStore(OC_STORE);
+    let out = null;
+    const wipe = marker => {
+      store.clear();
+      const next = { owner: userId, epoch: (marker ? marker.epoch : 0) + 1 };
+      store.put({ key: CACHE_OWNER_KEY, value: next, at: Date.now() });
+      return { marker: next, cleared: true };
+    };
+    // A read or a write that faults inside the decision ends the whole
+    // transaction and is reported as itself. Swallowed, an unreadable marker
+    // or identity becomes "a stranger's" and takes the clear with it — which
+    // is how a moment's IndexedDB fault once cost a device its own owner's
+    // half-entered tickets, and recorded them as the new owner of what it had
+    // just deleted.
+    const failed = e => { out = null; try { tx.abort(); } catch { /* already gone */ } reject(e); };
+    const decide = marker => {
+      if (marker && marker.owner === userId) {
+        // Already theirs. The epoch stands: nothing was emptied, so every
+        // lease against it is still describing the store it describes.
+        out = { marker, cleared: false };
+        return;
+      }
+      if (!marker || marker.owner === OWNERLESS) {
+        // "Nobody has claimed this" is not the same as "this is a
+        // stranger's". Owners started being recorded after the store did, so
+        // the first online start once that shipped finds every tablet in the
+        // crew unclaimed — and clearing on that basis would empty the store
+        // of the very person signing in, half-entered tickets and all. The
+        // remembered identity settles it: if this device's last identity is
+        // already this account, it is theirs, so record the claim and keep
+        // the work. A remembered stranger, or no identity at all, is still
+        // emptied at the door.
+        //
+        // Read in this same transaction, and a read that faults aborts the
+        // whole of it rather than quietly becoming "a stranger's" and taking
+        // the clear below with it.
+        const iReq = store.get(IDENTITY_KEY);
+        iReq.onsuccess = () => {
+          try {
+            const hit = iReq.result;
+            if (hit && hit.value && hit.value.id === userId) {
+              const next = { owner: userId, epoch: marker ? marker.epoch : 0 };
+              store.put({ key: CACHE_OWNER_KEY, value: next, at: Date.now() });
+              out = { marker: next, cleared: false };
+            } else if (mayClear) {
+              out = wipe(marker);
+            }
+          } catch (e) { failed(e); }
+        };
+        return;
+      }
+      if (mayClear) out = wipe(marker);
+    };
+    let mReq;
+    try { mReq = store.get(CACHE_OWNER_KEY); } catch (e) { failed(e); return; }
+    mReq.onsuccess = () => {
+      try { decide(asMarker(mReq.result ? mReq.result.value : null)); }
+      catch (e) { failed(e); }
+    };
+    tx.oncomplete = () => resolve(out);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+  // Bound only now the transaction has committed.
+  if (!settled) return null;
+  bind(settled.marker);
+  if (settled.cleared) setState({ servingCached: false, at: null });
+  return settled;
+}
