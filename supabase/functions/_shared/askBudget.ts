@@ -185,6 +185,50 @@ export function usageTokens(body: unknown): { input: number; output: number } | 
   return { input: input + cached, output };
 }
 
+// THE SAME BILL, READ THE OTHER WAY — for evidence, never for settlement.
+//
+// `usageTokens` deliberately folds a cached prefix into one `input` figure,
+// because the ledger needs a number it cannot undercount and does not care
+// which name the tokens arrived under. That fold is also why a live run
+// cannot currently tell a cache HIT from a cache WRITE from no caching at
+// all: three very different calls settle to the same figure.
+//
+// So this reads the identical block apart instead of together:
+//   fresh   — `input_tokens`, the prefix that was neither read nor written
+//   written — `cache_creation_input_tokens`, paid once to lay a prefix down
+//   read    — `cache_read_input_tokens`, the prefix served from cache
+// A second round on the same question should show `read` large and `written`
+// nought; if it shows `written` large again, the breakpoints are not landing
+// where we think and we are paying to write the same prefix every round.
+//
+// `fresh + written + read` is exactly the `input` that `usageTokens` returns
+// for the same body, and a test pins that. Nothing here settles anything:
+// the ledger's contract is `usageTokens` alone.
+export function cacheUsage(
+  body: unknown,
+): { fresh: number; written: number; read: number } | null {
+  if (!body || typeof body !== "object") return null;
+  const u = (body as { usage?: unknown }).usage;
+  if (!u || typeof u !== "object" || Array.isArray(u)) return null;
+  const b = u as UsageBlock;
+  // `input_tokens` is mandatory here for the same reason it is there: a body
+  // without it is not the body we think we are reading, and a malformed
+  // counter is UNKNOWN rather than nought. Telemetry that quietly prints 0
+  // for "could not read it" is worse than telemetry that prints nothing,
+  // because the nought is the same shape as a real answer.
+  const fresh = counter(b.input_tokens);
+  if (fresh === null) return null;
+  // The two cache counters stay optional, and absent still reads as nought
+  // — the vendor omits them on a call that neither wrote nor read a cache,
+  // and that IS a zero rather than an unknown. A value that is present and
+  // unreadable, though, takes the whole reading down with it.
+  const part = (v: unknown): number | null => (v === undefined || v === null ? 0 : counter(v));
+  const written = part(b.cache_creation_input_tokens);
+  const read = part(b.cache_read_input_tokens);
+  if (written === null || read === null) return null;
+  return { fresh, written, read };
+}
+
 // What one call reserves, and what it goes on holding when it cannot be
 // settled. The model's whole documented maximum, because the arithmetic above
 // needs a figure that cannot be exceeded and this is the only kind there is.

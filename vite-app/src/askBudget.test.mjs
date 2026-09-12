@@ -11,7 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  LEASE_STALE_SECONDS, ONE_CALL_MAX, worstOvershoot, usageTokens,
+  LEASE_STALE_SECONDS, ONE_CALL_MAX, worstOvershoot, usageTokens, cacheUsage,
   reserveFor, billedNothing, BUSY_WORDS, SPENT_WORDS, LEARN_SPENT_WORDS, LEARN_TROUBLE_WORDS,
   WORKER_WALL_MS, CLEANUP_RESERVE_MS, CALL_TIMEOUT_MS, LEARN_TIMEOUT_MS, LEARN_MIN_MS, MIN_CALL_MS,
   requestDeadline, readUntil, callTimeout, timeToLearn, OUT_OF_TIME_WORDS, LEARN_NO_TIME_WORDS
@@ -531,4 +531,62 @@ test("a call we stopped waiting for is held in full, never written down as nough
   assert.ok(!/ask_settle/.test(block), "an aborted call must never be settled — its reservation stands whole");
   assert.match(block, /reserveFor\(model\)/, "the office must be told what the call is still holding");
   assert.match(block, /logError/, "the office must hear that a call was cut off");
+});
+
+test("the bill reads apart into fresh, written and read without moving the ledger's figure", () => {
+  // The whole point of the split: three calls that settle IDENTICALLY under
+  // `usageTokens` and mean completely different things. Without this, a live
+  // run cannot tell us whether the breakpoints are landing.
+  const noCache = { usage: { input_tokens: 500, output_tokens: 7 } };
+  const wrote = { usage: { input_tokens: 100, cache_creation_input_tokens: 400, output_tokens: 7 } };
+  const readIt = { usage: { input_tokens: 100, cache_read_input_tokens: 400, output_tokens: 7 } };
+  for (const body of [noCache, wrote, readIt]) {
+    assert.deepEqual(usageTokens(body), { input: 500, output: 7 }, "the ledger must not tell these apart");
+  }
+  assert.deepEqual(cacheUsage(noCache), { fresh: 500, written: 0, read: 0 });
+  assert.deepEqual(cacheUsage(wrote), { fresh: 100, written: 400, read: 0 });
+  assert.deepEqual(cacheUsage(readIt), { fresh: 100, written: 0, read: 400 });
+});
+
+test("the split always adds back up to the figure the ledger settles on", () => {
+  // The contract that keeps telemetry honest: if these two ever disagree, the
+  // evidence we are about to make decisions on is not evidence about the bill.
+  const bodies = [
+    { usage: { input_tokens: 0, output_tokens: 0 } },
+    { usage: { input_tokens: 100, output_tokens: 7 } },
+    { usage: { input_tokens: 100, cache_creation_input_tokens: 20, cache_read_input_tokens: 300, output_tokens: 7 } },
+    { usage: { input_tokens: 5, cache_creation_input_tokens: null, cache_read_input_tokens: null, output_tokens: 7 } },
+  ];
+  for (const body of bodies) {
+    const settled = usageTokens(body);
+    const split = cacheUsage(body);
+    assert.ok(settled && split, `${JSON.stringify(body)} must read both ways`);
+    assert.equal(split.fresh + split.written + split.read, settled.input, JSON.stringify(body));
+  }
+});
+
+test("an unreadable counter is unknown to the telemetry too, never a nought", () => {
+  // A 0 printed for "could not read it" is the same shape as a real answer,
+  // and would be read later as proof that caching did nothing.
+  for (const body of [
+    null, 42, "usage", {}, { usage: null }, { usage: [] },
+    { usage: { output_tokens: 7 } },
+    { usage: { input_tokens: "100", output_tokens: 7 } },
+    { usage: { input_tokens: 1.5, output_tokens: 7 } },
+    { usage: { input_tokens: -1, output_tokens: 7 } },
+    { usage: { input_tokens: 100, cache_read_input_tokens: "300", output_tokens: 7 } },
+    { usage: { input_tokens: 100, cache_creation_input_tokens: -20, output_tokens: 7 } },
+  ]) {
+    assert.equal(cacheUsage(body), null, `${JSON.stringify(body)} must not read as a measurement`);
+  }
+});
+
+test("reading the bill apart is evidence only — the ledger settles on usageTokens alone", () => {
+  // If a settlement ever starts from the split, an unreadable cache counter
+  // would stop being "we do not know" and start being money.
+  const settle = ask.indexOf("ask_settle");
+  assert.ok(settle > 0, "the endpoint must still settle");
+  assert.match(ask, /usageTokens\(/, "settlement still reads the whole bill");
+  const fromSplit = /ask_settle[\s\S]{0,600}?cacheUsage\(/.test(ask);
+  assert.ok(!fromSplit, "settlement must never be computed from the cache split");
 });
