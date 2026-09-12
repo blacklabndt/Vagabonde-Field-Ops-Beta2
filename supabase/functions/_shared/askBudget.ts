@@ -57,22 +57,62 @@ export const LEASE_STALE_SECONDS = 300;
 // the only kind there is.
 //
 // IT HAS TO BOUND ALL FOUR NAMES THE LEDGER COUNTS, not just the one called
-// `input_tokens`, and it does: `input_tokens`, `cache_creation_input_tokens`
-// and `cache_read_input_tokens` are three parts of ONE input total, and the
-// context window is the ceiling on that total — a request whose parts sum
-// past it is refused with a 400 before anything is billed. So
-// `window + max_tokens` is an upper bound on the sum of all four, which is
-// the figure `usageTokens` returns and the figure the ledger holds.
+// `input_tokens`, and the vendor's own pages are what say it does. Three
+// sentences carry the whole claim, and each is quoted rather than recalled:
+//
+//  1. THE THREE INPUT NAMES ARE ONE TOTAL, AND THE WINDOW BOUNDS IT.
+//     "If you use prompt caching, the input count is split across
+//     `input_tokens`, `cache_read_input_tokens`, and
+//     `cache_creation_input_tokens`, and all three count toward the window."
+//     — Context windows
+//  2. THE WINDOW IS ENFORCED BEFORE ANYTHING IS BILLED.
+//     "If the input alone already exceeds the model's context window, the API
+//     returns a 400 `invalid_request_error` ("prompt is too long") on every
+//     model." — Context windows, Context window overflow behavior
+//  3. OUTPUT CANNOT PASS `max_tokens`, THINKING INCLUDED.
+//     "Thinking tokens are a subset of your `max_tokens` parameter, are
+//     billed as output tokens, and count toward rate limits." — Context
+//     windows, with thinking. Opus 5 thinks adaptively and by default at
+//     `high` effort, so this sentence is the only thing keeping an answer's
+//     output bounded, and it is the vendor's.
+//
+// So `window + max_tokens` bounds the sum of all four names — the figure
+// `usageTokens` returns and the figure the ledger holds. Note what is NOT a
+// hole: on 4.5 models and later, input + max_tokens ABOVE the window is
+// accepted rather than refused, but generation then "stops with
+// `stop_reason: "model_context_window_exceeded"`", so the sum is bounded
+// either way.
+//
+// `cache_creation.ephemeral_5m_input_tokens` and its 1h twin are deliberately
+// NOT counted: "the current `cache_creation_input_tokens` field equals the
+// sum of the values in the `cache_creation` object", so adding them would
+// double-count a total the ledger already holds.
+//
+// TWO THINGS WOULD QUIETLY UNMAKE THE BOUND, and both are absent today and
+// asserted absent by askBudget.test.mjs:
+//   - Server-side COMPACTION, which lets "the conversation continue past the
+//     context window limit" — the very sentence that sentence 2 rests on.
+//   - Server-side TOOLS, whose spend arrives under `server_tool_use` and is
+//     not part of the four names at all. Ask's tools are all our own.
+// Both are reached by an `anthropic-beta` header or a server tool type, and
+// neither appears in any file Ask calls out of.
 //
 // The `max_tokens` halves are OURS and are read back out of the two files
 // that send them (askBudget.test.mjs), so a raised answer budget cannot
 // leave this table quietly two orders too small. The window halves are the
 // vendor's documented figures and are cited, not measured: measurement could
 // falsify them and can never establish them.
+//
+// Model IDs here are SNAPSHOTS, not moving pointers — "Every Claude model ID
+// is a pinned snapshot, including the dateless IDs used from the 4.6
+// generation on" — so the dateless `claude-opus-5` cannot grow a larger
+// window under the same name.
 export const ONE_CALL_MAX: Readonly<Record<string, number>> = {
-  // claude-opus-5: 1,000,000 context, and askLoop sends max_tokens 8,000.
+  // claude-opus-5: 1M context (the default; no beta header), max output 128K,
+  // and askLoop sends max_tokens 8,000.
   "claude-opus-5": 1_000_000 + 8_000,
-  // claude-haiku-4-5: 200,000 context, and askLearn sends max_tokens 600.
+  // claude-haiku-4-5-20251001: 200K context, max output 64K, and askLearn
+  // sends max_tokens 600.
   "claude-haiku-4-5-20251001": 200_000 + 600
 };
 
@@ -132,18 +172,65 @@ export function reserveFor(model: string): number {
   return most;
 }
 
-// Did this refusal prove that NOTHING was billed? Only the provider can say
-// so, and it says so by refusing before it runs anything: a bad request, a
-// key it will not accept, a rate limit. Those settle at nought, or a burst of
-// 429s would eat a day's ceiling with not a token spent — denial by another
-// road.
+// The provider's own names for a refusal it gave BEFORE running anything.
+// Each is documented as a decision about the request rather than about an
+// answer: the format or content was wrong (including "prompt is too long" and
+// a spend limit the office set), the key was refused, billing, permission,
+// the route, the size, the rate. None of them reaches a model.
 //
-// Everything at 500 and above is AMBIGUOUS and keeps its reservation: an
-// api_error, a 529 overload or a gateway timeout may sit on the far side of a
-// call that was answered and billed. 408 is the same story in the 4xx range —
-// a timeout is not a refusal — so it is named out.
-export function billedNothing(status: number): boolean {
-  return Number.isFinite(status) && status >= 400 && status < 500 && status !== 408;
+// An ALLOW-list and never a deny-list, because Anthropic's versioning policy
+// says of these objects that "the values within these objects may expand, and
+// it is possible that the `type` values will grow over time". A name that
+// grows into the API after this file was written must therefore arrive as
+// AMBIGUOUS and keep its reservation — not as free. `conflict_error` (409) is
+// deliberately absent: it is not documented against the Messages route, and
+// unknown is the side to be wrong on.
+const REFUSED_BEFORE_RUNNING: readonly string[] = [
+  "invalid_request_error",
+  "authentication_error",
+  "billing_error",
+  "permission_error",
+  "not_found_error",
+  "request_too_large",
+  "rate_limit_error"
+];
+
+// Did this refusal prove that NOTHING was billed?
+//
+// THE STATUS ALONE CANNOT SAY SO, which is Codex's point and it is right.
+// `api.anthropic.com` sits behind Cloudflare — the docs say so themselves of
+// 413: "On the direct Claude API, Cloudflare returns this error before the
+// request reaches the API servers" — so a 4xx on this socket may have been
+// written by a middlebox that never saw the API's answer, and a middlebox
+// cannot know whether the call it proxied was run and billed. Worse, the
+// errors page says `invalid_request_error` "may also be used for other 4XX
+// status codes not listed in this section", so the status is not even a
+// reliable index into the type.
+//
+// So the evidence is THE BODY. The API "always returns errors as JSON, with a
+// top-level `error` object that always includes a `type` and `message`" and a
+// `request_id` beside it. That envelope is the provider saying, in its own
+// words, which decision it took. A Cloudflare page, a truncated body, a
+// gateway's HTML, a type we do not recognise: none of them is that statement,
+// and each keeps the reservation in full.
+//
+// A refusal the provider owns still settles at nought, because without that a
+// burst of rate-limit refusals would eat a day's ceiling with not a token
+// spent — denial by another road. Everything at 500 and above is ambiguous,
+// and so is 408: a timeout is not a refusal.
+export function billedNothing(status: number, body: unknown): boolean {
+  if (!Number.isFinite(status) || status < 400 || status >= 500 || status === 408) return false;
+  let parsed: unknown = body;
+  if (typeof body === "string") {
+    try { parsed = JSON.parse(body); } catch { return false; }
+  }
+  if (!parsed || typeof parsed !== "object") return false;
+  const envelope = parsed as { type?: unknown; error?: unknown };
+  if (envelope.type !== "error") return false;
+  const err = envelope.error;
+  if (!err || typeof err !== "object") return false;
+  const named = (err as { type?: unknown }).type;
+  return typeof named === "string" && REFUSED_BEFORE_RUNNING.includes(named);
 }
 
 // There is deliberately no ceiling arithmetic in here any more. Admission is

@@ -57,18 +57,89 @@ test("a call reserves the model's whole documented maximum, and holds it when it
   assert.equal(reserveFor("something-nobody-has-heard-of"), largest);
 });
 
+const envelope = (type, message = "no") =>
+  JSON.stringify({ type: "error", error: { type, message }, request_id: "req_011CSHoEeqs5C35K2UUqR7Fy" });
+
 test("only a refusal the provider gave before running anything settles at nothing", () => {
   // Without this a burst of rate-limit refusals eats a day's ceiling with not
   // a token spent, which is denial by another road.
-  for (const status of [400, 401, 403, 404, 413, 422, 429]) {
-    assert.equal(billedNothing(status), true, `${status} is a refusal and was billed nothing`);
+  const owned = [
+    [400, "invalid_request_error"], [401, "authentication_error"], [402, "billing_error"],
+    [403, "permission_error"], [404, "not_found_error"], [413, "request_too_large"],
+    [429, "rate_limit_error"],
+    // The errors page says `invalid_request_error` "may also be used for other
+    // 4XX status codes not listed in this section", so the type decides and
+    // the status only has to be a 4xx that is not a timeout.
+    [422, "invalid_request_error"]
+  ];
+  for (const [status, type] of owned) {
+    assert.equal(billedNothing(status, envelope(type)), true, `${status} ${type} is a refusal the provider owns`);
   }
   // And everything ambiguous keeps its reservation: the call may have been
   // answered and billed on the far side of a connection we lost. 408 is a
   // timeout wearing a 4xx, so it is named out with the 5xx family.
   for (const status of [408, 500, 502, 503, 504, 529, 200, 0, NaN]) {
-    assert.equal(billedNothing(status), false, `${status} must keep its reservation`);
+    assert.equal(billedNothing(status, envelope("invalid_request_error")), false, `${status} must keep its reservation`);
   }
+});
+
+test("a 4xx that is not the provider's own words keeps its reservation", () => {
+  // THE STATUS ALONE PROVES NOTHING. api.anthropic.com is behind Cloudflare —
+  // the docs say so of 413, "Cloudflare returns this error before the request
+  // reaches the API servers" — so a 4xx on this socket may have been written
+  // by a middlebox that never saw whether the call it proxied was run and
+  // billed. Only the documented envelope is the provider speaking.
+  const notTheProvider = [
+    "<!DOCTYPE html><html><head><title>403 Forbidden</title></head></html>",
+    "error code: 1015",
+    "",
+    "{",
+    JSON.stringify({ message: "Forbidden" }),
+    // The envelope's shape but not its contents.
+    JSON.stringify({ type: "error", error: "rate_limit_error" }),
+    JSON.stringify({ type: "message", error: { type: "rate_limit_error" } })
+  ];
+  for (const body of notTheProvider) {
+    assert.equal(billedNothing(429, body), false, `a 429 carrying ${JSON.stringify(body).slice(0, 40)} must keep its reservation`);
+  }
+  // An ALLOW-list, because the versioning policy says the type values "may
+  // expand ... over time": a name written into the API after this file must
+  // arrive as ambiguous, not as free. `conflict_error` is the live example —
+  // not documented against the Messages route, so it is not on the list.
+  for (const type of ["conflict_error", "api_error", "overloaded_error", "timeout_error", "something_new_error"]) {
+    assert.equal(billedNothing(400, envelope(type)), false, `${type} is not a refusal we can prove cost nothing`);
+  }
+  // Non-strings are not envelopes either, and neither is the object shape
+  // arriving already parsed by accident.
+  for (const body of [null, undefined, 0, [], { type: "error" }]) {
+    assert.equal(billedNothing(400, body), false, "an unreadable body keeps its reservation");
+  }
+});
+
+test("nothing Ask sends can carry the call past the window the ceiling rests on", () => {
+  // ONE_CALL_MAX is `context window + max_tokens`, and that is an upper bound
+  // only while the window itself is enforced on this request. Two documented
+  // features would lift it, both silently:
+  //   - server-side COMPACTION, which lets "the conversation continue past the
+  //     context window limit";
+  //   - server-side TOOLS, whose spend arrives under `server_tool_use`, a name
+  //     the ledger does not count at all.
+  // Both are reached through an `anthropic-beta` header, so its absence is the
+  // thing to hold still.
+  const sources = [
+    "supabase/functions/_shared/askLoop.ts",
+    "supabase/functions/_shared/askLearn.ts",
+    "supabase/functions/_shared/askTools.ts",
+    "supabase/functions/ask/index.ts"
+  ];
+  for (const p of sources) {
+    assert.ok(!/anthropic-beta/i.test(read(p)), `${p} sends a beta header; the per-call ceiling must be re-verified against it`);
+  }
+  // Every tool Ask offers is ours and runs here — a server-side tool is named
+  // by a bare `type` with no `input_schema`, and would be billed outside the
+  // four names the ledger reads.
+  const loop = read("supabase/functions/_shared/askLoop.ts");
+  assert.ok(!/"type":\s*"(web_search|code_execution|computer|bash|text_editor|web_fetch|memory)/.test(loop));
 });
 
 test("both models Ask actually calls have a documented ceiling", () => {
@@ -195,7 +266,10 @@ test("every paid call reserves before it goes and settles from the provider's ow
 test("an ambiguous failure keeps its reservation and only a provider refusal settles at nothing", () => {
   // The three ways a call can end without a readable bill — aborted, refused,
   // unreadable — and only the middle one may be written down as nought.
-  assert.match(ask, /if \(billedNothing\(res\.status\)\) \{\s*\n\s*const back = await admin\.rpc\("ask_settle_unbilled"/);
+  // The body is read from a CLONE and handed to billedNothing beside the
+  // status: the status alone cannot say whose refusal this was.
+  assert.match(ask, /const said = await res\.clone\(\)\.text\(\)/);
+  assert.match(ask, /if \(billedNothing\(res\.status, said\)\) \{\s*\n\s*const back = await admin\.rpc\("ask_settle_unbilled"/);
   // The abort path settles NOTHING: our fetch giving up proves nothing about
   // what the provider did with the request.
   const abort = ask.slice(ask.indexOf("} catch (e) {", ask.indexOf("res = await fetch(url, { ...init,")), ask.indexOf("if (!res.ok) {"));

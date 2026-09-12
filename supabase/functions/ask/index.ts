@@ -368,7 +368,16 @@ Deno.serve(async (req) => {
         // 5xx, a 529 or a gateway timeout is AMBIGUOUS and keeps its
         // reservation: the call may have been answered and billed on the far
         // side of a connection we lost.
-        if (billedNothing(res.status)) {
+        //
+        // THE BODY AND NOT JUST THE STATUS. api.anthropic.com sits behind
+        // Cloudflare, so a 4xx here may have been written by a middlebox that
+        // never saw what the API did with the request. Only the provider's own
+        // error envelope is the provider's own statement, so it is what is
+        // read. Cloned, because the caller still has to read the original to
+        // build its refusal; an unreadable body is an empty string, which is
+        // not an envelope and therefore keeps the reservation.
+        const said = await res.clone().text().catch(() => "");
+        if (billedNothing(res.status, said)) {
           const back = await admin.rpc("ask_settle_unbilled", { _call: callId });
           if (back.error) await logError("ask", `A refusal (${res.status}) could not be settled at nothing, so its reservation stands: ${back.error.message}`, { user: userId, model });
         }

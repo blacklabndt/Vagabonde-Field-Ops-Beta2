@@ -1,9 +1,11 @@
--- Probes for draft-the-ceiling-is-charged-before-the-call.sql
+-- Probes for 20260912034222_the_ceiling_is_charged_before_the_call.sql
 --
--- NOT YET RUN. The draft beside this file is not applied: the session that
--- wrote both had no psql, no Supabase CLI login and no database tool at all.
--- Run these AFTER applying the draft, and do not move the draft into
--- supabase/migrations/ until they have passed.
+-- APPLIED and RUN. The migration is live at version 20260912034222 (with its
+-- follow-up 20260912041955), and the two-session half at the foot of this
+-- file — the claim a single connection cannot make — was run on 12 Sept with
+-- two concurrent connections. The transcript, including the control that
+-- separates the lock from the ceiling, is in
+-- docs/reviews/2026-09-12-ask-concurrency-probes.md.
 --
 -- Everything up to the two-session section is inside one transaction and
 -- ROLLS BACK: these write real rows to ask_calls and ask_spend, and a
