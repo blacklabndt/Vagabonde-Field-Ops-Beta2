@@ -781,7 +781,7 @@ export function LoadingRow({ cols = 1, label = "Loading…" }) {
   );
 }
 
-export function Toast({ message, tone = "ok", onDone, duration = 2600, action = null }) {
+export function Toast({ message, tone = "ok", onDone, duration = 2600, action = null, at = 0 }) {
   // onDone arrives as a fresh inline arrow each render; a ref keeps the timer
   // from re-arming on unrelated App re-renders. Left in the deps it restarted
   // the countdown every render, so under steady churn the toast never left.
@@ -797,7 +797,13 @@ export function Toast({ message, tone = "ok", onDone, duration = 2600, action = 
     // Re-armed per message, so a second save mid-fade resets the clock
     // instead of inheriting the tail of the first one's timer.
     return () => clearTimeout(t);
-  }, [message, duration, tone]);
+    // `at` is the bus's own stamp for THIS toast, and it is in the deps
+    // because the text is not an identity: "Removed Bob", Undo, "Removed Bob"
+    // again is a second removal with its own Undo, and keyed on the words
+    // alone the effect did not re-run — the second toast inherited the tail
+    // of the first one's timer and the first one's onDone took it off the
+    // screen early, Undo and all.
+  }, [message, duration, tone, at]);
 
   if (!message) return null;
   const bad = tone === "error";

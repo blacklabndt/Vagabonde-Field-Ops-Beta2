@@ -1461,7 +1461,7 @@ export function App() {
   // number. Not awaited by the card: the done sentence says where to look.
   const runChaseFromAsk = async due => {
     const stop = { now: false };
-    const progress = (done, total) => Toasts.show(`Chasing… ${done} of ${total}`, "ok", true, { label: "Stop", onClick: () => { stop.now = true; } });
+    const progress = (done, total) => Toasts.show(`Chasing… ${done} of ${total}`, "ok", true, { label: "Stop", owner: "chase", onClick: () => { stop.now = true; } });
     progress(0, due.length);
     Toasts.mute();
     let out;
@@ -1474,12 +1474,12 @@ export function App() {
       }, { concurrency: CHASE_WORKERS, minInterval: CHASE_INTERVAL_MS, shouldStop: () => stop.now, onProgress: progress });
     } catch (e) {
       Toasts.unmute();
-      Toasts.clearAction();
+      Toasts.clearAction("chase");
       Toasts.show(`The chase stopped: ${e.message || "try again from the tracker."}`, "error", true);
       return;
     }
     Toasts.unmute();
-    Toasts.clearAction();
+    Toasts.clearAction("chase");
     const parts = [`Chased ${out.sent.length} of ${due.length}`];
     if (out.stopped && out.remaining) parts.push(`stopped — ${out.remaining} not attempted`);
     if (out.failed.length) {
@@ -1961,6 +1961,7 @@ export function App() {
       )}
       {updateReady && !updateDeferred && <UpdateBanner onLater={() => setUpdateDeferred(true)} />}
       <Toast message={toast && toast.text} tone={toast && toast.tone} action={toast && toast.action}
+        at={toast ? toast.at : 0}
         duration={toast && toast.action ? 6000 : undefined} onDone={() => setToast(null)} />
     </div>
   );
