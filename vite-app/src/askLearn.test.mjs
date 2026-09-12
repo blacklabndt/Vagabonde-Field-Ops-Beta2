@@ -7,7 +7,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   learnPrompt, parseLearned, roomFor, learnedLines, forgetWords,
-  LEARN_MODEL, MAX_LEARNED, NOTE_CHARS, MAX_ADD
+  LEARN_MODEL, MAX_LEARNED, NOTE_CHARS, MAX_ADD, MAX_LEARNED_CHARS
 } from "../../supabase/functions/_shared/askLearn.ts";
 
 test("the extractor is told to keep how the app works and nothing about records or people", () => {
@@ -92,4 +92,35 @@ test("a note cannot close the block it sits in, nor start a line of its own", ()
 test("forgetting is worded from the note, shortened when long", () => {
   assert.deepEqual(forgetWords("Reports are sent from Job detail."), { summary: 'Forget "Reports are sent from Job detail."?', done: 'Forgotten: "Reports are sent from Job detail.".' });
   assert.match(forgetWords("y".repeat(200)).summary, /^Forget "y{117}…"\?$/);
+});
+
+test("a full table of notes is capped, the newest kept, and the block says how many are not shown", () => {
+  // The block rides on EVERY call of the loop, so a full table of long notes
+  // is paid for once per call and not once per question. Rows arrive oldest
+  // first, so the oldest are the ones that go.
+  const rows = Array.from({ length: MAX_LEARNED }, (_, i) => ({
+    id: `n${i}`, note: `note ${i} `.padEnd(NOTE_CHARS, "y"), created_at: "x", profiles: null
+  }));
+  const block = learnedLines(rows, "f3nc3");
+  const kept = block.split("\n").filter(l => l.startsWith("- "));
+
+  assert.ok(kept.length < rows.length, "a full table does not all fit");
+  assert.ok(kept.join("\n").length <= MAX_LEARNED_CHARS, "what is kept is inside the cap");
+  assert.match(block, new RegExp(`The ${rows.length - kept.length} oldest notes are not shown`));
+  assert.match(kept[kept.length - 1], /^- \[a crew member\] note 199 /, "the newest note is kept");
+  assert.equal(kept.some(l => l.startsWith("- [a crew member] note 0 ")), false, "the oldest went");
+  // The words about the drop are OURS and sit above the fence, where a note
+  // cannot be mistaken for them.
+  assert.ok(block.indexOf("oldest notes are not shown") < block.indexOf("<learned f3nc3>"));
+});
+
+test("a handful of notes says nothing about dropping any, and one long note always survives", () => {
+  const few = learnedLines([{ id: "a", note: "Cancel approval is on the ticket row.", created_at: "x", profiles: null }], "f3nc3");
+  assert.equal(/not shown/.test(few), false);
+
+  // One note over the cap on its own is kept whole rather than leaving an
+  // empty block: the column's check holds a note to NOTE_CHARS, so the
+  // overshoot is bounded by one note's length.
+  const huge = learnedLines([{ id: "a", note: "z".repeat(MAX_LEARNED_CHARS + 500), created_at: "x", profiles: null }], "f3nc3");
+  assert.equal(huge.split("\n").filter(l => l.startsWith("- ")).length, 1);
 });

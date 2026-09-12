@@ -291,7 +291,9 @@ test("a failed tool read is logged, and what the model may repeat is masked by t
   // than useless — masking without logging moves the blindness, and logging
   // without masking is the disclosure.
   const loop = shared("askLoop.ts");
-  assert.match(loop, /const words = isPlain\(e\) \? `The read failed: \$\{\(e as Error\)\.message\}` : TOOL_TROUBLE;/,
+  // `words` is declared above the try since the byte budget counts it, so
+  // the assignment and not the declaration is what this pins.
+  assert.match(loop, /words = isPlain\(e\) \? `The read failed: \$\{\(e as Error\)\.message\}` : TOOL_TROUBLE;/,
     "askLoop no longer judges a tool error by the mark");
   assert.match(loop, /const TOOL_TROUBLE = "[^"]+";/, "the fixed sentence is gone");
   assert.doesNotMatch(loop.slice(loop.indexOf("const TOOL_TROUBLE")).split("\n")[0], /\$\{/,

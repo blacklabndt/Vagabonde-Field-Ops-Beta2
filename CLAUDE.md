@@ -460,7 +460,22 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   against a scripted API (eight reads or 100 s a question, then it answers
   from what it has; every tool result is wrapped as records the prompt
   calls data and never an instruction — a client rep's query text is the
-  field an outsider writes). The key is `app_settings.anthropic_api_key`
+  field an outsider writes). What the DATABASE puts into that conversation
+  is bounded too, and was not: a tool result went in whole and is re-sent as
+  input on every later call, so one read of a thousand tickets could cost a
+  question a hundred times what another cost. `MAX_TOOL_RESULT_CHARS`
+  (20,000) cuts one result — and SAYS it cut it, mid-record, because a
+  trimmed list with no word about it is read as a complete short one —
+  and `MAX_TOOL_TOTAL_CHARS` (80,000) is all of them together with the
+  model's own tool_use blocks: spending it stops the reading and answers
+  from what is there, the third of the same three stops. The round that
+  spends it still answers every block asked for, since the API refuses a
+  turn leaving a tool_use unanswered. The crew's notes are capped where
+  they are built (`MAX_LEARNED_CHARS`, 20,000 in askLearn.ts; the oldest
+  go and the block says how many). So the input of any one call is
+  arithmetic — the system message, the windowed thread, the notes and at
+  most one budget of results — which is what a spending limit has to rest
+  on. The key is `app_settings.anthropic_api_key`
   (Admin screen, env fallback, in APP_SETTINGS_SECRETS); without one the
   function refuses in plain words. The thread lives in memory
   (`askThread.js`, forgotten at sign-out beside the chat drafts) and
