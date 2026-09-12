@@ -58,10 +58,25 @@ export const MAX_TURN_CHARS = 4000;
 // where they are built) and at most MAX_TOOL_TOTAL_CHARS of this.
 export const MAX_TOOL_RESULT_CHARS = 20_000;
 export const MAX_TOOL_TOTAL_CHARS = 80_000;
-// Every one of those is counted in CHARACTERS — the unit the conversation
-// grows in and the one the model is billed on something like. Not bytes:
-// a name outside ASCII is more bytes than characters, and nothing here is
-// bounding a socket.
+// Say what each of the two is, because they are not the same kind of number
+// and reading one as the other is how a bound gets trusted too far:
+//
+//  - MAX_TOOL_TOTAL_CHARS is a SOFT threshold. It is asked before each tool
+//    and stops the reading once spent, so the conversation can pass it by at
+//    most ONE result — the first of a batch always runs, since the round
+//    would not have begun if the budget were already spent. It is not a
+//    guarantee that the total stays under 80,000; it is a guarantee that it
+//    stays under 80,000 plus one MAX_TOOL_RESULT_CHARS.
+//  - MAX_REQUEST_CHARS is a HARD ceiling, and the only one here that is:
+//    nothing is sent past it.
+//
+// Both count CHARACTERS of the serialised request — the unit the conversation
+// grows in and the unit every cap above is written in. NOT tokens: a token is
+// the model's own unit and its ratio to characters moves with the text, so no
+// number here is a token bound or a price. And not bytes: a name outside
+// ASCII is more bytes than characters, and nothing here is bounding a socket.
+// A reservation that has to be defensible in money starts from the payload's
+// UTF-8 length and a token ratio it states, not from these.
 //
 // The cost of a call is its input, and with the caps above the input is
 // arithmetic: the system message (~14k), the tool definitions (~24k), the

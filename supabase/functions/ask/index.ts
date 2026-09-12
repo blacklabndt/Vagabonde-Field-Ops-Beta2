@@ -38,7 +38,7 @@ import { shapeJobDraft, shapeTicketDraft, shapeJhaDraft } from "../_shared/askDr
 import { resolveRecipients, jhaSendGate, ticketSendGate, ticketApprovalAddress, jhaFileName, sendJhaWords, sendTicketWords, JHA_MESSAGE, REPORT_MESSAGE } from "../_shared/askSends.ts";
 import { isKind, localToUtc, checkRunAt, whenWords, labelFor, scheduleWords, cancelWords, rescheduleWords, splitList, reminderText, reminderWords, REPORT_SEND_ROLES } from "../_shared/scheduledSends.ts";
 import { askLoop, systemPrompt, windowTurns, API_URL, API_VERSION } from "../_shared/askLoop.ts";
-import { learnPrompt, parseLearned, roomFor, learnedLines, forgetWords, LEARN_MODEL, LEARN_MAX_TOKENS, MAX_LEARNED, type LearnedRow } from "../_shared/askLearn.ts";
+import { learnBody, parseLearned, roomFor, learnedLines, forgetWords, MAX_LEARN_REQUEST_CHARS, MAX_LEARNED, type LearnedRow } from "../_shared/askLearn.ts";
 import { knowledgeText, cleanContext, whereLines } from "../_shared/askKnowledge.ts";
 import { checkFile, fileWords, fileChars, MAX_FILES, type AskFile } from "../_shared/askFiles.ts";
 import { refuse, plainRefusal, loggedWords } from "../_shared/publicError.ts";
@@ -1001,11 +1001,21 @@ Deno.serve(async (req) => {
 // notes added, with their ids, for the card's "Learned:" line.
 async function learn(asUser: SupabaseClient, thread: unknown, answer: string, existing: LearnedRow[], apiKey: string, userId: string): Promise<LearnResult> {
   const turns = [...windowTurns(thread), { role: "assistant" as const, text: answer }];
-  const { system, user } = learnPrompt(turns, existing.map(e => ({ id: e.id, note: e.note })));
+  // Measured before a penny is spent, on the text that actually goes — the
+  // same rule the loop's own calls follow. Over the backstop the call is not
+  // made: the answer above it is right and already paid for, so the cost of
+  // being wrong here is a thing not remembered, not a question not answered.
+  // The office hears about it, because reaching this means the accounting in
+  // askLearn.ts is wrong somewhere and nothing else would say so.
+  const { payload, chars } = learnBody(turns, existing.map(e => ({ id: e.id, note: e.note })));
+  if (chars > MAX_LEARN_REQUEST_CHARS) {
+    await logError("ask", `the learning call was ${chars} characters, over the ${MAX_LEARN_REQUEST_CHARS} ceiling, and was not made`, { user: userId });
+    return { added: [], trouble: "This conversation was too long for Ask to learn anything from." };
+  }
   const res = await fetch(API_URL, {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": API_VERSION },
-    body: JSON.stringify({ model: LEARN_MODEL, max_tokens: LEARN_MAX_TOKENS, system, messages: [{ role: "user", content: user }] })
+    body: payload
   });
   if (!res.ok) return { added: [], trouble: null };
   const reply = (await res.json()) as { content?: { type: string; text?: string }[] };

@@ -5,10 +5,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
-  learnPrompt, parseLearned, roomFor, learnedLines, forgetWords,
-  LEARN_MODEL, MAX_LEARNED, NOTE_CHARS, MAX_ADD, MAX_LEARNED_CHARS
+  learnPrompt, learnBody, parseLearned, roomFor, learnedLines, forgetWords,
+  LEARN_MODEL, LEARN_MAX_TOKENS, MAX_LEARNED, NOTE_CHARS, MAX_ADD, MAX_LEARNED_CHARS,
+  MAX_LEARN_NOTES_CHARS, MAX_LEARN_REQUEST_CHARS
 } from "../../supabase/functions/_shared/askLearn.ts";
+import { MAX_TURNS, MAX_TURN_CHARS } from "../../supabase/functions/_shared/askLoop.ts";
 
 test("the extractor is told to keep how the app works and nothing about records or people", () => {
   const { system, user } = learnPrompt(
@@ -123,4 +126,71 @@ test("a handful of notes says nothing about dropping any, and one long note alwa
   // overshoot is bounded by one note's length.
   const huge = learnedLines([{ id: "a", note: "z".repeat(MAX_LEARNED_CHARS + 500), created_at: "x", profiles: null }], "f3nc3");
   assert.equal(huge.split("\n").filter(l => l.startsWith("- ")).length, 1);
+});
+
+// ── The learning call's own bound ────────────────────────────────────────
+//
+// Codex's finding, and it was real: the loop's input is arithmetic, but the
+// extractor's call is built from its own pieces — the whole notes table, the
+// windowed thread and the answer just given — and nothing counted them. The
+// bound existed on paper and was enforced nowhere.
+
+test("the learning request is measured on the text that goes, and the worst case is inside the ceiling", () => {
+  const uuid = "123e4567-e89b-12d3-a456-426614174000";
+  // The worst case any legitimate conversation reaches: a full table at the
+  // column's ceiling, a full thread window, and an answer of the loop's own
+  // MAX_TOKENS. The numbers are askLoop's MAX_TURNS x MAX_TURN_CHARS and the
+  // 330 the note column's check allows.
+  const existing = Array.from({ length: MAX_LEARNED }, (_, i) => ({ id: uuid, note: `n${i} `.padEnd(330, "y") }));
+  const turns = Array.from({ length: MAX_TURNS }, (_, i) => ({
+    role: i % 2 ? "assistant" : "user", text: "t".repeat(MAX_TURN_CHARS)
+  }));
+  turns.push({ role: "assistant", text: "a".repeat(32_000) });
+
+  const { payload, chars } = learnBody(turns, existing);
+  assert.equal(chars, payload.length, "the figure is the length of the very text that is sent");
+  assert.ok(chars <= MAX_LEARN_REQUEST_CHARS,
+    `the worst case (${chars}) must be inside the ceiling (${MAX_LEARN_REQUEST_CHARS})`);
+  // And the ceiling is a backstop, not a working limit: the worst case has to
+  // be comfortably under it or an ordinary long conversation would lose its
+  // learning.
+  assert.ok(chars < MAX_LEARN_REQUEST_CHARS * 0.9, "the ceiling leaves room over the worst case");
+
+  // The whole table is shown, because the extractor has to see the notes it
+  // may replace or duplicate.
+  assert.equal(/not shown here/.test(payload), false, "a full table still fits");
+  const body = JSON.parse(payload);
+  assert.equal(body.model, LEARN_MODEL);
+  assert.equal(body.max_tokens, LEARN_MAX_TOKENS);
+});
+
+test("notes past the notes cap drop oldest-first and the extractor is told the list is short", () => {
+  const existing = Array.from({ length: 400 }, (_, i) => ({ id: `n${i}`, note: `note ${i} `.padEnd(330, "y") }));
+  const { user } = learnPrompt([{ role: "user", text: "hello" }], existing);
+  const block = user.slice(user.indexOf("<notes>"), user.indexOf("</notes>"));
+  const lines = block.split("\n").filter(l => /^n\d+: /.test(l));
+
+  assert.ok(lines.length < existing.length, "a table twice the cap does not all fit");
+  assert.ok(lines.join("\n").length <= MAX_LEARN_NOTES_CHARS, "what is shown is inside the cap");
+  assert.match(lines[lines.length - 1], /^n399: /, "the newest note is shown");
+  assert.equal(lines.some(l => l.startsWith("n0: ")), false, "the oldest went");
+  // Silence here would have the extractor read a short list as the whole set
+  // and add again what it was not shown.
+  assert.match(user, new RegExp(`and ${existing.length - lines.length} older notes not shown here`));
+  assert.match(user, /do not assume the list is complete/);
+});
+
+test("the function checks the ceiling before it spends, and sends the text it measured", () => {
+  const src = readFileSync(new URL("../../supabase/functions/ask/index.ts", import.meta.url), "utf8");
+  const start = src.indexOf("async function learn(");
+  assert.ok(start > 0, "learn() is where it was");
+  const learn = src.slice(start, src.indexOf("\n}", src.indexOf("return { added, trouble };", start)));
+
+  const check = learn.indexOf("MAX_LEARN_REQUEST_CHARS");
+  const fetched = learn.indexOf("await fetch(");
+  assert.ok(check > 0 && check < fetched, "the ceiling is asked BEFORE the call, not after");
+  assert.match(learn, /body: payload/, "the text sent is the text that was measured");
+  assert.match(learn, /logError\("ask", `the learning call was/, "the office hears about a call not made");
+  // Learning is best effort: over the ceiling the answer still stands.
+  assert.match(learn, /return \{ added: \[\], trouble: "This conversation was too long/);
 });

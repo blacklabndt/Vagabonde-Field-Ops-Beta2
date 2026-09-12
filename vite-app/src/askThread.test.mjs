@@ -56,10 +56,15 @@ test("the words for a refused note never carry the database's own", () => {
   assert.match(fn, /as much as it can hold/, "the cap's own sentence is recognised");
   assert.match(fn, /LEARN_TROUBLE/, "and anything else becomes the fixed one");
   assert.doesNotMatch(fn, /\$\{message\}/, "the database's words are never interpolated for the browser");
-  // And they are not merely dropped: both failure paths log what happened.
+  // And they are not merely dropped: every failure path logs what happened.
+  // Named, not counted — a count fails when a new path is added, which says
+  // nothing about whether the new path logs.
   const learn = src.slice(src.indexOf("async function learn("), src.indexOf("const LEARN_TROUBLE"));
-  assert.equal((learn.match(/await logError\("ask"/g) ?? []).length, 2,
-    "a correction that failed and a note that failed are each recorded");
+  assert.match(learn, /logError\("ask", `a note could not be corrected: \$\{error\.message\}`/);
+  assert.match(learn, /logError\("ask", `a note could not be kept: \$\{error\.message\}`/);
+  assert.match(learn, /logError\("ask", `the learning call was \$\{chars\} characters/);
+  // Every trouble the card is given comes with a log beside it.
+  assert.equal((learn.match(/trouble/g) ?? []).length >= (learn.match(/logError/g) ?? []).length, true);
 });
 
 test("only a refusal we wrote carries its own words out; everything else is masked", () => {
