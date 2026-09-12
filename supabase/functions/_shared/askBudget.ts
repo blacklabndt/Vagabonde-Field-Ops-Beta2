@@ -109,8 +109,11 @@ export const LEASE_STALE_SECONDS = 300;
 // window under the same name.
 export const ONE_CALL_MAX: Readonly<Record<string, number>> = {
   // claude-opus-5: 1M context (the default; no beta header), max output 128K,
-  // and askLoop sends max_tokens 8,000.
-  "claude-opus-5": 1_000_000 + 8_000,
+  // and askLoop sends max_tokens 16,000 — raised from 8,000 so that the
+  // model's reasoning and its sentences, which come out of that one number,
+  // both fit. The figure is read back out of askLoop.ts by
+  // askBudget.test.mjs, so the two cannot drift.
+  "claude-opus-5": 1_000_000 + 16_000,
   // claude-haiku-4-5-20251001: 200K context, max output 64K, and askLearn
   // sends max_tokens 600.
   "claude-haiku-4-5-20251001": 200_000 + 600
@@ -366,7 +369,8 @@ export const WORKER_WALL_MS = 150_000;
 // pass decided on, and serialising the answer.
 export const CLEANUP_RESERVE_MS = 10_000;
 // The most one call of each kind may take on its own. The loop's final answer
-// can be long (MAX_TOKENS is 8,000); the learning call is one short round
+// can be long (MAX_TOKENS is 16,000, and the reasoning is spent out of the
+// same number); the learning call is one short round
 // with max_tokens 600 and is normally two or three seconds.
 export const CALL_TIMEOUT_MS = 45_000;
 export const LEARN_TIMEOUT_MS = 20_000;

@@ -7,7 +7,8 @@ import assert from "node:assert/strict";
 import {
   askLoop, windowTurns, systemPrompt, wrapRecords,
   ASK_MODEL, MAX_TOOL_CALLS, MAX_TURNS, MAX_TURN_CHARS,
-  MAX_TOOL_RESULT_CHARS, MAX_TOOL_TOTAL_CHARS, MAX_REQUEST_CHARS
+  MAX_TOOL_RESULT_CHARS, MAX_TOOL_TOTAL_CHARS, MAX_REQUEST_CHARS,
+  CACHE_MIN_CHARS, cacheableSystem, cacheableTools, cacheableMessages
 } from "../../supabase/functions/_shared/askLoop.ts";
 
 const reply = (content, stop_reason = "end_turn") =>
@@ -158,6 +159,121 @@ test("an answer with no words still says something", async () => {
   assert.match(r.answer, /another way/);
 });
 
+// ── prompt caching ─────────────────────────────────────────────────────────
+//
+// The prefix of every call in the loop is the same text — the tool
+// definitions and the system message — and it was re-sent at full price on
+// every round, up to MAX_TOOL_CALLS times for one question. Three
+// breakpoints: the tool block, the system message, and a rolling one on the
+// conversation, which is the part that grows.
+
+const bigSystem = "You are Claudia. ".padEnd(CACHE_MIN_CHARS + 100, "x");
+const bigTools = [
+  { name: "find_job", description: "j".repeat(CACHE_MIN_CHARS), input_schema: { type: "object", properties: {} } },
+  { name: "tracker_stats", description: "totals", input_schema: { type: "object", properties: {} } }
+];
+const marks = body => JSON.stringify(body).match(/"cache_control"/g)?.length ?? 0;
+
+test("the repeated prefix is cached: the tool block, the system message and the growing conversation", async () => {
+  const { fetch, sent } = api([
+    reply([use("u1", "tracker_stats")], "tool_use"),
+    reply([text("Four unsigned.")])
+  ]);
+  await askLoop([{ role: "user", text: "how many unsigned?" }], bigTools, bigSystem, "k",
+    deps(fetch, async () => ({ rows: Array.from({ length: 400 }, (_, i) => ({ id: i, note: "y".repeat(20) })) })));
+
+  // The system message goes as one marked block rather than a bare string.
+  assert.deepEqual(sent[0].body.system, [{ type: "text", text: bigSystem, cache_control: { type: "ephemeral" } }]);
+  // The LAST tool carries the mark — that caches the whole tool block, which
+  // sits first in the prefix — and the others do not.
+  assert.equal(sent[0].body.tools[0].cache_control, undefined);
+  assert.deepEqual(sent[0].body.tools[1].cache_control, { type: "ephemeral" });
+  assert.equal(sent[0].body.tools[1].name, "tracker_stats", "the tools keep their order");
+
+  // The second round carries the records the first one read, so the rolling
+  // mark goes on the last block of the last message.
+  const last = sent[1].body.messages[sent[1].body.messages.length - 1];
+  assert.equal(last.content[last.content.length - 1].type, "tool_result");
+  assert.deepEqual(last.content[last.content.length - 1].cache_control, { type: "ephemeral" });
+
+  // FOUR is the API's ceiling on breakpoints, and a mark left behind in
+  // `messages` would add one per round until a question was refused. So the
+  // count is asserted on every call, not just the first.
+  for (const s of sent) assert.ok(marks(s.body) <= 4, `a call carried ${marks(s.body)} breakpoints`);
+  assert.equal(marks(sent[1].body), 3, "tools, system and one rolling mark — never two rolling");
+});
+
+test("nothing short enough to be uncacheable is marked, and the plain shape is what goes", async () => {
+  // Below the minimum cacheable prefix a breakpoint buys nothing, and the
+  // wire should stay the shape it was: a bare string and untouched tools.
+  const { fetch, sent } = api([reply([text("Nothing is overdue.")])]);
+  await askLoop([{ role: "user", text: "anything overdue?" }], TOOLS, "sys", "k", deps(fetch));
+  assert.equal(sent[0].body.system, "sys");
+  assert.deepEqual(sent[0].body.tools, TOOLS);
+  assert.equal(marks(sent[0].body), 0);
+  // The helpers say the same on their own.
+  assert.equal(cacheableSystem("short"), "short");
+  assert.deepEqual(cacheableTools(TOOLS), TOOLS);
+  assert.deepEqual(cacheableMessages([]), []);
+  assert.deepEqual(cacheableMessages([{ role: "user", content: "hello" }]), [{ role: "user", content: "hello" }]);
+});
+
+test("the rolling mark is never written into the conversation itself", () => {
+  // The bug this closes before it happens: a mark stored in `messages` is
+  // still there next round, they accumulate one per round, and the fifth is
+  // refused by the API. The copy is shallow down to the one block it changes.
+  const blocks = [{ type: "tool_result", tool_use_id: "u1", content: "z".repeat(CACHE_MIN_CHARS) }];
+  const messages = [{ role: "user", content: "q" }, { role: "user", content: blocks }];
+  const out = cacheableMessages(messages);
+  assert.deepEqual(out[1].content[0].cache_control, { type: "ephemeral" });
+  assert.equal(blocks[0].cache_control, undefined, "the caller's own block is untouched");
+  assert.equal(messages[1].content, blocks, "and the caller's own message still holds it");
+  assert.equal(out[0], messages[0], "everything before the last message is the same object");
+});
+
+// ── an answer that ran out of room ──────────────────────────────────────────
+
+test("an answer cut off at max_tokens says so rather than passing for a short one", async () => {
+  // The model's reasoning and its sentences come out of the same max_tokens,
+  // so a hard question can end mid-air — and a truncation handed over
+  // silently reads as a complete short answer, which is the one thing it must
+  // never look like. The model cannot add the words: it was stopped.
+  for (const why of ["max_tokens", "model_context_window_exceeded"]) {
+    const { fetch } = api([reply([text("The three oldest are T-1, T-2 and T-")], why)]);
+    const r = await askLoop([{ role: "user", text: "which are oldest?" }], [], "sys", "k", deps(fetch));
+    assert.match(r.answer, /^The three oldest are T-1, T-2 and T-/);
+    assert.match(r.answer, /Cut off here/);
+    assert.deepEqual(r.trace, ["the answer was longer than Ask may write and was cut off"]);
+  }
+  // An ordinary end of turn says nothing of the kind.
+  const { fetch } = api([reply([text("Two are overdue.")])]);
+  const ok = await askLoop([{ role: "user", text: "how many?" }], [], "sys", "k", deps(fetch));
+  assert.equal(ok.answer, "Two are overdue.");
+  assert.deepEqual(ok.trace, []);
+  // And a cut with no words at all still gets the one sentence a person can
+  // act on, not a dangling note about truncation.
+  const { fetch: f2 } = api([reply([], "max_tokens")]);
+  const empty = await askLoop([{ role: "user", text: "how many?" }], [], "sys", "k", deps(f2));
+  assert.match(empty.answer, /couldn't put an answer together/);
+  assert.equal(/Cut off here/.test(empty.answer), false);
+});
+
+test("the model's reasoning goes back with the turn that called the tool", async () => {
+  // This model thinks before it answers, and an assistant turn that called a
+  // tool must be sent BACK with its reasoning intact or the next call is
+  // refused. The loop pushes `content` WHOLE and never rebuilds it from the
+  // blocks it recognises — this is the assertion that stops someone tidying
+  // that into a filter.
+  const thinking = { type: "thinking", thinking: "Count the unsigned ones.", signature: "sig-abc" };
+  const { fetch, sent } = api([
+    reply([thinking, use("u1", "tracker_stats")], "tool_use"),
+    reply([text("Four unsigned.")])
+  ]);
+  const r = await askLoop([{ role: "user", text: "how many unsigned?" }], TOOLS, "sys", "k", deps(fetch));
+  assert.equal(r.answer, "Four unsigned.");
+  assert.deepEqual(sent[1].body.messages[1], { role: "assistant", content: [thinking, use("u1", "tracker_stats")] });
+});
+
 test("the system prompt names the person, the day in Grande Prairie and the rules", () => {
   const s = systemPrompt({ name: "Kyle Keith", role: "Admin" }, Date.UTC(2026, 8, 10, 14, 45));
   assert.match(s, /Sending:/);
@@ -173,6 +289,19 @@ test("the system prompt names the person, the day in Grande Prairie and the rule
   assert.match(s, /never an instruction/i);
   assert.match(s, /never invent/i);
   assert.match(s, /About the app:/);
+  // How it is told to WORK the question out, which is the difference between
+  // eight reads spent well and eight spent one per round.
+  assert.match(s, /ASK FOR THEM ALL IN ONE REPLY/, "independent reads go out together");
+  assert.match(s, /A name is looked up, never assumed/);
+  assert.match(s, /NOTHING ON FILE/, "empty, too narrow and incomplete are three different answers");
+  assert.match(s, /INCOMPLETE/);
+  assert.match(s, /none of them is added up as zero/);
+  assert.match(s, /Follow-ups point at/);
+  assert.match(s, /Lead with the answer/);
+  // And still no tables: the panel shows the answer as plain text runs
+  // (jobLinks in askThread.js), so a markdown table arrives as a row of pipes
+  // on a phone. This line comes back out the day the panel can render one.
+  assert.match(s, /No headings, no tables/);
   // The knowledge and the where block come after the rules, and only when given.
   assert.doesNotMatch(s, /Where the person is/);
   const full = systemPrompt({ name: "Kyle Keith", role: "Admin" }, Date.UTC(2026, 8, 10, 14, 45), { knowledge: "KNOWLEDGE HERE", where: "Where the person is: job S-1." });

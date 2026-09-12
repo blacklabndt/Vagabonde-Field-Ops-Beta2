@@ -109,12 +109,62 @@ test("a full table of notes is capped, the newest kept, and the block says how m
 
   assert.ok(kept.length < rows.length, "a full table does not all fit");
   assert.ok(kept.join("\n").length <= MAX_LEARNED_CHARS, "what is kept is inside the cap");
-  assert.match(block, new RegExp(`The ${rows.length - kept.length} oldest notes are not shown`));
+  assert.match(block, new RegExp(`${rows.length - kept.length} notes are not shown`));
   assert.match(kept[kept.length - 1], /^- \[a crew member\] note 199 /, "the newest note is kept");
   assert.equal(kept.some(l => l.startsWith("- [a crew member] note 0 ")), false, "the oldest went");
+  // With no question to rank against, nothing scores and age decides, exactly
+  // as it did before ranking existed: what is kept is the newest run.
+  const numbers = kept.map(l => Number(/note (\d+) /.exec(l)[1]));
+  assert.deepEqual(numbers, [...numbers].sort((a, b) => a - b), "the block reads oldest first");
+  assert.equal(numbers[numbers.length - 1] - numbers[0], numbers.length - 1, "with no question the newest run is kept");
   // The words about the drop are OURS and sit above the fence, where a note
   // cannot be mistaken for them.
-  assert.ok(block.indexOf("oldest notes are not shown") < block.indexOf("<learned f3nc3>"));
+  assert.ok(block.indexOf("notes are not shown") < block.indexOf("<learned f3nc3>"));
+});
+
+test("when the notes will not all fit, the question decides which are shown", () => {
+  // The hole this closes: a full table is three times the cap, so two notes
+  // in three were dropped on every question — by AGE, which is not the
+  // question. Here one old note is the only one about dose, and it survives
+  // 199 newer notes about something else.
+  const rows = Array.from({ length: MAX_LEARNED }, (_, i) => ({
+    id: `n${i}`,
+    note: (i === 0 ? "Dose readings come off the badge reader, " : `Chase resends the approval link ${i}, `).padEnd(NOTE_CHARS, "y"),
+    created_at: "x",
+    profiles: null
+  }));
+  const asked = learnedLines(rows, "f3nc3", "where do the dose readings come from?");
+  assert.match(asked, /Dose readings come off the badge reader/, "the one note that bears on the question is kept");
+  // And it is dropped when the question is about something else, which is the
+  // other half of the claim: this is ranking, not pinning.
+  const other = learnedLines(rows, "f3nc3", "how do I chase an unsigned ticket?");
+  assert.equal(/Dose readings come off the badge reader/.test(other), false);
+
+  // The newest few are kept whatever they score: a correction arrives as a
+  // new note, and a new note has not been asked about yet.
+  const newest = rows[MAX_LEARNED - 1].note.slice(0, 40);
+  assert.ok(learnedLines(rows, "f3nc3", "where do the dose readings come from?").includes(newest),
+    "the newest note survives a question it has nothing to do with");
+});
+
+test("notes covering the same ground as an earlier one say so, so the later one can win", () => {
+  const rows = [
+    { id: "a", note: "The Chase button resends the approval link for unsigned tickets.", created_at: "x", profiles: null },
+    { id: "b", note: "Chase resends the approval link for every unsigned ticket.", created_at: "y", profiles: { name: "Kyle", role: "Admin" } },
+    { id: "c", note: "Dose is read from the badge reader each quarter.", created_at: "z", profiles: null }
+  ];
+  const block = learnedLines(rows, "f3nc3");
+  const lines = block.split("\n").filter(l => l.startsWith("- "));
+  assert.equal(/same ground/.test(lines[0]), false, "the first of a pair is not marked");
+  assert.match(lines[1], /\[covers the same ground as an earlier note\]$/);
+  assert.equal(/same ground/.test(lines[2]), false, "a note about something else is not marked");
+  // And the prompt says what to do about it, above the fence.
+  assert.match(block, /prefer an Admin's, and the later of the two/);
+  assert.ok(block.indexOf("prefer an Admin's") < block.indexOf("<learned f3nc3>"));
+  // The marking is about WORDS and never about meaning: nothing here can tell
+  // agreement from contradiction, and the words above the fence do not claim
+  // it can.
+  assert.equal(/contradict|disagrees with each other/.test(block), false);
 });
 
 test("a handful of notes says nothing about dropping any, and one long note always survives", () => {

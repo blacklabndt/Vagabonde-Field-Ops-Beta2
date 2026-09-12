@@ -468,7 +468,9 @@ test("both models' per-call ceilings are the max_tokens the code actually sends"
   // output halves are OURS. A raised answer budget with this table left alone
   // would leave the bound too small in the unsafe direction, nothing failing.
   const loop = read("supabase/functions/_shared/askLoop.ts");
-  const sends = Number(/const MAX_TOKENS = (\d+)/.exec(loop)?.[1]);
+  // `[\d_]` because a five-figure number is written 16_000 in this codebase,
+  // and a regex that stopped at the underscore read it as 16.
+  const sends = Number(/const MAX_TOKENS = ([\d_]+)/.exec(loop)?.[1].replace(/_/g, ""));
   assert.ok(sends > 0, "askLoop's max_tokens could not be read out of the source");
   assert.equal(ONE_CALL_MAX[ASK_MODEL], 1_000_000 + sends,
     ASK_MODEL + "'s ceiling must be its context window plus the max_tokens askLoop sends");
