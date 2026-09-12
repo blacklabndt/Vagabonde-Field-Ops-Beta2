@@ -297,6 +297,12 @@ test("the system prompt names the person, the day in Grande Prairie and the rule
   assert.match(s, /INCOMPLETE/);
   assert.match(s, /none of them is added up as zero/);
   assert.match(s, /Follow-ups point at/);
+  // The calculate tool is request-local (askCalculate.ts): a source_id from an
+  // earlier question is gone, and a refusal must not send it back to adding
+  // the rows up in its head — which is the habit the tool exists to replace.
+  assert.match(s, /comes back with a source_id/);
+  assert.match(s, /do not fall back to adding them up in your head/);
+  assert.match(s, /on a follow-up, read again for a fresh one/);
   assert.match(s, /Lead with the answer/);
   // And still no tables: the panel shows the answer as plain text runs
   // (jobLinks in askThread.js), so a markdown table arrives as a row of pipes
