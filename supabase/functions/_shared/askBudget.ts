@@ -137,26 +137,49 @@ interface UsageBlock {
   output_tokens?: unknown;
 }
 
-const whole = (v: unknown): number => {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
-};
+// ONE COUNTER THE LEDGER IS WILLING TO BELIEVE: present, a JSON number, a
+// whole number, and not negative. Anything else is MALFORMED, and malformed
+// answers null for the WHOLE BLOCK rather than nought for the one field.
+//
+// This is Codex's finding and it was right. The old reading coerced per
+// field, so `{"usage":{"input_tokens":null}}` settled a call at 0 in and 0
+// out — a nought written over a cost nobody could read, which is the one
+// thing every other path in this file refuses to do. A string that merely
+// looks like a number is malformed too: the API documents these as integers,
+// so a string means we are not reading the body we think we are.
+const counter = (v: unknown): number | null =>
+  typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null;
 
 // What one answered call cost, from the body the provider returned. A reply
-// with no usage block, or one shaped differently than expected, answers null
-// and NOT zero: an unreadable bill is not a free call, and the caller holds
-// the estimate instead of writing a nought over it.
+// with no usage block, one shaped differently than expected, or one carrying
+// a counter that cannot be read answers null and NOT zero: an unreadable bill
+// is not a free call, and the caller holds the reservation instead of writing
+// a nought over it.
 export function usageTokens(body: unknown): { input: number; output: number } | null {
   if (!body || typeof body !== "object") return null;
   const u = (body as { usage?: unknown }).usage;
-  if (!u || typeof u !== "object") return null;
+  if (!u || typeof u !== "object" || Array.isArray(u)) return null;
   const b = u as UsageBlock;
-  const named = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"];
-  let any = false;
-  for (const k of named) if (k in b) any = true;
-  if (!any) return null;
-  const input = whole(b.input_tokens) + whole(b.cache_creation_input_tokens) + whole(b.cache_read_input_tokens);
-  return { input, output: whole(b.output_tokens) };
+  // MANDATORY, both of them. The Messages response documents `input_tokens`
+  // and `output_tokens` on every answer, so a reply missing or mangling
+  // either is a reply we cannot price — and an unpriced call keeps its
+  // reservation at the model's whole maximum.
+  const input = counter(b.input_tokens);
+  const output = counter(b.output_tokens);
+  if (input === null || output === null) return null;
+  // OPTIONAL, because a call that read and wrote no cache need not name
+  // them — but a value that IS there and cannot be read makes the total
+  // unknown, not smaller. `null` is read as absent rather than as malformed:
+  // that is how "no caching on this call" has been spelled before now, and
+  // holding a maximum against a good call is its own kind of wrong.
+  let cached = 0;
+  for (const v of [b.cache_creation_input_tokens, b.cache_read_input_tokens]) {
+    if (v === undefined || v === null) continue;
+    const n = counter(v);
+    if (n === null) return null;
+    cached += n;
+  }
+  return { input: input + cached, output };
 }
 
 // What one call reserves, and what it goes on holding when it cannot be
@@ -172,28 +195,76 @@ export function reserveFor(model: string): number {
   return most;
 }
 
-// The provider's own names for a refusal it gave BEFORE running anything.
-// Each is documented as a decision about the request rather than about an
-// answer: the format or content was wrong (including "prompt is too long" and
-// a spend limit the office set), the key was refused, billing, permission,
-// the route, the size, the rate. None of them reaches a model.
+// EACH NAME WITH THE ONE STATUS THE VENDOR DOCUMENTS IT AT, because the type
+// alone is not the statement. The errors page says `invalid_request_error`
+// "may also be used for other 4XX status codes not listed in this section" —
+// so that type arriving at 422 or 499 is the API declining something this
+// file has never read about, and the pairing is what keeps it ambiguous. A
+// documented pair is a decision we can name; anything else holds.
+//
+// What each pair rests on, sentence by sentence, since "the request was
+// refused" is not the same claim as "nothing was billed":
+//   400 invalid_request_error — "There was an issue with the format or content
+//     of your request": the request was not accepted, so no model ran. This is
+//     also the office's own spend limit ("When usage reaches a spend limit you
+//     set, requests return HTTP 400"), where access is blocked outright.
+//   401 authentication_error — the key is "malformed, revoked, or expired".
+//     Usage is metered per organization ("Limits are set at the organization
+//     level"); an unauthenticated call resolves to no organization to bill.
+//   402 billing_error — "There's an issue with your billing or payment
+//     information": the account is not in a state to be charged.
+//   403 permission_error — the key "does not have permission to use the
+//     specified resource": the resource was not used.
+//   404 not_found_error — "The requested resource was not found": no model was
+//     reached to run anything.
+//   413 request_too_large — the strongest of them, and explicit: "On the
+//     direct Claude API, Cloudflare returns this error before the request
+//     reaches the API servers."
+//   429 rate_limit_error — NOT on its own; see `rateLimitBilledNothing`.
 //
 // An ALLOW-list and never a deny-list, because Anthropic's versioning policy
 // says of these objects that "the values within these objects may expand, and
 // it is possible that the `type` values will grow over time". A name that
-// grows into the API after this file was written must therefore arrive as
-// AMBIGUOUS and keep its reservation — not as free. `conflict_error` (409) is
-// deliberately absent: it is not documented against the Messages route, and
-// unknown is the side to be wrong on.
-const REFUSED_BEFORE_RUNNING: readonly string[] = [
-  "invalid_request_error",
-  "authentication_error",
-  "billing_error",
-  "permission_error",
-  "not_found_error",
-  "request_too_large",
-  "rate_limit_error"
-];
+// grows into the API after this file was written arrives as AMBIGUOUS and
+// keeps its reservation. `conflict_error` (409) is deliberately absent: it is
+// not documented against the Messages route, and unknown is the side to be
+// wrong on.
+const REFUSED_BEFORE_RUNNING: Readonly<Record<string, number>> = {
+  invalid_request_error: 400,
+  authentication_error: 401,
+  billing_error: 402,
+  permission_error: 403,
+  not_found_error: 404,
+  request_too_large: 413,
+  rate_limit_error: 429
+};
+
+// A 429 IS THE ONE REFUSAL THE VENDOR GIVES US A REASON TO DISTRUST, which is
+// Codex's second point and it stands. Of the three rate limits, two are
+// decided before generation — "ITPM rate limits are estimated at the beginning
+// of each request", and RPM is a limit on requests — but the third is not:
+// "OTPM rate limits are evaluated in real time as output tokens are produced".
+// A refusal that can be reached while output is being produced is a refusal
+// that may already have been billed, and no sentence anywhere says otherwise.
+//
+// So a 429 settles at nothing only when the body says WHICH limit it was, and
+// the answer is one of the two that precede generation:
+//   - the spend cap, named outright in `error.details.error_code` as
+//     `enforced_spend_limit_reached`, of which the docs say "API usage pauses
+//     until 00:00 UTC on the first day of the next month" and "While usage is
+//     paused, API requests return HTTP 429". Paused usage is not billed usage.
+//   - a message naming the request or input-token limit; the rate-limits page
+//     says a 429 arrives "describing which rate limit was exceeded".
+// A message that names output tokens, a message we cannot read, an
+// acceleration-limit 429 whose wording we have never seen: all held. That is
+// the conservative refusal Codex asked for, and it costs a reservation.
+function rateLimitBilledNothing(err: { message?: unknown; details?: unknown }): boolean {
+  const d = err.details;
+  if (d && typeof d === "object" && (d as { error_code?: unknown }).error_code === "enforced_spend_limit_reached") return true;
+  const said = typeof err.message === "string" ? err.message.toLowerCase() : "";
+  if (!said || said.includes("output token")) return false;
+  return said.includes("input token") || said.includes("requests per minute") || said.includes("request rate");
+}
 
 // Did this refusal prove that NOTHING was billed?
 //
@@ -214,10 +285,10 @@ const REFUSED_BEFORE_RUNNING: readonly string[] = [
 // gateway's HTML, a type we do not recognise: none of them is that statement,
 // and each keeps the reservation in full.
 //
-// A refusal the provider owns still settles at nought, because without that a
-// burst of rate-limit refusals would eat a day's ceiling with not a token
-// spent — denial by another road. Everything at 500 and above is ambiguous,
-// and so is 408: a timeout is not a refusal.
+// A refusal the provider owns AT ITS DOCUMENTED STATUS settles at nought,
+// because without that a burst of rate-limit refusals would eat a day's
+// ceiling with not a token spent — denial by another road. Everything at 500
+// and above is ambiguous, and so is 408: a timeout is not a refusal.
 export function billedNothing(status: number, body: unknown): boolean {
   if (!Number.isFinite(status) || status < 400 || status >= 500 || status === 408) return false;
   let parsed: unknown = body;
@@ -230,7 +301,11 @@ export function billedNothing(status: number, body: unknown): boolean {
   const err = envelope.error;
   if (!err || typeof err !== "object") return false;
   const named = (err as { type?: unknown }).type;
-  return typeof named === "string" && REFUSED_BEFORE_RUNNING.includes(named);
+  if (typeof named !== "string") return false;
+  // The type AND the status it is documented at; see the table's comment.
+  if (REFUSED_BEFORE_RUNNING[named] !== status) return false;
+  if (named === "rate_limit_error") return rateLimitBilledNothing(err as { message?: unknown; details?: unknown });
+  return true;
 }
 
 // There is deliberately no ceiling arithmetic in here any more. Admission is

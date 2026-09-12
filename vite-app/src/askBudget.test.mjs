@@ -35,15 +35,45 @@ test("the usage counted is every input the provider names, not just the first", 
 test("an unreadable bill is not a free call", () => {
   // Every one of these answers null and never {0,0}: a nought written over a
   // cost nobody could read is the ceiling's own blind spot.
-  for (const body of [null, undefined, "", 42, {}, { usage: null }, { usage: "12" }, { usage: {} }]) {
+  for (const body of [null, undefined, "", 42, {}, { usage: null }, { usage: "12" }, { usage: {} }, { usage: [] }]) {
     assert.equal(usageTokens(body), null, `${JSON.stringify(body)} must not read as a free call`);
   }
-  // A reply carrying only one of the four is still a reading — a real call
-  // with no output block is an input-only cost, not an unknown one.
-  assert.deepEqual(usageTokens({ usage: { input_tokens: 5 } }), { input: 5, output: 0 });
-  // Nonsense in a named field is nought for that field alone.
-  assert.deepEqual(usageTokens({ usage: { input_tokens: -9, output_tokens: "x" } }), { input: 0, output: 0 });
-  assert.deepEqual(usageTokens({ usage: { input_tokens: 3.9, output_tokens: 2.1 } }), { input: 3, output: 2 });
+});
+
+test("a malformed counter makes the whole bill unreadable, not the field nought", () => {
+  // CODEX'S FINDING, and it was right: the old reading coerced field by
+  // field, so every one of these settled a real call at 0 in and 0 out — a
+  // nought written over a cost nobody could read, which is the single thing
+  // this whole file exists to refuse.
+  const malformed = [
+    { input_tokens: null, output_tokens: 7 },          // the reported case
+    { output_tokens: 7 },                              // input missing
+    { input_tokens: 5 },                               // output missing
+    { input_tokens: -9, output_tokens: 7 },            // negative
+    { input_tokens: 5, output_tokens: -1 },
+    { input_tokens: 3.9, output_tokens: 2 },           // not whole
+    { input_tokens: "100", output_tokens: 7 },         // a string that looks like one
+    { input_tokens: 5, output_tokens: "x" },
+    { input_tokens: Number.NaN, output_tokens: 7 },
+    { input_tokens: Number.POSITIVE_INFINITY, output_tokens: 7 },
+    { input_tokens: true, output_tokens: 7 },
+    // An optional counter that IS there and cannot be read makes the total
+    // unknown, not smaller.
+    { input_tokens: 5, output_tokens: 7, cache_read_input_tokens: "300" },
+    { input_tokens: 5, output_tokens: 7, cache_creation_input_tokens: -20 },
+    { input_tokens: 5, output_tokens: 7, cache_creation_input_tokens: 1.5 }
+  ];
+  for (const usage of malformed) {
+    assert.equal(usageTokens({ usage }), null, `${JSON.stringify(usage)} must not read as a free call`);
+  }
+  // And what a good bill looks like: both mandatory counters whole, zero
+  // allowed, and the cache pair absent or explicitly null — that is how "no
+  // caching on this call" has been spelled, and holding a maximum against a
+  // good call is its own kind of wrong.
+  assert.deepEqual(usageTokens({ usage: { input_tokens: 0, output_tokens: 0 } }), { input: 0, output: 0 });
+  assert.deepEqual(
+    usageTokens({ usage: { input_tokens: 5, output_tokens: 7, cache_creation_input_tokens: null, cache_read_input_tokens: null } }),
+    { input: 5, output: 7 });
 });
 
 test("a call reserves the model's whole documented maximum, and holds it when it cannot settle", () => {
@@ -57,23 +87,26 @@ test("a call reserves the model's whole documented maximum, and holds it when it
   assert.equal(reserveFor("something-nobody-has-heard-of"), largest);
 });
 
-const envelope = (type, message = "no") =>
-  JSON.stringify({ type: "error", error: { type, message }, request_id: "req_011CSHoEeqs5C35K2UUqR7Fy" });
+const envelope = (type, message = "no", details) =>
+  JSON.stringify({ type: "error", error: details ? { type, message, details } : { type, message }, request_id: "req_011CSHoEeqs5C35K2UUqR7Fy" });
 
 test("only a refusal the provider gave before running anything settles at nothing", () => {
   // Without this a burst of rate-limit refusals eats a day's ceiling with not
   // a token spent, which is denial by another road.
   const owned = [
     [400, "invalid_request_error"], [401, "authentication_error"], [402, "billing_error"],
-    [403, "permission_error"], [404, "not_found_error"], [413, "request_too_large"],
-    [429, "rate_limit_error"],
-    // The errors page says `invalid_request_error` "may also be used for other
-    // 4XX status codes not listed in this section", so the type decides and
-    // the status only has to be a 4xx that is not a timeout.
-    [422, "invalid_request_error"]
+    [403, "permission_error"], [404, "not_found_error"], [413, "request_too_large"]
   ];
   for (const [status, type] of owned) {
     assert.equal(billedNothing(status, envelope(type)), true, `${status} ${type} is a refusal the provider owns`);
+  }
+  // THE TYPE AT A STATUS THE VENDOR DOES NOT DOCUMENT IT AT IS AMBIGUOUS. The
+  // errors page says `invalid_request_error` "may also be used for other 4XX
+  // status codes not listed in this section" — so that type at 422 is the API
+  // declining something this file has never read about, and an unread
+  // decision is not a proof of nothing billed.
+  for (const [status, type] of [[422, "invalid_request_error"], [499, "invalid_request_error"], [400, "not_found_error"], [403, "rate_limit_error"], [404, "request_too_large"]]) {
+    assert.equal(billedNothing(status, envelope(type)), false, `${status} ${type} is not a documented pair`);
   }
   // And everything ambiguous keeps its reservation: the call may have been
   // answered and billed on the far side of a connection we lost. 408 is a
@@ -113,6 +146,47 @@ test("a 4xx that is not the provider's own words keeps its reservation", () => {
   // arriving already parsed by accident.
   for (const body of [null, undefined, 0, [], { type: "error" }]) {
     assert.equal(billedNothing(400, body), false, "an unreadable body keeps its reservation");
+  }
+});
+
+test("a 429 settles at nothing only when the body names a limit checked before generation", () => {
+  // CODEX'S SECOND POINT, and the docs give a reason to distrust this one
+  // rather than mere silence: of the three rate limits, "ITPM rate limits are
+  // estimated at the beginning of each request" and RPM is a limit on
+  // requests, but "OTPM rate limits are evaluated in real time as output
+  // tokens are produced". A refusal reachable while output is being produced
+  // may already have been billed.
+  //
+  // The spend cap is the one the vendor states outright: "API usage pauses
+  // until 00:00 UTC on the first day of the next month" and "While usage is
+  // paused, API requests return HTTP 429". Paused usage is not billed usage,
+  // and `error.details.error_code` names it.
+  assert.equal(billedNothing(429, envelope(
+    "rate_limit_error",
+    "You have reached your API usage limits: your organization has crossed its monthly API usage threshold.",
+    { error_code: "enforced_spend_limit_reached" })), true);
+  // A 429 arrives "describing which rate limit was exceeded", so a message
+  // naming the request or input-token limit is one of the two decided at the
+  // start of a request.
+  for (const said of [
+    "Number of request tokens has exceeded your per-minute rate limit (input tokens per minute)",
+    "This request would exceed your organization's requests per minute rate limit"
+  ]) {
+    assert.equal(billedNothing(429, envelope("rate_limit_error", said)), true, said);
+  }
+  // And everything else holds its reservation in full: output tokens, a
+  // wording we have never seen (an acceleration limit, say), an empty message.
+  for (const said of [
+    "This request would exceed your organization's output tokens per minute rate limit",
+    "You have exceeded the rate limit for this model",
+    "",
+    "Too Many Requests"
+  ]) {
+    assert.equal(billedNothing(429, envelope("rate_limit_error", said)), false, `"${said}" must keep its reservation`);
+  }
+  // A details object that is not the documented shape is not the statement.
+  for (const details of [{ error_code: "something_else" }, { error_code: 7 }, "enforced_spend_limit_reached"]) {
+    assert.equal(billedNothing(429, envelope("rate_limit_error", "", details)), false, "an unread details object keeps its reservation");
   }
 });
 

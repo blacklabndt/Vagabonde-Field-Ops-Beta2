@@ -362,9 +362,13 @@ Deno.serve(async (req) => {
       }
       if (!res.ok) {
         // The one case where nothing was billed and the PROVIDER ITSELF says
-        // so: a refusal it gave before running anything. Those settle at
-        // nought, because without it a burst of rate-limit refusals would eat
-        // a day's ceiling with not a token spent — denial by another road. A
+        // so: a refusal it gave before running anything, at the status the
+        // vendor documents that refusal at. Those settle at nought, because
+        // without it a burst of refusals would eat a day's ceiling with not a
+        // token spent — denial by another road. A 429 is the one that does NOT
+        // qualify on its own: only output-token limits are "evaluated in real
+        // time as output tokens are produced", so a 429 has to name which
+        // limit it was before it counts as free. See billedNothing. A
         // 5xx, a 529 or a gateway timeout is AMBIGUOUS and keeps its
         // reservation: the call may have been answered and billed on the far
         // side of a connection we lost.
