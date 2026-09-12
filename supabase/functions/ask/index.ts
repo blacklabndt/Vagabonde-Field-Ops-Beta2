@@ -318,6 +318,7 @@ Deno.serve(async (req) => {
     // The one transport both paid calls go through. Counting it anywhere
     // else would mean counting it twice or missing a branch: the loop has
     // several ways to call and the learning pass is a different file.
+    let modelRound = 0;
     const meteredFetch = async (url: string, init: RequestInit): Promise<Response> => {
       // The model is read off the head of the body rather than parsed out of
       // it — the body can be 350,000 characters and this runs on every call.
@@ -350,6 +351,9 @@ Deno.serve(async (req) => {
         throw refuse(SPENT_WORDS);
       }
       if (got.data !== true) throw refuse(SPENT_WORDS);
+      // Capture before awaiting: each dispatched call keeps its own ordinal,
+      // including learning calls and attempts that fail before usage arrives.
+      const round = ++modelRound;
       let res: Response;
       try {
         res = await fetch(url, { ...init, signal: AbortSignal.timeout(wait) });
@@ -402,7 +406,7 @@ Deno.serve(async (req) => {
       // must never interrupt settlement or delivery of the answer.
       const logUsage = (settlement: string) => {
         try {
-          console.info(JSON.stringify({ event: "ask_model_usage", call_id: callId, model,
+          console.info(JSON.stringify({ event: "ask_model_usage", ask_id: requestId, round, call_id: callId, model,
             cache, output_tokens: cost?.output ?? null, settlement }));
         } catch { /* Telemetry cannot change billing or the answer. */ }
       };
