@@ -115,11 +115,32 @@ rollback;
 
 -- 8. The table's own rules still apply through the function: a route that is
 --    really a URL raises check_violation (23514) and is NOT swallowed as the
---    rate limit. Only unique_violation returns a word.
+--    rate limit. Only the LEDGER key's own collision returns a word.
 begin;
 select public.file_browser_crash(
   (select id from auth.users order by created_at limit 1),
   '2026-09-12T17:00', 'unknown', '/approve?token=abc', 'screen', '0.93-beta 2');
+rollback;
+
+-- 8b. And a uniqueness failure that is NOT this account's minute is a
+--     failure too. The ledger insert carries ON CONFLICT on its own key, so
+--     nothing else returns 'rate_limited' -- which matters, because a crash
+--     answered "filed" while nothing was written is exactly the silence this
+--     table exists to end. Force a collision on the office's copy instead.
+--     Expect unique_violation (23505) RAISED, not a returned word, and
+--     ledger 0 -- the minute is still free for the next report.
+begin;
+create unique index probe_one_browser_message on public.function_errors (message)
+  where function_name = 'browser';
+insert into public.function_errors (function_name, message, context)
+  values ('browser', 'ErrorBoundary (screen) on board: chunk-load', '{}'::jsonb);
+savepoint collide;
+select public.file_browser_crash(
+  (select id from auth.users order by created_at limit 1),
+  '2026-09-12T17:30', 'chunk-load', 'board', 'screen', '0.93-beta 2');
+rollback to collide;
+select count(*) as ledger_after_log_collision from public.browser_crashes
+ where minute_bucket = '2026-09-12T17:30';
 rollback;
 
 -- 9. A signed-in account cannot call it. security definer means the function

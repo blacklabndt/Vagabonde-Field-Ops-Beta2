@@ -79,9 +79,16 @@ revoke insert, update, delete on public.browser_crashes from anon, authenticated
 --
 -- A function body is a transaction. The ledger insert and the log insert are
 -- inside this one, so the office's copy cannot be the half that goes missing.
--- The unique_violation is caught here rather than at the client, which keeps
--- the rate limit exactly where it was -- the primary key, with no read before
--- the write -- while making the two rows atomic.
+-- The rate limit stays exactly where it was -- the primary key, with no read
+-- before the write -- while making the two rows atomic.
+--
+-- The collision is read off the ledger insert alone: ON CONFLICT on that one
+-- named key, and row_count = 0 IS the rate limit. An exception handler on
+-- unique_violation would have covered the WHOLE body, so a uniqueness
+-- failure on the office's copy would have come back as 'rate_limited' -- a
+-- crash reported as successfully filed and then invisible, with the minute
+-- spent. Every failure that is not this key propagates, rolls the whole
+-- function back, and reaches the caller as an error.
 --
 -- The log sentence is built HERE, out of the three columns the check
 -- constraints have already vetted, so nothing free-text can reach
@@ -104,11 +111,22 @@ language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
+declare
+  v_filed int;
 begin
   insert into public.browser_crashes
     (user_id, minute_bucket, error_category, route_id, component_id, app_version)
   values
-    (p_user_id, p_minute_bucket, p_error_category, p_route_id, p_component_id, p_app_version);
+    (p_user_id, p_minute_bucket, p_error_category, p_route_id, p_component_id, p_app_version)
+  on conflict (user_id, minute_bucket) do nothing;
+
+  -- The rate limit landing. Nothing is written -- not the ledger row and not
+  -- the office's copy -- and the caller is told ok, so a crash-looping phone
+  -- cannot fill the log it was meant to inform.
+  get diagnostics v_filed = row_count;
+  if v_filed = 0 then
+    return 'rate_limited';
+  end if;
 
   insert into public.function_errors (function_name, message, context)
   values (
@@ -122,10 +140,6 @@ begin
       'source', 'browser'));
 
   return 'filed';
-exception
-  -- The rate limit landing. Neither row is written and the caller is told ok,
-  -- so a crash-looping phone cannot fill the log it was meant to inform.
-  when unique_violation then return 'rate_limited';
 end;
 $$;
 

@@ -12,9 +12,6 @@
 
 import { validateCrashReport, minuteBucket, MAX_BODY_BYTES } from "../_shared/crashReport.ts";
 
-/** Postgres' unique_violation: the rate limit landing, not a failure. */
-export const UNIQUE_VIOLATION = "23505";
-
 /** The name the office's error log files a browser crash under. */
 export const LOG_FUNCTION_NAME = "browser";
 
@@ -27,10 +24,13 @@ export type CrashDeps = {
   /**
    * file_browser_crash: the ledger row and the office's copy, in ONE database
    * transaction. Returns the function's own word for what happened —
-   * "filed" or "rate_limited" — or the database's error. Two PostgREST
-   * inserts could not be wrapped in a transaction, which let the office's
-   * copy be the half that went missing while the rate limit refused every
-   * retry for the rest of the minute.
+   * "filed" or "rate_limited" — or the database's error. Anything that is
+   * not the ledger key's own collision rolls the whole call back and comes
+   * back here as an error — never as the rate limit.
+   *
+   * Two PostgREST inserts could not be wrapped in a transaction, which let
+   * the office's copy be the half that went missing while the rate limit
+   * refused every retry for the rest of the minute.
    */
   fileCrash: (args: Record<string, unknown>) => Promise<{ outcome: string | null; error: DbError }>;
   /** Insert into function_errors. Used for ONE thing: this endpoint's own failure. */
@@ -136,9 +136,11 @@ export async function handleReport(req: CrashRequest, deps: CrashDeps): Promise<
     minute_bucket: minuteBucket(deps.now())
   });
 
-  // The collision is caught inside the transaction and comes back as a word,
-  // not an error — but a database that raised it at us means the same thing.
-  if (outcome === RATE_LIMITED || (error && error.code === UNIQUE_VIOLATION)) {
+  // The collision comes back as a word and never as an error: the ledger
+  // insert carries ON CONFLICT on its own key, so the only uniqueness
+  // failure that can still reach here is some OTHER constraint — and that is
+  // a failure, not a report quietly called filed with the minute spent.
+  if (outcome === RATE_LIMITED) {
     return { status: 200, body: { ok: true, rateLimited: true } };
   }
 

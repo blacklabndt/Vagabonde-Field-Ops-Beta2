@@ -27,7 +27,7 @@ import {
   CATEGORIES, ROUTE_IDS, COMPONENT_IDS, APP_VERSION_RE, MAX_BODY_BYTES,
   categorize, cleanAppVersion, validateCrashReport, minuteBucket
 } from "../../supabase/functions/_shared/crashReport.ts";
-import { handleReport, readBounded, logMessage, UNIQUE_VIOLATION, LOG_FUNCTION_NAME, FILED, RATE_LIMITED } from "../../supabase/functions/report-error/handler.ts";
+import { handleReport, readBounded, logMessage, LOG_FUNCTION_NAME, FILED, RATE_LIMITED } from "../../supabase/functions/report-error/handler.ts";
 import { makeReportCrash, crashBody } from "./crashReport.js";
 
 const read = p => readFileSync(new URL("../../" + p, import.meta.url), "utf8");
@@ -186,7 +186,10 @@ test("the browser never writes the table, and a second report in a minute is swa
   assert.match(fn, /admin\.rpc\("file_browser_crash"/, "through the one function that is one transaction");
   assert.doesNotMatch(fn, /admin\.from\("browser_crashes"\)/,
     "a direct insert is a request of its own, and cannot share a transaction with another");
-  assert.equal(UNIQUE_VIOLATION, "23505");
+  // No error CODE decides the outcome here any more. A 23505 raised at this
+  // function is some other constraint failing, not this account's minute.
+  assert.doesNotMatch(read(HANDLER), /23505/,
+    "handler.ts reads a uniqueness code, and a collision on another table would pass as the rate limit");
   // The limit is the insert. A count first would let two crashing tabs both
   // read zero and both write. (Two racing reports are run, below.)
   for (const file of [FUNCTION, HANDLER]) {
@@ -219,8 +222,17 @@ test("the ledger row and the office's copy are one transaction, not two requests
   const fn = body[0];
   assert.match(fn, /insert into public\.browser_crashes/, "the ledger row is inside it");
   assert.match(fn, /insert into public\.function_errors/, "and so is the office's copy");
-  assert.match(fn, /when unique_violation then return 'rate_limited'/,
-    "the rate limit is still the key, caught inside the transaction");
+  // The collision is read off the LEDGER insert alone -- ON CONFLICT on its
+  // own named key, row_count = 0 -- not off an exception handler wrapped
+  // around the whole body. An exception handler would have turned a
+  // uniqueness failure on the office's copy into 'rate_limited': a crash
+  // answered "filed", invisible on the screen, with the minute spent.
+  assert.ok(fn.includes("on conflict (user_id, minute_bucket) do nothing"),
+    "the rate limit is the ledger's own key, and only that key");
+  assert.ok(/get diagnostics [a-z_]+ = row_count/.test(fn), "and the skip is what returns rate_limited");
+  assert.ok(!/\bexception\b/i.test(fn),
+    "an exception block covers the whole body, so another table's failure comes back as the rate limit");
+  assert.match(fn, /return 'rate_limited'/);
   assert.doesNotMatch(fn, /select\s+count|exists\s*\(/i, "no read-then-write crept in");
   assert.match(fn, /security definer/);
   assert.match(fn, /set search_path = public, pg_temp/, "a definer function pins its search_path");
@@ -532,6 +544,34 @@ test("a crash that cannot be filed is itself reported, and never half-filed", as
   const retry = await handleReport(jsonReq(good()).req, depsOf(working));
   assert.equal(retry.status, 200);
   assert.equal(working.crashes.size, 1);
+});
+
+test("a uniqueness failure that is not this account's minute is a failure, not the rate limit", async () => {
+  // The ledger insert carries ON CONFLICT on its own key, so "rate_limited"
+  // can only ever mean that key. A 23505 raised AT the caller is therefore
+  // some other constraint -- the office's copy, a migration half-applied --
+  // and the whole transaction rolled back with it. Reading the code as the
+  // rate limit would answer 200 ok to a crash that was written nowhere, and
+  // spend a minute that was never taken.
+  const db = fakeDb();
+  const collides = {
+    ...db,
+    fileCrash: async () => ({
+      outcome: null,
+      error: { code: "23505", message: "duplicate key value violates unique constraint function_errors_pkey" }
+    })
+  };
+  const res = await handleReport(jsonReq(good()).req, depsOf(collides));
+  assert.equal(res.status, 400, "a 23505 from another constraint was answered ok");
+  assert.notEqual(res.body.rateLimited, true, "and reported as the rate limit landing");
+  assert.equal(db.crashes.size, 0, "nothing on the ledger");
+  assert.equal(db.log.filter(r => r.function_name === "report-error").length, 1,
+    "the failure reaches the office instead of being swallowed as a quiet success");
+  // And because nothing was written, the minute is still free.
+  const working = fakeDb();
+  const retry = await handleReport(jsonReq(good()).req, depsOf(working));
+  assert.equal(retry.status, 200);
+  assert.equal(working.crashes.size, 1, "the retry is the report that lands");
 });
 
 test("an answer the database function never gives is a failure, not a success", async () => {
