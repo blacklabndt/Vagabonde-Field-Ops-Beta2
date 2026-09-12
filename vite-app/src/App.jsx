@@ -829,9 +829,27 @@ export function App() {
       // The identity goes too, so the next offline start doesn't come back as
       // this person on a store that was never theirs.
       if (claimFailed) {
-        try { const { error } = await sbClient.auth.signOut(); if (error) forgetStoredSession(); }
-        catch { forgetStoredSession(); }
-        try { await OfflineCache.remove(IDENTITY_KEY); } catch { /* nothing more to try */ }
+        // …unless a reset may be in play, which is the same exception the
+        // signOut above and the signedOut wipe below already make, and for
+        // a stronger reason: this branch does not merely fail to clear, it
+        // ENDS the session — and the session a recovery landing holds is
+        // the only thing a new password can be set with. Killing it here
+        // leaves the person on a dead link with no way back, having done
+        // nothing wrong; the cache clear that failed is what pushed them
+        // there. So the destructive half is skipped while the hint stands.
+        //
+        // Nothing is opened on the strength of that: currentUser stays
+        // unset, so no screen reads this device's store as this person,
+        // and the identity is NOT written (writeIdentity already returned
+        // without writing it). The set-password screen is all that renders,
+        // and its onDone calls bootSession() again — which is where the
+        // claim is retried, honestly, with the hint spent by then, so a
+        // device that still cannot clear itself gets the full refusal.
+        if (!Recovery.hinted()) {
+          try { const { error } = await sbClient.auth.signOut(); if (error) forgetStoredSession(); }
+          catch { forgetStoredSession(); }
+          try { await OfflineCache.remove(IDENTITY_KEY); } catch { /* nothing more to try */ }
+        }
         setCurrentUser(null);
         setBootError("This device couldn't clear the previous person's data — try again.");
         setCheckingSession(false);

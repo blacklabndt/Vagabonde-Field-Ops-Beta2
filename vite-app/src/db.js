@@ -330,6 +330,31 @@ const assertSessionAlive = async () => {
   }
 };
 
+// Which account this client is signed in as, as a number that changes when
+// it changes. supabase-js hands every request the token it holds AT THE
+// MOMENT of the request, not the one that was current when the caller
+// started: on a shared tablet a sign-out and a sign-in can land between the
+// two round trips of a check, so an id read at the start proves nothing
+// about the account the answer will be used for. The counter moves only
+// when the signed-in id actually differs from the last one seen, so an
+// hourly TOKEN_REFRESHED — the same person, the same permissions — is not
+// mistaken for a change of hands.
+let authGeneration = 0;
+let lastAuthUserId = null;
+sbClient.auth.onAuthStateChange((_event, session) => {
+  const id = session && session.user ? session.user.id : null;
+  if (id !== lastAuthUserId) { lastAuthUserId = id; authGeneration += 1; }
+});
+// Who this client is signed in as right now, and under which generation.
+// getSession is local — no round trip — so asking it a second time at the
+// point the answer is consumed costs nothing.
+const authStamp = async () => {
+  const { data, error } = await sbClient.auth.getSession();
+  if (error) throw error;
+  const id = data && data.session && data.session.user ? data.session.user.id : null;
+  return { id, gen: authGeneration };
+};
+
 // May the account making THIS request see money — and therefore replace a
 // ticket's billing lines? Prices are Admins' and Technicians' (the
 // rate_lines / ticket_lines policies name the role as well as the tab), and
@@ -358,9 +383,7 @@ async function currentUserSeesPrices() {
   // half this file exists. The profiles read is where the freshness is —
   // and RLS answers it as that same token, so the two cannot be different
   // accounts. Same call assertSessionAlive makes, for the same reason.
-  const { data: auth, error: aErr } = await sbClient.auth.getSession();
-  if (aErr) throw aErr;
-  const id = auth && auth.session && auth.session.user ? auth.session.user.id : null;
+  const { id, gen } = await authStamp();
   if (!id) {
     throw plainError("You're signed out, so nothing could be saved. Sign in again and retry — everything on screen is still there.");
   }
@@ -373,7 +396,14 @@ async function currentUserSeesPrices() {
   if (!me || me.id !== id) {
     throw plainError("Your account couldn't be checked just now, so nothing was changed on this ticket's charges. Try saving again in a moment.");
   }
-  return seesPrices(me);
+  // `me.id === id` is NOT proof the answer belongs to the account still
+  // signed in: profiles_select lets any staff account read any profile
+  // (20260908063429 narrowed it to staff, not to self), so a sign-out and
+  // a sign-in by somebody else between getSession and this read returns the
+  // PREVIOUS account's row, matching its own captured id, under the new
+  // account's token. The stamp travels with the answer and is checked
+  // again where it is used.
+  return { sees: seesPrices(me), id, gen };
 }
 
 // The same question, started early and asked later — the startKeyLookup
@@ -390,15 +420,29 @@ async function currentUserSeesPrices() {
 // and noise in the rest. So the failure is carried as a value and re-thrown
 // by whoever awaits it; fail-closed is unchanged, only its timing.
 function startPriceRoleLookup() {
-  return currentUserSeesPrices().then(sees => ({ sees }), error => ({ error }));
+  return currentUserSeesPrices().then(answer => ({ answer }), error => ({ error }));
 }
 
 // Reads that answer back. `{ error }` is raised here, not swallowed: see
 // currentUserSeesPrices for why a failed read may not pass for "no prices".
+//
+// And the account is checked AGAIN, here, against the stamp the answer was
+// read under — because this is the moment the answer is spent, and the
+// writes it gates are the next statements. A save that began as one
+// technician and is being finished under another's session is refused in
+// both directions: the wrong way round it would skip the billing and report
+// the save as done, and the right way round it would replace lines under an
+// account that may not read them. This single re-read does NOT make the
+// save atomic — the metadata UPDATE above it has already landed — it makes
+// this one decision belong to the account it is made for.
 async function priceRoleAnswer(lookup) {
-  const { sees, error } = await lookup;
+  const { answer, error } = await lookup;
   if (error) throw error;
-  return sees;
+  const now = await authStamp();
+  if (!now.id || now.id !== answer.id || now.gen !== answer.gen) {
+    throw plainError("This device signed in as somebody else while the ticket was saving, so its charges were left alone. Sign in as yourself and save it again — everything on screen is still there.");
+  }
+  return answer.sees;
 }
 
 // The same database refusal, translated, for anything that slips past the

@@ -9,7 +9,13 @@ function harness(total) {
   const calls = [];
   const row = { id: "QA-TICKET", job_id: "QA-JOB", work_date: "2026-09-12", status: "Draft", total,
     technician_id: "QA-TECH", profiles: { name: "QA" }, ticket_lines: [], created_at: "2026-09-12" };
-  const sbClient = { from(table) {
+  // db.js watches who this client is signed in as, so the price-role guard
+  // can refuse an answer read under another account (see priceRoleFence).
+  // A fake client with no auth is not a client.
+  const sbClient = { auth: {
+    onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
+    getSession: async () => ({ data: { session: { user: { id: "QA-TECH" } } }, error: null })
+  }, from(table) {
     const call = { table, columns: "" };
     calls.push(call);
     const result = single => ({ data: single ? row : [row], error: table === "tickets" && /\btotal\b/.test(call.columns)
