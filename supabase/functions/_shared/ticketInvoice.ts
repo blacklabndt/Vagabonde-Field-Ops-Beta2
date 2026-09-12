@@ -9,8 +9,8 @@
 //
 // Deliberately takes the client rather than making one. approve-ticket reads
 // with the service role because the person following the link has no account;
-// the other two read as the signed-in user so row-level security still
-// decides what they can see. Same shape either way.
+// mail also reads with the service role. The signed-in renderer explicitly
+// selects tickets_read so its masked total and staff gate apply.
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { InvoiceData, InvoiceSettings } from "./invoice.ts";
@@ -88,7 +88,10 @@ export async function loadInvoice(
   fallbackContact = "",
   // The invoice settings when the caller has read the row already (mail.ts's
   // appSettings carries them); otherwise read here, best-effort.
-  settingsGiven: InvoiceSettings | null = null
+  settingsGiven: InvoiceSettings | null = null,
+  // Service callers retain their base-table read. A signed-in caller must
+  // use the masked relation after direct SELECT on tickets.total is revoked.
+  ticketRelation: "tickets" | "tickets_read" = "tickets"
 ): Promise<{ data: InvoiceData | null; error: string | null }> {
   // Three reads that need nothing from each other, started together: this
   // is the hottest read there is — the approval page's GET and POST, every
@@ -102,7 +105,7 @@ export async function loadInvoice(
   // emailed bill ends up carrying terms the page it links to does not.
   const [{ data: ticket, error }, { data: crewRows }, settings] = await Promise.all([
     client
-      .from("tickets")
+      .from(ticketRelation)
       .select(TICKET_INVOICE_SELECT)
       .order(...TICKET_LINES_ORDER)
       .eq("id", ticketId)

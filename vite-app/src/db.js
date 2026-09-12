@@ -416,7 +416,7 @@ function shapeJobTicket(t) {
   return {
     id: t.id, date: dayMonth(localDate(t.work_date)),
     age: ageInDays(t.created_at),
-    amount: Number(t.total), status: t.status, tech: t.profiles ? t.profiles.name : "",
+    amount: t.total == null ? null : Number(t.total), status: t.status, tech: t.profiles ? t.profiles.name : "",
     // Who raised it, so the screen can offer "cancel approval" to the same
     // people the database would let do it: that technician, or an admin.
     techId: t.technician_id
@@ -745,7 +745,7 @@ export const Db = {
   async listTicketsForArchive(ticketIds) {
     const out = new Map();
     for (let i = 0; i < ticketIds.length; i += 200) {
-      const { data, error } = await sbClient.from("tickets")
+      const { data, error } = await sbClient.from("tickets_read")
         .select(ARCHIVE_TICKET_COLUMNS)
         .in("id", ticketIds.slice(i, i + 200));
       if (error) throw error;
@@ -1036,7 +1036,7 @@ export const Db = {
       const [jhas, reports, tickets] = await Promise.all([
         all("jhas", JHA_COLUMNS, "signed_at"),
         all("reports", "*", "uploaded_at"),
-        all("tickets", JOB_TICKET_COLUMNS, "created_at")
+        all("tickets_read", JOB_TICKET_COLUMNS, "created_at")
       ]);
 
       // Written per job, including the empty ones. An absent key and an empty
@@ -2709,7 +2709,7 @@ export const Db = {
   async listTicketsForJob(jobDbId) {
     return OfflineCache.readThrough("tickets." + jobDbId, async () => {
     const { data, error } = await sbClient
-      .from("tickets").select(JOB_TICKET_COLUMNS)
+      .from("tickets_read").select(JOB_TICKET_COLUMNS)
       .eq("job_id", jobDbId).order("created_at", { ascending: false });
     if (error) throw error;
     return data.map(shapeJobTicket);
@@ -2989,7 +2989,7 @@ export const Db = {
     // to surface.
     const data = await fetchAllPages(async (page, size) => {
       const { data: rows, error, count } = await sbClient
-        .from("tickets")
+        .from("tickets_read")
         .select("id, work_date, status, total, created_at, jobs(job_number, project, clients(name))",
           page === 0 ? { count: "exact" } : {})
         .eq("technician_id", technicianId)
@@ -3002,7 +3002,7 @@ export const Db = {
     return data.map(t => ({
       id: t.id, date: dayMonth(localDate(t.work_date)),
       age: ageInDays(t.created_at),
-      amount: Number(t.total), status: t.status,
+      amount: t.total == null ? null : Number(t.total), status: t.status,
       job: t.jobs ? t.jobs.job_number : "", project: t.jobs ? t.jobs.project : "",
       client: t.jobs && t.jobs.clients ? t.jobs.clients.name : ""
     }));
@@ -3073,7 +3073,7 @@ export const Db = {
     // The key lookup and the open check touch different tables and neither
     // needs the other's answer, so they go out together; they are awaited
     // in the old order so the job's refusal still wins over the key's.
-    const keyLookup = startKeyLookup("tickets", "id, total", clientKey);
+    const keyLookup = startKeyLookup("tickets_read", "id, total", clientKey);
     // The first mint goes out beside them too: next_ticket_number is a pure
     // read (max + 1 over the tickets and the burned numbers, nothing
     // reserved), so a mint the open check then refuses burns nothing. It is
@@ -3125,7 +3125,7 @@ export const Db = {
       // somebody took it between the mint and the insert — mint again.
       // Anything else is a real failure.
       if (error.code === "23505" && clientKey && /client_key/.test(error.message || "")) {
-        const { data: already, error: keyErr } = await sbClient.from("tickets").select("id, total").eq("client_key", clientKey).maybeSingle();
+        const { data: already, error: keyErr } = await sbClient.from("tickets_read").select("id, total").eq("client_key", clientKey).maybeSingle();
         if (keyErr) throw keyErr;
         if (already) return { id: already.id, total: Number(already.total), existing: true };
       }
@@ -3244,7 +3244,7 @@ export const Db = {
 
   // One ticket with its lines, for reopening a draft in the billing screen.
   async getTicket(ticketId) {
-    const { data, error } = await sbClient.from("tickets")
+    const { data, error } = await sbClient.from("tickets_read")
       .select("id, job_id, technician_id, work_date, status, total, gst_rate, delays, client_contact, contractor_contact, ticket_lines(kind, label, unit, quantity, unit_rate)")
       .eq("id", ticketId).single();
     if (error) throw error;
@@ -3273,7 +3273,7 @@ export const Db = {
     // round trip, strictly after this one, in front of every save and every
     // queued replay. A job the embed cannot show (unsynced, or invisible)
     // falls through to assertJobOpen so the wording of that case is its own.
-    const { data: row, error: rErr } = await sbClient.from("tickets").select("status, job_id, total, jobs(status, job_number)").eq("id", ticketId).maybeSingle();
+    const { data: row, error: rErr } = await sbClient.from("tickets_read").select("status, job_id, total, jobs(status, job_number)").eq("id", ticketId).maybeSingle();
     if (rErr) throw rErr;
     // Cancelled on another device while this editor was open. Say so —
     // the screen's generic wrapper ("press Save again") would be a lie

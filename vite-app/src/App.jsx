@@ -1912,8 +1912,8 @@ export function App() {
           canSaveFiles={tabList(currentUser.tabs).includes("files")}
           context={{
             screen,
-            jobNumber: activeJob ? activeJob.id : null,
-            ticketId: typeof activeTicket === "string" ? activeTicket : null,
+            jobNumber: CONTEXT_TABS.includes(screen) && activeJob ? activeJob.id : null,
+            ticketId: screen === "ticket" && typeof activeTicket === "string" ? activeTicket : null,
             help: (helpFor(screen) || { body: [] }).body
           }} />
       )}

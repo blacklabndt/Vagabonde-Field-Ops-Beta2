@@ -3,6 +3,28 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { askTurns, pushTurn, threadForSend, forgetAskThread, dropAction, dropLearned, isConfirmAction, confirmLabel, formLabel, jobLinks, mergeDictation, foldTranscripts, ASK_KEEP } from "./askThread.js";
 
+test("declining or completing a proposal preserves its files and learned-note undo", () => {
+  for (const kind of ["draft_ticket", "send_ticket_approval", "schedule_send", "cancel_scheduled"]) {
+    forgetAskThread();
+    pushTurn("user", "Help with this ticket");
+    pushTurn("assistant", "Here it is", ["Checked"], { kind },
+      [{ id: "note-1", note: "A useful note" }], [{ name: "summary.csv", kind: "csv" }],
+      "Another note could not be saved", [{ tool: "find_job", references: [{ job_number: "J-1" }] }]);
+    const before = askTurns();
+    const sent = threadForSend();
+    const expected = { ...before[1] };
+    delete expected.action;
+    dropAction(1);
+    assert.deepEqual(askTurns(), [before[0], expected], kind);
+    assert.deepEqual(threadForSend(), sent);
+    assert.equal(before[1].action.kind, kind, "does not mutate the previous turn");
+    dropLearned(1, "note-1");
+    assert.equal("learned" in askTurns()[1], false, "the retained undo still works");
+    assert.deepEqual(askTurns()[1].files, expected.files);
+  }
+  forgetAskThread();
+});
+
 test("follow-up references survive sending and dropping a proposal, then disappear on sign-out", () => {
   forgetAskThread();
   const followUp = [{ tool: "find_job", references: [{ job_number: "J-1" }] }];

@@ -6,10 +6,33 @@ import { stripTypeScriptTypes } from "node:module";
 const read = name => readFileSync(new URL(`../../supabase/functions/_shared/${name}`, import.meta.url), "utf8");
 const source = read("invoice.ts").split("export const invoiceCss")[0].replace(/^import .*;\r?\n/gm, "");
 const invoice = await import("data:text/javascript;base64," + Buffer.from(stripTypeScriptTypes(source)).toString("base64"));
+const tokenSource = read("approvalToken.ts").replace(/^import .*;\r?\n/gm, "");
+const { invoiceFingerprint } = await import("data:text/javascript;base64," + Buffer.from(stripTypeScriptTypes(tokenSource)).toString("base64"));
 
 function bill(snapshot, current = 5) {
   return { ticket: { id: "TEST", gst_rate: snapshot, work_date: "2026-09-11" }, job: { project: "Test", clients: { gst_rate: current } }, lines: [{ quantity: 1, unit_rate: 1000 }], crew: [] };
 }
+
+for (const snapshot of [0, 5]) {
+  test(`approval fingerprint retains the frozen ${snapshot}% rate after a client rate change`, async () => {
+    const before = bill(snapshot, 5);
+    const after = bill(snapshot, 0);
+    assert.deepEqual(invoice.invoiceTotals(before), invoice.invoiceTotals(after));
+    assert.equal(await invoiceFingerprint(before), await invoiceFingerprint(after));
+  });
+}
+
+test("approval fingerprint changes when the snapshot changes the invoice total", async () => {
+  assert.notEqual(invoice.invoiceTotals(bill(0)).grand, invoice.invoiceTotals(bill(5)).grand);
+  assert.notEqual(await invoiceFingerprint(bill(0)), await invoiceFingerprint(bill(5)));
+});
+
+test("legacy approval fingerprints still follow the client's GST rate", async () => {
+  for (const snapshot of [null, undefined]) {
+    assert.notEqual(invoice.invoiceTotals(bill(snapshot, 0)).grand, invoice.invoiceTotals(bill(snapshot, 5)).grand);
+    assert.notEqual(await invoiceFingerprint(bill(snapshot, 0)), await invoiceFingerprint(bill(snapshot, 5)));
+  }
+});
 
 test("invoice and approval totals retain the stamped rate when the client's rate changes", () => {
   assert.equal(invoice.invoiceTotals(bill(5, 0)).grand, 105000);
@@ -49,6 +72,25 @@ test("the real invoice loader fetches the snapshot before rendering the approved
 });
 
 const approval = stripTypeScriptTypes(read("mailApproval.ts").replace(/^import .*;\r?\n/gm, "")).replace(/export /g, "");
+
+test("signed-in invoice loader uses the masked relation while service callers retain the base", async () => {
+  const loaderSource = stripTypeScriptTypes(read("ticketInvoice.ts").replace(/^import .*;\r?\n/gm, "")).replace(/export /g, "");
+  const load = new Function("LEVEL_LEGEND", `${loaderSource}; return loadInvoice;`)("");
+  for (const relation of [undefined, "tickets_read"]) {
+    const reads = [];
+    const db = { from(table) {
+      reads.push(table);
+      return { select() { return this; }, order() { return this; }, eq() { return this; },
+        maybeSingle: async () => ({ data: null, error: null }),
+        // biome-ignore lint/suspicious/noThenProperty: models the awaited PostgREST query builder.
+        then(resolve) { resolve({ data: [], error: null }); }
+      };
+    } };
+    await load(db, "TEST", "", {}, relation);
+    assert.equal(reads[0], relation ?? "tickets");
+    assert.equal(reads[1], "ticket_crew");
+  }
+});
 // `refuse` is the module's one import (the marker from _shared/publicError.ts,
 // which decides whether a sentence reaches the person or only the log). The
 // harness passes the real thing rather than a stub, so a refusal this test

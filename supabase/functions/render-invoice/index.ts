@@ -45,7 +45,7 @@ Deno.serve(async (req) => {
     const { ticketId } = await req.json();
     if (!ticketId) throw refuse("This request didn't say which ticket to render. Reload the app and try again.");
 
-    const { data, error } = await loadInvoice(asUser, ticketId);
+    const { data, error } = await loadInvoice(asUser, ticketId, "", null, "tickets_read");
     if (error || !data) throw refuse("Ticket not found, or you don't have access to it.", error ?? "no invoice row");
 
     return new Response(JSON.stringify({ html: invoicePage(data) }), {
