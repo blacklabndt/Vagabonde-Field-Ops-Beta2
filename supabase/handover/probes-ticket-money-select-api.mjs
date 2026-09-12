@@ -22,6 +22,15 @@
 //     --url https://eielmvxzdwwprmmfamlq.supabase.co --key <publishable key> \
 //     --priced admin@example.com:<password> --helper helper@example.com:<password>
 //
+// A password on the command line lands in the shell's history and in the
+// process list, so every one of those four may come from the environment
+// instead, which is the way to prefer:
+//
+//   PROBE_URL, PROBE_KEY, PROBE_PRICED, PROBE_HELPER
+//
+// each holding what the matching flag would hold (the two accounts as
+// `email:password`). A flag wins over the variable when both are there.
+//
 // The two accounts are a price role (Admin or Technician) and one without
 // (Helper or Coordinator). Both halves matter: the first proves the embeds
 // still resolve and the money still arrives, the second proves the money
@@ -29,17 +38,24 @@
 
 const arg = name => {
   const i = process.argv.indexOf(`--${name}`);
-  return i === -1 ? null : process.argv[i + 1];
+  const flag = i === -1 ? null : process.argv[i + 1];
+  // A flag wins; the environment is the way that keeps a password out of
+  // the shell's history and out of the process list.
+  return flag || process.env[`PROBE_${name.toUpperCase()}`] || null;
 };
 const url = arg("url"), key = arg("key");
 if (!url || !key) {
-  console.error("Need --url and --key. See the header of this file.");
+  console.error("Need --url and --key (or PROBE_URL and PROBE_KEY). See the header of this file.");
   process.exit(2);
 }
 const account = flag => {
   const raw = arg(flag);
   if (!raw) return null;
   const at = raw.indexOf(":");
+  if (at < 1 || at === raw.length - 1) {
+    console.error(`--${flag} wants email:password.`);
+    process.exit(2);
+  }
   return { email: raw.slice(0, at), password: raw.slice(at + 1) };
 };
 
