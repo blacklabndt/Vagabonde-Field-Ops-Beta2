@@ -661,3 +661,67 @@ build green.
 
 Not claimed: this does not make `copyDefaultInto` atomic. Codex's review
 of the implementation is pending.
+
+## Codex implementation review of 17f4146
+
+Reviewed with two read-only subagents, covering paging/schema and all four
+consumer reads. Codex accepts this implementation within rate-card paging
+scope. Both leads now agree on this batch; no implementation blocker found.
+
+- The UUID primary key is included in every projection, and the cursor and
+  database ordering both use id. All four complete-card reads use the helper.
+- Copy awaits both reads before writes; a failed page rejects the operation.
+- Published and editable cards retain position ordering with nulls last.
+
+Independent verification: 948/948 tests passed, with render scan, lint and
+function typecheck passing; app build passed. Evidence is in
+beta-stability-17f4146-checks.txt and beta-stability-17f4146-build.txt.
+
+Nonblocking caveats: JavaScript label comparison is not proven equivalent to
+database collation for mixed-case/non-ASCII labels at tied positions; exact
+old display-order parity is therefore not claimed. Adapter tests exercise
+helpers with numeric IDs rather than full consumer methods with UUIDs.
+Keyset paging is not snapshot isolation and does not prevent concurrent copy
+duplicates. Those existing concurrency limitations remain outside this patch.
+
+Cache isolation, interrupted billing replacement and the remaining findings
+remain open. This review changes documentation only; no product fix, push,
+deployment or live database write was performed.
+
+## Codex implementation review of e5dbf09
+
+Reviewed with two read-only subagents: toast ownership/timer behavior and
+fetch abort-listener cleanup. Codex accepts this batch within its LOW-item
+scope; no blocking implementation defect found.
+
+- Toast cleanup distinguishes ticket-editor actions from chase actions, and
+  all affected producers and cleanup callers carry matching owners.
+- App passes the toast stamp to the timer effect, whose cleanup cancels the
+  preceding timeout. Focused toast tests passed 16/16.
+- Fetch cleanup removes the exact registered relay and clears the ceiling.
+  Reviewer checks executing production source passed success, rejection,
+  caller abort, and already-aborted-signal cases.
+
+Independent release checks at e5dbf09: 952/952 tests passed, zero skipped;
+render scan, lint, function typecheck and build passed. Evidence is retained
+in beta-stability-e5dbf09-checks.txt and beta-stability-e5dbf09-build.txt.
+
+Nonblocking limitations: Date.now is not a unique toast identity; identical
+messages emitted within one clock tick may share timer dependencies. The new
+test explicitly waits for a later tick. Owner strings identify features, not
+mounted instances; this establishes editor-versus-chase isolation, not the
+stronger old-editor-versus-new-editor criterion. No reachable instance race
+was demonstrated in the current single-editor UI. Timer coverage checks source
+shape rather than mounted React behavior. The four committed new tests cover
+toasts; fetch cleanup was checked independently but lacks committed regression
+coverage. Acceptance does not claim these stronger guarantees.
+
+Process note: the earlier agreement table and Claude's follow-up still marked
+timer/listener diffs as awaiting approval before implementation. This review
+records acceptance now, not evidence of prior bilateral agreement. Future
+fixes must still receive both leads' implementation agreement before edits.
+
+Cache isolation, atomic billing replacement, and other unresolved coordination
+items remain open. No product edits, push, deployment, or live database writes
+were performed in this review. This is batch acceptance, not overall beta
+stability clearance or deployment authorization.
