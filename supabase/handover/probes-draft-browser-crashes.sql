@@ -173,3 +173,30 @@ rollback;
 --                 delete from public.function_errors where function_name = 'browser' and ...;
 
 -- Not yet run live: the draft is unapplied.
+--
+-- Run offline, 2026-09-12, against real Postgres compiled to WASM (PGlite,
+-- v0.3) in a throwaway harness: the draft applied to an empty database with
+-- Supabase's roles, grants, auth.users, auth.uid(), profiles and
+-- function_errors recreated around it. Probes 1 to 9 all came back exactly
+-- as each one specifies:
+--   1  23505 on the second report, rows_for_two_minutes 2
+--   2  23514 x3 (category, route, version), "all three refused"
+--   3  admin_sees 1, tech_sees 0
+--   4  42501 from the revoked grant, not a policy refusal
+--   5  filed; ledger 1; message "ErrorBoundary (screen) on board: chunk-load"
+--   6  rate_limited; ledger 1; log_rows 1
+--   7  23514 raised; ledger_after_failed_log 0
+--   8  23514 raised through the function, not swallowed
+--   8b 23505 RAISED (not returned); ledger_after_log_collision 0
+--   9  42501, permission denied for function file_browser_crash
+-- Nothing survived: browser_crashes 0, function_errors('browser') 0.
+--
+-- 10 was NOT run: PGlite is a single connection and cannot race itself. It
+-- needs two real sessions. Uniqueness under concurrency is Postgres's own
+-- guarantee, but this design rests on it, so it stays unproven until it is
+-- run against a live database with two connections.
+--
+-- A WASM Postgres is the real engine, not a model, but it is not this
+-- project: no live data, no live roles, no live policies from other
+-- migrations OR-ing with these. These results retire the question "does the
+-- SQL do what the comments say"; they do not retire the live run.
