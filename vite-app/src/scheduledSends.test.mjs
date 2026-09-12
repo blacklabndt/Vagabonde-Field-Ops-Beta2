@@ -27,10 +27,14 @@ test("the kinds are the three sends and a reminder", () => {
 });
 
 test("a local time becomes the instant, on either side of the clock change", () => {
-  // 11 Sept 2026 07:00 MDT is 13:00 UTC; 15 Jan 2027 07:00 MST is 14:00 UTC.
+  // 11 Sept 2026 07:00 MDT is 13:00 UTC; 15 Jan 2026 07:00 MST is 14:00 UTC.
+  // Both dates are before the province's last clock change, so every tzdata
+  // still in circulation agrees on them. Anything from 2027 on does not —
+  // see the leap-day round trip below for why we no longer write those
+  // offsets down.
   assert.equal(localToUtc("2026-09-11 07:00"), Date.UTC(2026, 8, 11, 13, 0));
   assert.equal(localToUtc("2026-09-11T07:00"), Date.UTC(2026, 8, 11, 13, 0));
-  assert.equal(localToUtc("2027-01-15 07:00"), Date.UTC(2027, 0, 15, 14, 0));
+  assert.equal(localToUtc("2026-01-15 07:00"), Date.UTC(2026, 0, 15, 14, 0));
   // The night the clocks go back (1 Nov 2026): 06:00 is MST, 13:00 UTC.
   assert.equal(localToUtc("2026-11-01 06:00"), Date.UTC(2026, 10, 1, 13, 0));
   assert.throws(() => localToUtc("tomorrow morning"), /YYYY-MM-DD HH:MM/);
@@ -45,8 +49,11 @@ test("a day the month does not have is refused, not rolled into the next one", (
   assert.throws(() => localToUtc("2026-11-31 07:00"), /not a real date/);
   assert.throws(() => localToUtc("2026-02-30 07:00"), /not a real date/);
   assert.throws(() => localToUtc("2027-02-29 07:00"), /not a real date/);
-  // A leap day that exists still works.
-  assert.equal(localToUtc("2028-02-29 07:00"), Date.UTC(2028, 1, 29, 14, 0));
+  // A leap day that exists still works. Its offset is not written down: 2028
+  // is past the province's last clock change, and a runner's tzdata may or
+  // may not carry that rule yet. The round trip is the claim that matters —
+  // the hour the person typed is the hour the strip says back.
+  assert.equal(whenWords(localToUtc("2028-02-29 07:00")), "Tue, Feb 29, 07:00");
 });
 
 test("an hour the clock skips is refused; the hour it repeats takes the first", () => {
@@ -83,7 +90,7 @@ test("a time already passed, or more than ninety days away, is refused in words"
 
 test("the time is said in Grande Prairie's clock", () => {
   assert.equal(whenWords(Date.UTC(2026, 8, 11, 13, 0)), "Fri, Sep 11, 07:00");
-  assert.equal(whenWords(Date.UTC(2027, 0, 15, 14, 5)), "Fri, Jan 15, 07:05");
+  assert.equal(whenWords(Date.UTC(2026, 0, 15, 14, 5)), "Thu, Jan 15, 07:05");
 });
 
 test("the fire-time gate refuses a locked account or one that lost the tab", () => {

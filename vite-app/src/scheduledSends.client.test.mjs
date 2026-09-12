@@ -9,7 +9,7 @@ test("the strip names the record, the addresses and the time in Grande Prairie's
   assert.deepEqual(describeScheduled(row, now), {
     line: "JHA RT-Shop.pdf (2026-09-08) to dave@pembina.com — sends Fri, Sep 11, 07:00", failed: false, due: false, error: ""
   });
-  assert.equal(whenWords(Date.UTC(2027, 0, 15, 14, 5)), "Fri, Jan 15, 07:05");
+  assert.equal(whenWords(Date.UTC(2026, 0, 15, 14, 5)), "Thu, Jan 15, 07:05");
 });
 
 test("a queued row past its time is due; a failed one says so and carries its error", () => {
