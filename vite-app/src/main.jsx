@@ -22,5 +22,5 @@ const mount = (() => {
 })();
 
 ReactDOM.createRoot(mount).render(
-  <ErrorBoundary resetKey="root"><App /></ErrorBoundary>
+  <ErrorBoundary resetKey="root" boundary="root"><App /></ErrorBoundary>
 );

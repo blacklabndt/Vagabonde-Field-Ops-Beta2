@@ -1858,7 +1858,7 @@ export function App() {
       <main>
         {/* Keyed on the screen so switching tabs clears a crash rather than
             leaving the app stuck on the boundary's fallback. */}
-        <ErrorBoundary resetKey={screen}>
+        <ErrorBoundary resetKey={screen} boundary="screen">
           <Suspense fallback={<ScreenFallback />}>
             {/* Keyed on the screen so arriving anywhere plays the same
                 short entrance; ScreenIn strips its own class once the

@@ -6,6 +6,7 @@ import { Db } from "../db.js";
 import { nonNegative } from "../data.js";
 import { acceptsNumberText, isWholeStep } from "../numberInput.js";
 import { buzz } from "../haptics.js";
+import { reportCrash } from "../crashReport.js";
 
 // Re-exported from data.js, which is where they live now — the sign-in path
 // needs them and cannot import a file that pulls in React. Kept here so the
@@ -990,7 +991,16 @@ export function downloadCsv(filename, rows) {
 export class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { error: null }; }
   static getDerivedStateFromError(error) { return { error }; }
-  componentDidCatch(error, info) { console.error("Screen crashed:", error, info); }
+  componentDidCatch(error, info) {
+    console.error("Screen crashed:", error, info);
+    // The office hears about it too. Four identifiers and no free text — the
+    // message and the stack stay on this device; crashReport.js says why.
+    // `info` is deliberately not passed: a component stack is exactly the
+    // kind of thing that would carry a job number or a token along with it.
+    // Never awaited, never allowed to throw: the fallback below renders
+    // whether or not the report lands.
+    reportCrash(error, this.props.resetKey, this.props.boundary);
+  }
   componentDidUpdate(prev) {
     // A new screen gets a clean slate, so one bad screen doesn't wedge the
     // rest of the app behind it.
