@@ -342,6 +342,26 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   menu — they open from a job's own page, per Kyle. Never "hide" a screen
   by removing its tab from a profile: that revokes RLS/storage access too,
   which is exactly the invisible breakage that rule replaced.
+- An error names what to do, or it names nothing at all. A sentence WE
+  wrote is raised through `refuse` in `_shared/publicError.ts`, which marks
+  the error; the top-level catch answers with `publicWords(e, TROUBLE)` —
+  a marked error's own words, else that function's one fixed sentence —
+  and logs `loggedWords(e)`, which is everything. Deny-by-default is the
+  point: an unmarked error came from PostgREST, Postgres, Resend or
+  Anthropic, names columns, constraints and functions, and a Helper's
+  session provoking one was mapping the schema an error at a time
+  (seventeen functions did this; the seven staff-reachable ones and Ask
+  are fixed). The failure mode of forgetting is now silence, not
+  disclosure. `detail` is the second argument — the raw reason, logged and
+  never shown — so masking loses nothing; a function with no error log at
+  all gains one rather than going quiet (gif-search, feature-request).
+  publicError.ts is the ONE definition for anything that can import; the
+  import-free guard-list modules spell the same three lines themselves and
+  `askThread.test.mjs` holds them to it. Two sentences stay public on
+  purpose: mail.ts's `transient` refusals, because the bulk chase tells
+  "slow down" from "that address is wrong" by reading the message and only
+  the message crosses the function boundary, and a send that WENT but
+  could not be recorded, because "try again" would send it twice.
 - Client-facing HTML: the invoice body is
   `supabase/functions/_shared/invoice.ts`; the approval page's own chrome
   (`page`, `signForm`, `queryForm`) is approve-ticket's. Both escape every
