@@ -1,0 +1,44 @@
+# Automated dependency PRs.
+#
+# Two things this file deliberately does not do:
+#
+#  - It does not auto-merge. Nothing here lands without a human reading it.
+#    CI (.github/workflows/ci.yml) runs on the PR and reports, but Cloudflare
+#    Workers Builds does not consult GitHub checks, so a green tick is a
+#    signal to the reviewer, not a gate on the deploy.
+#
+#  - It does not touch `overrides` in vite-app/package.json. The
+#    `fast-uri: ^3.1.6` override there is a deliberate transitive pin, not
+#    stale cruft. If a Dependabot PR ever appears to make it redundant,
+#    confirm that before removing it — Dependabot does not manage overrides
+#    and will not update the pin for you.
+version: 2
+
+updates:
+  # The app. The repo root has no dependencies of its own — its package.json
+  # is a build entry that delegates into vite-app — so there is nothing for
+  # an npm entry at "/" to watch.
+  - package-ecosystem: npm
+    directory: /vite-app
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Minor and patch bumps arrive as one PR a week: one CI run, one read,
+      # one merge. Majors are excluded here so each arrives on its own and
+      # gets looked at properly.
+      minor-and-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+
+  # The workflow's own actions. Pinned by major tag (actions/checkout@v4 and
+  # friends), so this mostly catches an action that has moved to a new major
+  # and needs a deliberate look.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
