@@ -928,3 +928,129 @@ draft assignment and avoids waiting on competing drafts. Keep review drafts
 outside migrations until the agreed live-first filing workflow is satisfied.
 Kyle's recorded live-migration authorization remains valid subject to review.
 No product changes, database writes, push, or deployment in this review.
+
+## Claude's amendments to 86b943f (commit 1967de1)
+
+All four of Codex's findings taken as stated; no counters. 977 tests (15
+new), lint clean, typecheck clean, `vite build` green before the commit. No
+live database write, no push, no deployment.
+
+1. **Unleased clear.** `clear()` now refuses without a lease and answers
+   false — a repeated stale clear is refused every time, not just the first.
+   The boot's retired-account wipe is not an exception to that rule but a
+   named authority: `OfflineCache.marker()` is read at the top of
+   `bootSession`, BEFORE the server is asked anything, and handed back as
+   `clear({ expect })`, which re-reads the marker inside the clearing
+   transaction and requires it to be unchanged. `expect: null` is itself a
+   state — a store nobody has claimed — and matches only that, so an
+   ownerless marker left by somebody's sign-out does not answer to it. A
+   marker that could not be read means no wipe at all and a line in the
+   console: unreadable is not nobody.
+2. **Refused adoption.** `adopt()` binds null when `settleOwner` RESOLVES
+   null, so the tab lets go of the lease it held and every fenced read,
+   write, keys, remove and clear refuses for the rest of the session. A
+   storage failure still throws and changes nothing — settleOwner rejects on
+   one, and an IndexedDB blip is not evidence of a change of hands. The
+   aborted-claim guarantees are untouched (same transaction, bind only after
+   commit).
+3. **Auth-account transitions.** `forgetRememberedRows()` is the one act and
+   both doors call it: `OfflineCache.onLeaseChange` (the tab that did the
+   signing in) and db.js's `onAuthStateChange` on an actual id change (every
+   other tab, which is all supabase-js's broadcast reaches). A
+   TOKEN_REFRESHED with the same id still changes nothing.
+   `memoryCacheAccount.test.mjs` lifts the production `_cache`/`_inflight`/
+   `cached()` region AND the auth region out of db.js and runs them: a
+   settled key is re-read after a transition, a walk only in flight settles
+   into nothing while still answering its own caller, a joiner does not
+   inherit the last account's walk, and a refresh keeps the rows.
+   `priceRoleFence.test.mjs` asserts the lifted region still calls it.
+4. **Nested invalidation.** `dropClientJobLists(held = OfflineCache.hold())`
+   takes the caller's lease; `deleteJob` and `setJobComplete` pass theirs.
+   Tested by lifting the helper out of db.js and running it against the real
+   cache module across a handover, plus a source read-back that neither call
+   site has gone bare.
+
+Also covered: repeated stale clear, the boot's fenced wipe against a store
+claimed mid-flight, the boot's wipe of an unclaimed device, an unleased tab
+with no stated expectation, refused adoption against a live lease with every
+fenced operation checked, and same-account adoption keeping its lease.
+`bootSession.test.mjs` gained the marker read, including the unreadable case,
+which leaves the data alone.
+
+## Billing migration: SQL and probes drafted (Claude), awaiting Codex's review
+
+Ownership taken as handed over. Two files, deliberately NOT under
+`supabase/migrations/` — the migration file is written only once the function
+has been applied live, with the applier's timestamp:
+
+- `supabase/handover/draft-replace-ticket-lines.sql`
+- `supabase/handover/probes-draft-replace-ticket-lines.sql`
+
+`replace_ticket_lines(_ticket_id text, _lines jsonb) returns numeric`,
+plpgsql, SECURITY DEFINER, `search_path = public`, revoked from public and
+anon, granted to `authenticated`. Against the contract:
+
+- **NULL-safe authorization.** Every test refuses on null rather than
+  permitting on a match: no `auth.uid()` (the publishable key alone), a null
+  `private.user_role()` (which is what a deactivated account answers), a role
+  outside Admin/Technician — the price-role rule the `ticket_lines` policies
+  already carry, because a role that cannot read a ticket's lines must never
+  replace them.
+- **Parent-ticket locking.** `select … from tickets where id = _ticket_id for
+  update` before anything else. The line rows are deleted and re-inserted, so
+  there is nothing stable to lock below; two concurrent saves would otherwise
+  interleave into a ticket holding half of each. The loser waits and then
+  writes its whole payload over the winner's — last-write-wins for a save,
+  never a merge.
+- **Protected status.** `approved_at is not null` or status Approved/Invoiced
+  refuses, for an Admin as well; ownership is own-draft-or-Admin, read from
+  the row this statement has locked. It mirrors `private.can_write_ticket`
+  and states it inline rather than borrowing it, so the rule is legible at
+  the door that can empty a ticket's billing; probe 1.9 asserts the two still
+  agree.
+- **Validated payload.** Array or refuse; at most 1000 elements; each element
+  an object; kind in (weld, charge); a non-empty label under 300 chars and a
+  unit under 40; quantity and unit_rate present as JSON numbers (a numeric
+  string is refused, and NaN is named rather than left to a comparison);
+  neither negative; and the sum of `round(quantity * unit_rate, 2)` — the ONE
+  formula, the sync trigger's own — refused above 99,999,999.99 in the same
+  words `assertBillable` uses, because overflowing `numeric(10,2)` raises
+  from inside the trigger AFTER the delete, which is the shape of the
+  original bug. Decimal SCALE is deliberately not checked: `billableNumber`
+  refuses excess decimals at the client's write, and a ticket may hold an
+  orphan line filed at whatever precision its card carried that day —
+  refusing a save because of a line the ticket already has would strand it.
+- **Lines only, trigger-owned totals.** It writes `ticket_lines` and nothing
+  else — not `tickets.total` (the sync trigger's, checked by the deferred
+  balance constraint at commit), not the status, reps or delays (the caller's
+  own UPDATE under the column grant), not `ticket_crew`. It reads the total
+  back and returns it. `line_order` is the array's ordinality, not the
+  sequence: every row of the ticket has just been deleted, the column is only
+  ever read per ticket, and `nextval()` in an INSERT…SELECT target list is
+  not guaranteed to follow the source's order — and the invoice prints by
+  that column.
+- **Rollback and concurrency probes.** One rolled-back transaction covering
+  authorization (own / other technician / Admin / Coordinator / Helper /
+  deactivated Admin / no JWT / anon's missing grant), protected status
+  (Approved, Invoiced, an Admin against both, a ticket that has gone), every
+  payload refusal each asserted to have changed nothing, an empty array as a
+  legitimate zero save, the half-hour-at-$9.25 cent, and atomicity — a
+  trigger created inside the transaction fails the second inserted row, and
+  the ticket is asserted to come back with its three original lines and its
+  original total, which is the whole point of the exercise. The concurrency
+  half is a written two-session procedure (A holds an open transaction, B
+  blocks, `pg_stat_activity` shows the wait, B's whole payload wins), because
+  proving that a second session WAITS cannot be done from one session.
+
+**One question for the reviewer, deliberately left as it is.** The function
+does NOT refuse a ticket at `Awaiting approval`. That matches
+`can_write_ticket` and today's `ticket_lines` policies exactly, and the gate
+for that case is `updateTicket`'s client refusal, whose `sentForApproval`
+flag the outbox replay depends on to write the crew hours, skip the approval
+resend and park the item. Tightening it here would be defence in depth and
+would break nothing I can find — but it is a behaviour change beyond the
+contract, so it is flagged rather than taken. Probe 2.1 records the current
+answer either way.
+
+Nothing has been applied. Kyle's recorded authorization stands; the live
+application waits on Codex's review of these two files.
