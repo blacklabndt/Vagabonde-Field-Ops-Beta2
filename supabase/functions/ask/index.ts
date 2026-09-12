@@ -414,7 +414,7 @@ Deno.serve(async (req) => {
     const seesMoney = PRICE_ROLES.includes(me.role ?? "");
     const who = { id: user.id, role: me.role ?? "" };
 
-    const runTool = async (name: string, input: Record<string, unknown>): Promise<unknown> => {
+    const readTool = async (name: string, input: Record<string, unknown>): Promise<unknown> => {
       tool = name;
       let out: unknown;
       if (name === "tracker_stats" || name === "ticket_aging" || name === "search_tickets") {
@@ -939,6 +939,24 @@ Deno.serve(async (req) => {
       }
       tool = "";
       return out;
+    };
+
+    // A tool that throws does NOT reach the top-level catch: askLoop catches
+    // it, hands the words to the model as a tool result, and the model's
+    // answer leaves with a 200. So this is where a failed read is RECORDED —
+    // without it a read that failed reached no log at all, and the digest and
+    // Home's strip are where the office finds out Ask has stopped working.
+    // The masking is askLoop's, by the same mark publicError uses, so the
+    // deny-by-default decision lives in one place and is tested there; this
+    // wrapper deliberately rethrows the error whole, because function_errors
+    // is supposed to have the real words.
+    const runTool = async (name: string, input: Record<string, unknown>): Promise<unknown> => {
+      try {
+        return await readTool(name, input);
+      } catch (e) {
+        await logError("ask", loggedWords(e), { user: userId, tool: name });
+        throw e;
+      }
     };
 
     const result = await askLoop(thread, toolDefinitions(tools),

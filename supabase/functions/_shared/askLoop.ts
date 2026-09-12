@@ -22,6 +22,23 @@ function refuse(words: string): Error {
   return e;
 }
 
+/** True only for an error raised through `refuse`. Judges the mark, never the words. */
+function isPlain(e: unknown): boolean {
+  return (e as (Error & { plain?: boolean }) | null)?.plain === true;
+}
+
+// What the MODEL is told when a tool throws. A tool result is not an
+// exception: it goes into the conversation, the model reads it, and the
+// model may quote it back in an answer that leaves with a 200 — past the
+// top-level catch, which is where publicError does its masking. So the same
+// rule applies here, by the same mark: our own refusal ("a name must be one
+// contact on file") is the answer and travels; anything unmarked came from
+// PostgREST, Postgres or a shape nobody expected, names columns, constraints
+// and policies, and becomes this one sentence. It tells the model not to
+// invent a cause, because a model asked why a read failed will otherwise
+// guess one. The real words are logged by the runner before it rethrows.
+const TOOL_TROUBLE = "The read failed. The office has been told what went wrong; do not guess at the reason or describe it.";
+
 export const ASK_MODEL = "claude-opus-5";
 export const MAX_TOOL_CALLS = 8;
 export const ASK_BUDGET_MS = 100_000;
@@ -173,7 +190,8 @@ export async function askLoop(thread: unknown, tools: ToolDef[], system: string,
       try {
         results.push({ type: "tool_result", tool_use_id: u.id, content: wrapRecords(u.name, await deps.runTool(u.name, u.input ?? {})) });
       } catch (e) {
-        results.push({ type: "tool_result", tool_use_id: u.id, content: `The read failed: ${(e as Error).message}`, is_error: true });
+        const words = isPlain(e) ? `The read failed: ${(e as Error).message}` : TOOL_TROUBLE;
+        results.push({ type: "tool_result", tool_use_id: u.id, content: words, is_error: true });
       }
     }
     messages.push({ role: "user", content: results });

@@ -78,16 +78,40 @@ test("a tool call is run, its answer sent back as records, and the trace says so
   assert.deepEqual(sent[1].body.tools, TOOLS);
 });
 
-test("a read that fails is handed back as an error result and the loop goes on", async () => {
+// A tool result is not an exception: it goes into the conversation and the
+// model may quote it in an answer that leaves with a 200, past the top-level
+// catch where publicError does its masking. So the same mark decides here.
+test("a read that fails unmarked tells the model nothing about why, and the loop goes on", async () => {
   const { fetch, sent } = api([
     reply([use("u1", "tracker_stats")], "tool_use"),
-    reply([text("I couldn't read the totals: permission denied.")])
+    reply([text("I couldn't read the totals just now.")])
   ]);
   const r = await askLoop([{ role: "user", text: "?" }], TOOLS, "s", "k",
-    deps(fetch, async () => { throw new Error("permission denied"); }));
-  assert.equal(sent[1].body.messages[2].content[0].is_error, true);
-  assert.match(sent[1].body.messages[2].content[0].content, /permission denied/);
-  assert.match(r.answer, /permission denied/);
+    // What PostgREST hands back when a policy refuses: it names the table
+    // and the policy, and a Helper who can provoke one could map the schema
+    // an error at a time.
+    deps(fetch, async () => { throw new Error('permission denied for table ticket_lines'); }));
+  const result = sent[1].body.messages[2].content[0];
+  assert.equal(result.is_error, true);
+  assert.doesNotMatch(result.content, /permission denied|ticket_lines/,
+    "the database's own words must not reach the model, which may repeat them");
+  assert.match(result.content, /The read failed/);
+  assert.match(result.content, /do not guess/, "a model asked why will otherwise invent a reason");
+  assert.equal(r.answer, "I couldn't read the totals just now.");
+});
+
+test("a refusal of OURS keeps its words, because they say what to do about it", async () => {
+  const { fetch, sent } = api([
+    reply([use("u1", "tracker_stats")], "tool_use"),
+    reply([text("Ask the office to add that address to the client's contacts.")])
+  ]);
+  const ours = new Error("that address is not on file for this client");
+  ours.plain = true;
+  await askLoop([{ role: "user", text: "?" }], TOOLS, "s", "k",
+    deps(fetch, async () => { throw ours; }));
+  const result = sent[1].body.messages[2].content[0];
+  assert.equal(result.is_error, true);
+  assert.match(result.content, /not on file for this client/);
 });
 
 test("past the call limit the model is asked to answer with no tool allowed", async () => {

@@ -282,3 +282,22 @@ test("a send that went but could not be recorded still says so, and only to the 
       `${file}: the database's reason is still in the words the person reads`);
   }
 });
+
+test("a failed tool read is logged, and what the model may repeat is masked by the mark", () => {
+  // Round 7's masking sat on the top-level catch, which a failed TOOL read
+  // never reaches: askLoop catches it, puts the words in the conversation,
+  // and the model can quote them in an answer that leaves with a 200. Two
+  // halves fix it and both are checked here, because either alone is worse
+  // than useless — masking without logging moves the blindness, and logging
+  // without masking is the disclosure.
+  const loop = shared("askLoop.ts");
+  assert.match(loop, /const words = isPlain\(e\) \? `The read failed: \$\{\(e as Error\)\.message\}` : TOOL_TROUBLE;/,
+    "askLoop no longer judges a tool error by the mark");
+  assert.match(loop, /const TOOL_TROUBLE = "[^"]+";/, "the fixed sentence is gone");
+  assert.doesNotMatch(loop.slice(loop.indexOf("const TOOL_TROUBLE")).split("\n")[0], /\$\{/,
+    "the fixed sentence must not interpolate anything");
+
+  const ask = read("../../supabase/functions/ask/index.ts");
+  assert.match(ask, /const runTool = async \(name: string, input: Record<string, unknown>\): Promise<unknown> => \{\s*try \{\s*return await readTool\(name, input\);\s*\} catch \(e\) \{\s*await logError\("ask", loggedWords\(e\), \{ user: userId, tool: name \}\);\s*throw e;\s*\}/,
+    "a failed tool read no longer reaches function_errors with its real words");
+});
