@@ -42,7 +42,7 @@ import { followUpLines } from "../_shared/askContext.ts";
 import { createInvestigation } from "../_shared/askInvestigation.ts";
 import { learnBody, parseLearned, roomFor, learnedLines, forgetWords, LEARN_MODEL, MAX_LEARN_REQUEST_CHARS, MAX_LEARNED, type LearnedRow } from "../_shared/askLearn.ts";
 import {
-  LEASE_STALE_SECONDS, usageTokens, reserveFor, billedNothing,
+  LEASE_STALE_SECONDS, usageTokens, cacheUsage, reserveFor, billedNothing,
   requestDeadline, readUntil, callTimeout, timeToLearn,
   CALL_TIMEOUT_MS, LEARN_TIMEOUT_MS, MIN_CALL_MS,
   BUSY_WORDS, SPENT_WORDS, OUT_OF_TIME_WORDS, LEARN_SPENT_WORDS, LEARN_TROUBLE_WORDS, LEARN_NO_TIME_WORDS
@@ -394,12 +394,23 @@ Deno.serve(async (req) => {
       // figures are the PROVIDER'S — Anthropic documents its own token
       // counter as an estimate, so nothing computed on this side could be
       // the ceiling's basis.
-      let cost: { input: number; output: number } | null = null;
-      try { cost = usageTokens(await res.clone().json()); } catch { cost = null; }
+      let usageBody: unknown = null;
+      try { usageBody = await res.clone().json(); } catch { /* Unknown usage keeps the reservation. */ }
+      const cost = usageTokens(usageBody);
+      const cache = cacheUsage(usageBody);
+      // Evidence only: no response content or caller identity, and logging
+      // must never interrupt settlement or delivery of the answer.
+      const logUsage = (settlement: string) => {
+        try {
+          console.info(JSON.stringify({ event: "ask_model_usage", call_id: callId, model,
+            cache, output_tokens: cost?.output ?? null, settlement }));
+        } catch { /* Telemetry cannot change billing or the answer. */ }
+      };
       if (!cost) {
         // An unreadable bill is not a free call. The reservation stays
         // unsettled and goes on holding the model's whole documented maximum,
         // because that is the only figure that cannot be an undercount.
+        logUsage("held_unknown_usage");
         await logError("ask", `A model reply carried no readable usage; its reservation of ${reserveFor(model)} tokens stands.`, { user: userId, model });
         return res;
       }
@@ -409,6 +420,7 @@ Deno.serve(async (req) => {
       // more — the deadline is the other thing being spent here.
       let wrote = await admin.rpc("ask_settle_call", { _call: callId, _input: cost.input, _output: cost.output });
       if (wrote.error) wrote = await admin.rpc("ask_settle_call", { _call: callId, _input: cost.input, _output: cost.output });
+      logUsage(wrote.error ? "held_settlement_error" : wrote.data === true ? "settled" : "settlement_no_change");
       if (wrote.error) {
         // The reservation stands at the maximum, so a failure here costs the
         // day some room and never the ceiling itself. The office is told,

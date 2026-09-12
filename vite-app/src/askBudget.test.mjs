@@ -341,7 +341,9 @@ test("every paid call reserves before it goes and settles from the provider's ow
   assert.match(ask, /if \(got\.error\) \{[\s\S]{0,600}?throw refuse\(SPENT_WORDS\);/);
   // Settled from the provider's figures, on a CLONE — the caller still has to
   // read the original, and a body read twice is a body the loop never sees.
-  assert.match(ask, /usageTokens\(await res\.clone\(\)\.json\(\)\)/);
+  assert.match(ask, /usageBody = await res\.clone\(\)\.json\(\)/);
+  assert.match(ask, /const cost = usageTokens\(usageBody\)/);
+  assert.match(ask, /const cache = cacheUsage\(usageBody\)/);
   // Nothing about the day's total may live in the isolate again: no local
   // running total, and no second reading of the allowance to go stale.
   assert.ok(!/ask_allowance/.test(ask), "the day is being read into the isolate again");
