@@ -385,7 +385,15 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   documents from `appPolicy`, the approval page from `approvalPolicy`, the
   Worker's own error page from `errorPagePolicy`. Scripts run from this
   origin, from `cdn.jsdelivr.net` (pdf.js, SheetJS, jsPDF — each loaded on
-  demand with SRI) and from inline `<script>` blocks the Worker hashes as
+  demand with SRI; those four pins are the dependencies `npm audit`
+  structurally cannot see, so `cdnPins.test.mjs` reads them out of the
+  source and holds them to `docs/reviews/2026-09-11-cdn-pins.md`, which says
+  what each one parses. Three of the four only ever write our own rows;
+  pdf.js alone reads a file somebody dropped, and 3.11.174 predates the fix
+  for CVE-2024-4367 — two invariants keep that sink unreachable and the test
+  pins both: the app calls `getTextContent()` and never draws a page, and
+  `appPolicy` has no `'unsafe-eval'`. A PDF preview or an `'unsafe-eval'`
+  added for anything arms it) and from inline `<script>` blocks the Worker hashes as
   it serves the document — which is why a request for a document is
   answered whole and never 304 — so an inline event handler (`onclick=`)
   is refused: the approval page's Download button binds its listener in a
