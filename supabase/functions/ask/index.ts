@@ -38,8 +38,13 @@ import { shapeJobDraft, shapeTicketDraft, shapeJhaDraft } from "../_shared/askDr
 import { resolveRecipients, jhaSendGate, ticketSendGate, ticketApprovalAddress, jhaFileName, sendJhaWords, sendTicketWords, JHA_MESSAGE, REPORT_MESSAGE } from "../_shared/askSends.ts";
 import { isKind, localToUtc, checkRunAt, whenWords, labelFor, scheduleWords, cancelWords, rescheduleWords, splitList, reminderText, reminderWords, REPORT_SEND_ROLES } from "../_shared/scheduledSends.ts";
 import { askLoop, systemPrompt, windowTurns, API_URL, API_VERSION } from "../_shared/askLoop.ts";
-import { learnBody, parseLearned, roomFor, learnedLines, forgetWords, MAX_LEARN_REQUEST_CHARS, MAX_LEARNED, type LearnedRow } from "../_shared/askLearn.ts";
-import { LEASE_STALE_SECONDS, usageTokens, unsettledHold, mayCall, BUSY_WORDS, SPENT_WORDS, LEARN_SPENT_WORDS, LEARN_TROUBLE_WORDS } from "../_shared/askBudget.ts";
+import { learnBody, parseLearned, roomFor, learnedLines, forgetWords, LEARN_MODEL, MAX_LEARN_REQUEST_CHARS, MAX_LEARNED, type LearnedRow } from "../_shared/askLearn.ts";
+import {
+  LEASE_STALE_SECONDS, usageTokens, unsettledHold, mayCall,
+  requestDeadline, readUntil, callTimeout, timeToLearn,
+  CALL_TIMEOUT_MS, LEARN_TIMEOUT_MS, MIN_CALL_MS,
+  BUSY_WORDS, SPENT_WORDS, OUT_OF_TIME_WORDS, LEARN_SPENT_WORDS, LEARN_TROUBLE_WORDS, LEARN_NO_TIME_WORDS
+} from "../_shared/askBudget.ts";
 import { knowledgeText, cleanContext, whereLines } from "../_shared/askKnowledge.ts";
 import { checkFile, fileWords, fileChars, MAX_FILES, type AskFile } from "../_shared/askFiles.ts";
 import { refuse, plainRefusal, loggedWords } from "../_shared/publicError.ts";
@@ -199,6 +204,13 @@ const later = (a: string | null, b: string | null): string | null => (!a ? (b ||
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  // ONE reading of the wall clock, before anything else, and every later
+  // question about time is arithmetic on it. The platform retires this
+  // isolate whatever we think, at the figure askBudget.ts names; the
+  // deadline is that less the time it takes to settle the bill, release the
+  // lease, write the notes and serialise the answer. See askBudget.ts for why
+  // it is one figure and not one per call site.
+  const deadline = requestDeadline(Date.now());
   let userId = "";
   let tool = "";
   // Held outside the try so the finally can let it go however this ends —
@@ -307,7 +319,30 @@ Deno.serve(async (req) => {
       // which is the safe direction.
       const model = (/"model":"([^"]+)"/.exec(String(init.body ?? "").slice(0, 200)) ?? [])[1] ?? "";
       if (!mayCall(settled, held, cap)) throw refuse(SPENT_WORDS);
-      const res = await fetch(url, init);
+      // The same transport meters the clock, for the same reason it meters
+      // the money: a second paid call bounded nowhere is a deadline with a
+      // hole in it. Each call waits for its own ceiling or for whatever is
+      // left of the request, whichever is less — so a call can never outlive
+      // the deadline, on this plan or a larger one.
+      const wait = callTimeout(deadline, Date.now(), model === LEARN_MODEL ? LEARN_TIMEOUT_MS : CALL_TIMEOUT_MS);
+      // Below the floor nothing is worth starting. Only reachable when
+      // something outside our accounting overran — a tool read is the
+      // database's time and is not bounded by us — and a refusal in words is
+      // a better end than a retirement, which returns nothing at all.
+      if (wait < MIN_CALL_MS) throw refuse(OUT_OF_TIME_WORDS);
+      let res: Response;
+      try {
+        res = await fetch(url, { ...init, signal: AbortSignal.timeout(wait) });
+      } catch (e) {
+        // ABORTING OUR FETCH PROVES NOTHING ABOUT THE PROVIDER. The call may
+        // have been answered, and billed, after we stopped waiting. So it is
+        // settled at NOTHING and its hold is retained in full — the same rule
+        // an unreadable bill gets, and for the same reason: the only figure
+        // that cannot be an undercount is the model's documented maximum.
+        held += unsettledHold(model);
+        await logError("ask", `A model call was cut off after ${wait} ms and is held at ${unsettledHold(model)} tokens: ${(e as Error)?.message ?? "no reason given"}`, { user: userId, model });
+        throw refuse(OUT_OF_TIME_WORDS);
+      }
       // A refusal costs nothing and is the caller's to read; only an answer
       // is billed.
       if (!res.ok) return res;
@@ -1044,7 +1079,11 @@ Deno.serve(async (req) => {
 
     const result = await askLoop(thread, toolDefinitions(tools),
       systemPrompt({ name: me.name ?? "", role: me.role ?? "" }, Date.now(), { knowledge: knowledgeText(), where }), key,
-      { fetch: meteredFetch, runTool, trace: traceLine, now: Date.now },
+      // Reading stops at an instant derived from the one deadline: the
+      // deadline less one final answer and one learning call. The loop holds
+      // no budget of its own — it used to hold 100 s, sized for a worker this
+      // project does not have.
+      { fetch: meteredFetch, runTool, trace: traceLine, now: Date.now, readUntil: readUntil(deadline) },
       // The crew's notes, as data in the conversation and never in the
       // system message. The fence is minted per request: a note written
       // yesterday cannot contain a word invented a moment ago, so it cannot
@@ -1061,14 +1100,20 @@ Deno.serve(async (req) => {
     // It goes through the SAME metered transport as the loop: a second paid
     // call counted nowhere is a ceiling with a hole in it, and this one fires
     // on every answer.
-    const kept = await learn(asUser, thread, result.answer, learnedRows, key, user.id, meteredFetch)
+    const kept = await learn(asUser, thread, result.answer, learnedRows, key, user.id, meteredFetch, deadline)
       // The answer above is already right and already paid for, so nothing
       // here may fail it — but a note that did not land must not look like
       // one that did. The allowance running out is its own sentence, because
       // "try again" is the wrong advice for it.
       // Named rather than "any marked refusal": a different refusal told as
       // the allowance would be a sentence that is simply untrue.
-      .catch(e => ({ added: [], trouble: (e as Error)?.message === SPENT_WORDS ? LEARN_SPENT_WORDS : LEARN_TROUBLE_WORDS }) as LearnResult);
+      // Named rather than "any marked refusal": a different refusal told as
+      // the allowance — or as the clock — would be a sentence that is simply
+      // untrue.
+      .catch(e => {
+        const words = (e as Error)?.message;
+        return { added: [], trouble: words === SPENT_WORDS ? LEARN_SPENT_WORDS : words === OUT_OF_TIME_WORDS ? LEARN_NO_TIME_WORDS : LEARN_TROUBLE_WORDS } as LearnResult;
+      });
     return json({
       ...result, learned: kept.added,
       ...(kept.trouble ? { learnTrouble: kept.trouble } : {}),
@@ -1104,7 +1149,14 @@ Deno.serve(async (req) => {
 
 // One extractor call and the writes it asks for, as the caller. Returns the
 // notes added, with their ids, for the card's "Learned:" line.
-async function learn(asUser: SupabaseClient, thread: unknown, answer: string, existing: LearnedRow[], apiKey: string, userId: string, send: (url: string, init: RequestInit) => Promise<Response>): Promise<LearnResult> {
+async function learn(asUser: SupabaseClient, thread: unknown, answer: string, existing: LearnedRow[], apiKey: string, userId: string, send: (url: string, init: RequestInit) => Promise<Response>, deadline: number): Promise<LearnResult> {
+  // Asked before the body is built, let alone sent: starting a call that
+  // cannot finish inside the request spends money for a note nobody gets.
+  // The answer above is already right and already paid for, so the cost of
+  // stopping here is a thing not remembered — never a question not answered.
+  // Not logged: running out of time on a long question is ordinary, and an
+  // error log that fills with ordinary events is one nobody reads.
+  if (!timeToLearn(deadline, Date.now())) return { added: [], trouble: LEARN_NO_TIME_WORDS };
   const turns = [...windowTurns(thread), { role: "assistant" as const, text: answer }];
   // Measured before a penny is spent, on the text that actually goes — the
   // same rule the loop's own calls follow. Over the backstop the call is not

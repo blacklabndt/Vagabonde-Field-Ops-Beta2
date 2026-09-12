@@ -43,6 +43,20 @@ export const LEASE_STALE_SECONDS = 300;
 // is the `max_tokens` this app sends. Not a measurement and not a target —
 // the arithmetic above needs a number that cannot be exceeded, and this is
 // the only kind there is.
+//
+// IT HAS TO BOUND ALL FOUR NAMES THE LEDGER COUNTS, not just the one called
+// `input_tokens`, and it does: `input_tokens`, `cache_creation_input_tokens`
+// and `cache_read_input_tokens` are three parts of ONE input total, and the
+// context window is the ceiling on that total — a request whose parts sum
+// past it is refused with a 400 before anything is billed. So
+// `window + max_tokens` is an upper bound on the sum of all four, which is
+// the figure `usageTokens` returns and the figure the ledger holds.
+//
+// The `max_tokens` halves are OURS and are read back out of the two files
+// that send them (askBudget.test.mjs), so a raised answer budget cannot
+// leave this table quietly two orders too small. The window halves are the
+// vendor's documented figures and are cited, not measured: measurement could
+// falsify them and can never establish them.
 export const ONE_CALL_MAX: Readonly<Record<string, number>> = {
   // claude-opus-5: 1,000,000 context, and askLoop sends max_tokens 8,000.
   "claude-opus-5": 1_000_000 + 8_000,
@@ -138,3 +152,89 @@ export const LEARN_SPENT_WORDS =
 
 export const LEARN_TROUBLE_WORDS =
   "The answer above stands, but Ask could not add to what it has learned this time.";
+
+// ── the clock ──────────────────────────────────────────────────────────────
+//
+// Money is not the only thing an answer spends. The second is wall clock, and
+// it was being spent against a figure that does not exist here.
+//
+// THE DEFECT. `ASK_BUDGET_MS` was 100 s and was sized for a 400 s worker.
+// This project's Supabase org is on the FREE plan, where an Edge Function is
+// retired at 150 s. Reading stopped at 100 s, and then the model's final
+// answer — and the learning call after it — had 50 s between them to finish
+// inside a limit neither knew about. A question that used its reading time
+// and then needed a real answer could be retired mid-sentence and return the
+// crew nothing at all, which reads as "Ask just fails on the hard questions".
+// Neither paid call carried an AbortSignal either, so a hung provider was
+// bounded by the platform and by nothing of ours.
+//
+// THE SHAPE OF THE FIX. One deadline, computed ONCE at the top of the
+// request, and every later question about time asked against that one
+// instant. Nothing reads a wall clock of its own and nothing carries a
+// budget of its own: two constants that must agree about the same 150 s are
+// two constants that will disagree. `ASK_BUDGET_MS` is gone from askLoop.ts
+// and the loop is handed `readUntil` instead — the instant reading must stop,
+// DERIVED from the deadline by subtracting what is still owed after it.
+//
+// ABORTING OUR FETCH PROVES NOTHING ABOUT THE PROVIDER. Codex's point, and
+// it decides the accounting rather than just the timeout: a call we stopped
+// waiting for may have been answered, and billed, after we stopped. So an
+// aborted call is settled at NOTHING — its hold is retained in full, exactly
+// as an unreadable bill's is. We cut our own wait; we do not cut anyone's
+// bill.
+
+// What the platform gives a request. The free plan's figure, deliberately:
+// this is the number that must not be exceeded, and a paid plan's 400 s is
+// larger, so sizing for 150 s is right on either. If the project moves to
+// Pro, raising this is a decision of its own — nobody upgrading a Supabase
+// plan will connect it to how long Ask may spend reading.
+export const WORKER_WALL_MS = 150_000;
+// Kept back from the deadline for everything after the last paid call:
+// settling the bill, releasing the lease, writing the notes the learning
+// pass decided on, and serialising the answer.
+export const CLEANUP_RESERVE_MS = 10_000;
+// The most one call of each kind may take on its own. The loop's final answer
+// can be long (MAX_TOKENS is 8,000); the learning call is one short round
+// with max_tokens 600 and is normally two or three seconds.
+export const CALL_TIMEOUT_MS = 45_000;
+export const LEARN_TIMEOUT_MS = 20_000;
+// Below this the learning call is not made at all: starting one that cannot
+// finish spends money for a note nobody gets, and the answer above it is
+// already right and already paid for.
+export const LEARN_MIN_MS = 6_000;
+// Below this no paid call is worth starting. Only reachable if something
+// outside our accounting overran — a tool read is the database's time and is
+// not bounded by us — and the refusal is words rather than a retirement.
+export const MIN_CALL_MS = 3_000;
+
+/** The one instant every later question about time is asked against. */
+export function requestDeadline(startedMs: number): number {
+  return startedMs + WORKER_WALL_MS - CLEANUP_RESERVE_MS;
+}
+
+// When reading has to stop: the deadline less what is still owed after the
+// last tool — one final answer and one learning call. Derived, so a change to
+// either timeout moves it instead of leaving a stale constant behind.
+export function readUntil(deadline: number): number {
+  return deadline - CALL_TIMEOUT_MS - LEARN_TIMEOUT_MS;
+}
+
+// How long this call may wait: its own ceiling, or whatever is left of the
+// request, whichever is less. A figure at or below zero means the deadline has
+// already gone.
+export function callTimeout(deadline: number, nowMs: number, most: number): number {
+  return Math.min(most, deadline - nowMs);
+}
+
+/** Is there time to learn from this answer? Asked before the body is built. */
+export function timeToLearn(deadline: number, nowMs: number): boolean {
+  return deadline - nowMs >= LEARN_MIN_MS;
+}
+
+// Both of ours, so both travel. The first says what to do about it; the
+// second is a line under an answer that stands.
+export const OUT_OF_TIME_WORDS =
+  "Ask ran out of time on that one. Ask it again more narrowly — one job, one client, or a shorter period.";
+
+export const LEARN_NO_TIME_WORDS =
+  "The answer above stands, but Ask did not add to what it has learned — the question took too long to leave time for it.";

@@ -113,7 +113,21 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   re-point the trigger before anything else — HANDOVER.md's Path B says how. An unshipped
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
-  Nothing is waiting there now. The latest three are Ask's spending:
+  ONE is waiting now, and it is the only thing in this repo that is:
+  `draft-the-ceiling-is-charged-before-the-call.sql` with
+  `probes-draft-the-ceiling-is-charged-before-the-call.sql` beside it —
+  `ask_calls` (one row per paid call, the day's total being
+  `sum(coalesce(settled, reserved))`, so a reservation counts from before its
+  call goes and keeps counting until the provider's figure replaces it),
+  `ask_reserve_call` behind a per-day advisory xact lock, `ask_settle_call`
+  idempotent by call id, `ask_settle_unbilled` for the one case the provider
+  itself says was not billed, a three-number `ask_allowance()`, and
+  `ask_record_spend` dropped because a second door into the ledger that skips
+  the reservation is a second way to spend past the ceiling. Its draft header
+  says how to ship it and in what order; the FUNCTION side is deliberately
+  not written yet, because a ceiling with a PGRST202 fallback is one anybody
+  can switch off by breaking a function name. The latest three applied are
+  Ask's spending:
   `20260912031059_the_ask_ceiling_keeps_its_own_default.sql`,
   `20260912030901_the_assistant_has_a_daily_allowance.sql` and
   `20260912025816_the_assistant_has_a_daily_allowance.sql` — the same
@@ -526,8 +540,8 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   what it sees; nothing it can reach writes. A write tool, when one comes,
   proposes and the app's own form and save path do the writing after the
   person confirms — never the function. The loop is pure and node-tested
-  against a scripted API (eight reads or 100 s a question, then it answers
-  from what it has; every tool result is wrapped as records the prompt
+  against a scripted API (eight reads, or the reading deadline the caller
+  hands in, then it answers from what it has; every tool result is wrapped as records the prompt
   calls data and never an instruction — a client rep's query text is the
   field an outsider writes). What the DATABASE puts into that conversation
   is bounded too, and was not: a tool result went in whole and is re-sent as
@@ -570,6 +584,23 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   and output price differently and the rate differs per model, so a price
   table in the code would be a second source of truth that rots in silence,
   and the office converts once when it sets the number. Null is no ceiling.
+  THE OTHER THING AN ANSWER SPENDS IS WALL CLOCK, and there is now ONE
+  deadline for it: `requestDeadline(Date.now())` at the very top of the
+  handler, `WORKER_WALL_MS` (150,000 — the FREE plan's figure, which is the
+  one that must not be exceeded) less `CLEANUP_RESERVE_MS`, and every later
+  question about time is arithmetic on that instant. `ASK_BUDGET_MS` is gone:
+  it was 100 s, sized for a 400 s worker, so a question that used its reading
+  time and then needed a real answer could be retired mid-sentence and return
+  the crew nothing. The loop is handed `readUntil` — the deadline less one
+  final answer and one learning call — and carries no budget of its own,
+  because two constants about the same 150 s disagree. Both paid calls get
+  `AbortSignal.timeout(min(their own ceiling, what is left))` through the same
+  metered transport, and the learning call is skipped below `LEARN_MIN_MS`
+  rather than started too late to finish. An aborted call is settled at
+  NOTHING and holds the model's whole maximum: cutting our own wait proves
+  nothing about whether the provider answered and billed. Moving the project
+  to a paid plan does not change any of this, and raising `WORKER_WALL_MS` is
+  a decision of its own.
   The key is `app_settings.anthropic_api_key`
   (Admin screen, env fallback, in APP_SETTINGS_SECRETS); without one the
   function refuses in plain words. The thread lives in memory

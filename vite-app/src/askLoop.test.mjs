@@ -6,7 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   askLoop, windowTurns, systemPrompt, wrapRecords,
-  ASK_MODEL, MAX_TOOL_CALLS, MAX_TURNS, MAX_TURN_CHARS, ASK_BUDGET_MS,
+  ASK_MODEL, MAX_TOOL_CALLS, MAX_TURNS, MAX_TURN_CHARS,
   MAX_TOOL_RESULT_CHARS, MAX_TOOL_TOTAL_CHARS, MAX_REQUEST_CHARS
 } from "../../supabase/functions/_shared/askLoop.ts";
 
@@ -25,8 +25,9 @@ function api(script) {
   };
   return { fetch, sent };
 }
+const READ_UNTIL = 75_000;
 const deps = (fetch, runTool = async () => ({ ok: 1 }), now = () => 0) =>
-  ({ fetch, runTool, trace: (n, i) => `read ${n}${i.q ? ` "${i.q}"` : ""}`, now });
+  ({ fetch, runTool, trace: (n, i) => `read ${n}${i.q ? ` "${i.q}"` : ""}`, now, readUntil: READ_UNTIL });
 
 test("windowTurns keeps the last 24, clips long turns and ends on the question", () => {
   // 31 turns, t0 the first question and t30 the last: the last 24 would
@@ -129,14 +130,14 @@ test("past the call limit the model is asked to answer with no tool allowed", as
   assert.match(r.trace[r.trace.length - 1], /stopped after 8 reads/);
 });
 
-test("past the time budget the next request allows no tool either", async () => {
+test("past the reading deadline the next request allows no tool either", async () => {
   let t = 0;
   const { fetch, sent } = api([
     reply([use("u1", "tracker_stats")], "tool_use"),
     reply([text("So far: four.")])
   ]);
   const r = await askLoop([{ role: "user", text: "?" }], TOOLS, "s", "k",
-    deps(fetch, async () => { t = ASK_BUDGET_MS + 1; return {}; }, () => t));
+    deps(fetch, async () => { t = READ_UNTIL + 1; return {}; }, () => t));
   assert.deepEqual(sent[1].body.tool_choice, { type: "none" });
   assert.match(r.trace[r.trace.length - 1], /ran out of time/);
 });
@@ -194,7 +195,7 @@ test("the crew's notes ride in the conversation, named as data, never as the per
     sent = JSON.parse(init.body);
     return { ok: true, json: async () => ({ content: [{ type: "text", text: "ok" }] }) };
   };
-  const deps = { fetch: api, runTool: async () => "", trace: () => {}, now: () => 0 };
+  const deps = { fetch: api, runTool: async () => "", trace: () => {}, now: () => 0, readUntil: READ_UNTIL };
   const notes = "Learned from the crew\n<learned abc123>\n- [a crew member] Reports go from Job detail.\n</learned abc123>";
 
   await askLoop([{ role: "user", text: "where do reports go?" }], [], "SYSTEM", "k", deps, notes);

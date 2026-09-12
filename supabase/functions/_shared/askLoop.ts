@@ -6,11 +6,17 @@
 //
 // The model may call a tool; the loop runs it (as the caller — that is the
 // runner's business), answers with a tool_result wrapped as records, and
-// goes round again, up to MAX_TOOL_CALLS calls or ASK_BUDGET_MS. Past
+// goes round again, up to MAX_TOOL_CALLS calls or `deps.readUntil`. Past
 // either it asks once more with tool_choice none, so the model answers
-// from what it has and the panel is told it stopped early. The browser's
-// own ceiling on a function call is five minutes; 100 s leaves the model's
-// last answer room inside it.
+// from what it has and the panel is told it stopped early.
+//
+// READING STOPS AT AN INSTANT HANDED IN, never at a budget of its own. It
+// was ASK_BUDGET_MS, 100 s, sized for a 400 s worker — and this project's
+// worker is retired at 150 s, so a question that spent its reading time and
+// then needed a real answer could be killed mid-sentence and return nothing.
+// The one deadline is computed once per request in askBudget.ts and
+// `readUntil` is derived from it; a loop carrying its own figure would be a
+// second opinion about the same wall clock, and two of those disagree.
 
 // A refusal written to be READ by whoever asked — see askSends.ts. The
 // Anthropic fallback in `refusal` below is deliberately NOT marked: it
@@ -41,7 +47,6 @@ const TOOL_TROUBLE = "The read failed. The office has been told what went wrong;
 
 export const ASK_MODEL = "claude-opus-5";
 export const MAX_TOOL_CALLS = 8;
-export const ASK_BUDGET_MS = 100_000;
 export const MAX_TURNS = 24;
 export const MAX_TURN_CHARS = 4000;
 // What the DATABASE puts into the conversation, which nothing capped before.
@@ -53,7 +58,7 @@ export const MAX_TURN_CHARS = 4000;
 // ceiling anywhere. These two are that ceiling: one result, and all of them
 // together with the assistant's own tool_use blocks. Spending the second
 // stops the reading and answers from what is there, exactly as
-// MAX_TOOL_CALLS and ASK_BUDGET_MS already do — so the input of any one call
+// MAX_TOOL_CALLS and the deadline already do — so the input of any one call
 // is arithmetic: the system message, the windowed thread, the notes (capped
 // where they are built) and at most MAX_TOOL_TOTAL_CHARS of this.
 export const MAX_TOOL_RESULT_CHARS = 20_000;
@@ -112,6 +117,12 @@ export interface AskDeps {
   runTool: (name: string, input: Record<string, unknown>) => Promise<unknown>;
   trace: (name: string, input: Record<string, unknown>) => string;
   now: () => number;
+  // The instant reading must stop, derived from the request's one deadline
+  // (askBudget.ts's `readUntil`) by the caller. An absolute instant and not a
+  // duration on purpose: a duration has to be added to a start the loop reads
+  // for itself, and the point is that a request takes ONE reading of the wall
+  // clock and everything after it is arithmetic on that.
+  readUntil: number;
 }
 export interface AskResult { answer: string; trace: string[] }
 
@@ -228,7 +239,6 @@ export async function askLoop(thread: unknown, tools: ToolDef[], system: string,
     else messages.unshift({ role: "user", content: notes });
   }
   const trace: string[] = [];
-  const start = deps.now();
   let calls = 0;
   // What the tools and the model's own tool_use blocks have added to the
   // conversation so far. Measured as it is pushed, never guessed from a row
@@ -236,7 +246,7 @@ export async function askLoop(thread: unknown, tools: ToolDef[], system: string,
   let toolChars = 0;
   for (;;) {
     const overCalls = calls >= MAX_TOOL_CALLS;
-    const overTime = deps.now() - start > ASK_BUDGET_MS;
+    const overTime = deps.now() > deps.readUntil;
     const overBytes = toolChars >= MAX_TOOL_TOTAL_CHARS;
     const done = overCalls || overTime || overBytes;
     const body: Record<string, unknown> = { model: ASK_MODEL, max_tokens: MAX_TOKENS, system, messages };
@@ -279,7 +289,7 @@ export async function askLoop(thread: unknown, tools: ToolDef[], system: string,
       // reply asking for twelve reads is now twelve decisions.
       const spent = calls >= MAX_TOOL_CALLS
         || toolChars >= MAX_TOOL_TOTAL_CHARS
-        || deps.now() - start > ASK_BUDGET_MS;
+        || deps.now() > deps.readUntil;
       if (spent) {
         skipped++;
         toolChars += NOT_RUN.length;
