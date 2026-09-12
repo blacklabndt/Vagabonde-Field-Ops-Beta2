@@ -1470,6 +1470,25 @@ session has set `app.confirm_total_wipe = 'yes'`.
   totals and the browser's figures are whatever that role could see. Same
   reason the tracker's money buttons ("Chase all unsigned") sit behind
   `seesPrices` — one tap would otherwise mail every client a $0.00 approval.
+- A ticket's money is read through a view. `tickets_read` (definer,
+  security_barrier, its own explicit `is_staff()` predicate mirroring the
+  tickets SELECT policy) masks `total` to null for anything but Admin and
+  Technician, and `search_tickets`, `ticket_tracker_stats` and
+  `ticket_aging()` are built over it (20260912205211). Since
+  20260912210854 the base table carries NO table-level SELECT grant for
+  `authenticated` and no `total` column grant: a signed-in account reads
+  the named metadata columns only, and `approval_token`,
+  `approval_expires_at` and `approved_ip` are off that list on purpose —
+  the token is a stored credential, the IP is a client rep's, and only the
+  service role (approve-ticket, mailApproval, the backups) reads them. So a
+  NEW COLUMN on tickets is invisible to the app until it is added to BOTH
+  the grant list in that migration and to `tickets_read`, and a
+  `select("*")` on tickets from the client is now a 42501. Row scope
+  changing in the tickets SELECT policy must change the view's predicate in
+  the same commit. The deployed-API probe
+  `supabase/handover/probes-ticket-money-select-api.mjs` is what proves
+  PostgREST still resolves the reverse `ticket_lines` embed through the
+  view (getTicket and the archive both depend on it); it reads only.
 - tickets has a column-level UPDATE grant: signed-in accounts write
   status, client_contact, contractor_contact, delays and chased_at, nothing
   else. The approval plumbing (approval_token/sent_at/expires_at/sent_to/

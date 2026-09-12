@@ -1,11 +1,21 @@
--- DRAFT, NOT APPLIED. Phase 2, and only after every step in the header of
--- ticket-money-select.sql has been done -- in particular step 4, the
--- deployed-API probe of the reverse ticket_lines embed, and step 3, seeing
--- the new build load on a real tablet. This is the irreversible half: a
--- device still serving an old build from its service worker stops reading
--- tickets the moment this lands, and nobody in the office can refresh it
--- for the crew. Keep service_role grants untouched -- mail, the approval
--- page and the backups all read the money through them.
+-- APPLIED 12 Sept 2026 as version 20260912210854. Phase 2: the direct
+-- total disclosure is closed. Phase 1 (20260912205211) built tickets_read and
+-- rebuilt the three reporting RPCs over it; every reader was deployed, the new
+-- build was confirmed loading on a real device, and the deployed-API probe
+-- (probes-ticket-money-select-api.mjs) answered 200 on the reverse ticket_lines
+-- embed before this was applied and 11/11 after it -- including the three
+-- refusals below.
+--
+-- What this took away, from authenticated only: SELECT on the tickets table,
+-- the column-level total grant under it, and -- by listing the columns that
+-- stay -- approval_token, approval_expires_at and approved_ip. Nothing reads
+-- those three on caller authority; approve-ticket and mailApproval reach them
+-- with the service role, whose grants are untouched, as mail, the approval page
+-- and the backups all need them.
+--
+-- A new column on tickets is NOT readable by a signed-in account until it is
+-- added to this grant AND to tickets_read. That is the point of the explicit
+-- list; it is also the trap.
 begin;
 do $$
 begin
