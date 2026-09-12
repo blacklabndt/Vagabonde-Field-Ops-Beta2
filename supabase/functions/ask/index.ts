@@ -361,25 +361,26 @@ Deno.serve(async (req) => {
         throw refuse(OUT_OF_TIME_WORDS);
       }
       if (!res.ok) {
-        // The one case where nothing was billed and the PROVIDER ITSELF says
-        // so: a refusal it gave before running anything, at the status the
-        // vendor documents that refusal at. Those settle at nought, because
-        // without it a burst of refusals would eat a day's ceiling with not a
-        // token spent — denial by another road. A 429 is the one that does NOT
-        // qualify on its own: only output-token limits are "evaluated in real
-        // time as output tokens are produced", so a 429 has to name which
-        // limit it was before it counts as free. See billedNothing. A
-        // 5xx, a 529 or a gateway timeout is AMBIGUOUS and keeps its
-        // reservation: the call may have been answered and billed on the far
-        // side of a connection we lost.
+        // THE ONE CASE WHERE THE PROVIDER ITSELF SAYS NOTHING WAS BILLED: a
+        // 413 `request_too_large`, of which the errors page says "On the
+        // direct Claude API, Cloudflare returns this error before the request
+        // reaches the API servers". Refused before the API had it, so there
+        // was nothing there to run or to charge for. That is the whole list —
+        // every other refusal, 400 and 401 and 403 and 404 and every 429
+        // included, is the vendor describing what the refusal MEANT and not
+        // where it was decided, and an inference is not a receipt. All of
+        // them keep their reservation, as a 5xx or a gateway timeout does:
+        // the call may have been answered and billed on the far side of a
+        // connection we lost.
         //
         // THE BODY AND NOT JUST THE STATUS. api.anthropic.com sits behind
         // Cloudflare, so a 4xx here may have been written by a middlebox that
-        // never saw what the API did with the request. Only the provider's own
-        // error envelope is the provider's own statement, so it is what is
-        // read. Cloned, because the caller still has to read the original to
-        // build its refusal; an unreadable body is an empty string, which is
-        // not an envelope and therefore keeps the reservation.
+        // never saw what the API did with the request — and 413 is exactly
+        // the status a proxy writes on its own. Only the provider's own error
+        // envelope is the provider's own statement, so it is what is read.
+        // Cloned, because the caller still has to read the original to build
+        // its refusal; an unreadable body is an empty string, which is not an
+        // envelope and therefore keeps the reservation.
         const said = await res.clone().text().catch(() => "");
         if (billedNothing(res.status, said)) {
           const back = await admin.rpc("ask_settle_unbilled", { _call: callId });

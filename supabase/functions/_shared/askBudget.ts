@@ -195,76 +195,50 @@ export function reserveFor(model: string): number {
   return most;
 }
 
-// EACH NAME WITH THE ONE STATUS THE VENDOR DOCUMENTS IT AT, because the type
-// alone is not the statement. The errors page says `invalid_request_error`
-// "may also be used for other 4XX status codes not listed in this section" —
-// so that type arriving at 422 or 499 is the API declining something this
-// file has never read about, and the pairing is what keeps it ambiguous. A
-// documented pair is a decision we can name; anything else holds.
+// THE ONE REFUSAL THE VENDOR STATES IS DECIDED BEFORE THE API SEES IT.
 //
-// What each pair rests on, sentence by sentence, since "the request was
-// refused" is not the same claim as "nothing was billed":
-//   400 invalid_request_error — "There was an issue with the format or content
-//     of your request": the request was not accepted, so no model ran. This is
-//     also the office's own spend limit ("When usage reaches a spend limit you
-//     set, requests return HTTP 400"), where access is blocked outright.
-//   401 authentication_error — the key is "malformed, revoked, or expired".
-//     Usage is metered per organization ("Limits are set at the organization
-//     level"); an unauthenticated call resolves to no organization to bill.
-//   402 billing_error — "There's an issue with your billing or payment
-//     information": the account is not in a state to be charged.
-//   403 permission_error — the key "does not have permission to use the
-//     specified resource": the resource was not used.
-//   404 not_found_error — "The requested resource was not found": no model was
-//     reached to run anything.
-//   413 request_too_large — the strongest of them, and explicit: "On the
-//     direct Claude API, Cloudflare returns this error before the request
-//     reaches the API servers."
-//   429 rate_limit_error — NOT on its own; see `rateLimitBilledNothing`.
+// This table had seven entries and now has one, and the reason is Codex's
+// and it is right: the errors page describes what each refusal MEANS, and
+// "the request was refused" is a different claim from "nothing was billed".
+// Only one of them carries the second claim in the vendor's own words:
+//
+//   413 request_too_large — "On the direct Claude API, Cloudflare returns
+//     this error before the request reaches the API servers." Refused before
+//     the API had it; there is nothing there to have run or billed.
+//
+// WHAT CAME OFF, AND WHY EACH WAS ONLY EVER AN INFERENCE. Every one of these
+// is a good argument and not one of them is a vendor sentence:
+//   400 invalid_request_error — "an issue with the format or content of your
+//     request" says the request was not ACCEPTED. It does not say where it
+//     was refused, and the same page says this type "may also be used for
+//     other 4XX status codes not listed in this section".
+//   401 authentication_error — a key "malformed, revoked, or expired"
+//     resolves to no organization, and limits "are set at the organization
+//     level"; from which we reasoned that an unbillable caller is unbilled.
+//     Reasoned, not read.
+//   402 billing_error, 403 permission_error, 404 not_found_error — the same
+//     shape of argument: an account that cannot be charged, a resource not
+//     permitted, a model not found. All plausible, none stated.
+//   429 rate_limit_error — see below; it lost its substring path entirely.
 //
 // An ALLOW-list and never a deny-list, because Anthropic's versioning policy
 // says of these objects that "the values within these objects may expand, and
 // it is possible that the `type` values will grow over time". A name that
-// grows into the API after this file was written arrives as AMBIGUOUS and
-// keeps its reservation. `conflict_error` (409) is deliberately absent: it is
-// not documented against the Messages route, and unknown is the side to be
-// wrong on.
-const REFUSED_BEFORE_RUNNING: Readonly<Record<string, number>> = {
-  invalid_request_error: 400,
-  authentication_error: 401,
-  billing_error: 402,
-  permission_error: 403,
-  not_found_error: 404,
-  request_too_large: 413,
-  rate_limit_error: 429
-};
-
-// A 429 IS THE ONE REFUSAL THE VENDOR GIVES US A REASON TO DISTRUST, which is
-// Codex's second point and it stands. Of the three rate limits, two are
-// decided before generation — "ITPM rate limits are estimated at the beginning
-// of each request", and RPM is a limit on requests — but the third is not:
-// "OTPM rate limits are evaluated in real time as output tokens are produced".
-// A refusal that can be reached while output is being produced is a refusal
-// that may already have been billed, and no sentence anywhere says otherwise.
+// grows into the API after this file was written arrives AMBIGUOUS and keeps
+// its reservation.
 //
-// So a 429 settles at nothing only when the body says WHICH limit it was, and
-// the answer is one of the two that precede generation:
-//   - the spend cap, named outright in `error.details.error_code` as
-//     `enforced_spend_limit_reached`, of which the docs say "API usage pauses
-//     until 00:00 UTC on the first day of the next month" and "While usage is
-//     paused, API requests return HTTP 429". Paused usage is not billed usage.
-//   - a message naming the request or input-token limit; the rate-limits page
-//     says a 429 arrives "describing which rate limit was exceeded".
-// A message that names output tokens, a message we cannot read, an
-// acceleration-limit 429 whose wording we have never seen: all held. That is
-// the conservative refusal Codex asked for, and it costs a reservation.
-function rateLimitBilledNothing(err: { message?: unknown; details?: unknown }): boolean {
-  const d = err.details;
-  if (d && typeof d === "object" && (d as { error_code?: unknown }).error_code === "enforced_spend_limit_reached") return true;
-  const said = typeof err.message === "string" ? err.message.toLowerCase() : "";
-  if (!said || said.includes("output token")) return false;
-  return said.includes("input token") || said.includes("requests per minute") || said.includes("request rate");
-}
+// THE PRICE, WRITTEN DOWN RATHER THAN MET IN A TRUCK. Every refusal above
+// now holds `reserveFor(model)` — 1,008,000 on the loop model. A wrong API
+// key answers 401 every time, so ten attempts at a misconfigured deploy close
+// a 10,000,000 day on nothing at all, and Ask then stays shut until midnight
+// or until an Admin raises the cap. That is the conservative-refusal trade
+// taken to its end: the ceiling is a SAFETY limit that fails closed, the
+// floor for this crew is the 16-20M named in the design, and `ask_calls`
+// keeps `reserved` and `settled` in separate columns precisely so a day
+// closed by held refusals can be told apart from a day genuinely spent.
+const REFUSED_BEFORE_RUNNING: Readonly<Record<string, number>> = {
+  request_too_large: 413
+};
 
 // Did this refusal prove that NOTHING was billed?
 //
@@ -285,10 +259,25 @@ function rateLimitBilledNothing(err: { message?: unknown; details?: unknown }): 
 // gateway's HTML, a type we do not recognise: none of them is that statement,
 // and each keeps the reservation in full.
 //
-// A refusal the provider owns AT ITS DOCUMENTED STATUS settles at nought,
-// because without that a burst of rate-limit refusals would eat a day's
-// ceiling with not a token spent — denial by another road. Everything at 500
-// and above is ambiguous, and so is 408: a timeout is not a refusal.
+// AND THE BODY IS NOT ENOUGH EITHER. The envelope proves the API refused it;
+// it does not prove where. So the type must also be one the vendor places
+// BEFORE its servers — which, after Codex's reading, is the single pair in
+// the table above. Everything at 500 and up is ambiguous, and so is 408: a
+// timeout is not a refusal.
+//
+// THE 429 SUBSTRING PATH IS GONE, and it deserved to go on its own evidence
+// rather than on caution. Of the three rate limits only two are settled
+// before generation — "ITPM rate limits are estimated at the beginning of
+// each request", and RPM bounds requests — while "OTPM rate limits are
+// evaluated in real time as output tokens are produced". We then tried to
+// tell them apart by reading `error.message` for "input token" or "requests
+// per minute". That is a guess about prose the vendor never promised to keep
+// stable, and Codex's objection is exact: a message MENTIONING input tokens
+// is not a message stating the refusal preceded generation — an OTPM refusal
+// on a long-input request would name both. The spend-cap `error_code` went
+// with it: "API usage pauses" is a sentence about the account's state, not
+// about this request's billing, and one structured field does not turn an
+// inference into a statement. Every 429 now keeps its reservation.
 export function billedNothing(status: number, body: unknown): boolean {
   if (!Number.isFinite(status) || status < 400 || status >= 500 || status === 408) return false;
   let parsed: unknown = body;
@@ -303,9 +292,9 @@ export function billedNothing(status: number, body: unknown): boolean {
   const named = (err as { type?: unknown }).type;
   if (typeof named !== "string") return false;
   // The type AND the status it is documented at; see the table's comment.
-  if (REFUSED_BEFORE_RUNNING[named] !== status) return false;
-  if (named === "rate_limit_error") return rateLimitBilledNothing(err as { message?: unknown; details?: unknown });
-  return true;
+  // One pair passes this line, and nothing here reads `message`: prose is not
+  // evidence about billing.
+  return REFUSED_BEFORE_RUNNING[named] === status;
 }
 
 // There is deliberately no ceiling arithmetic in here any more. Admission is

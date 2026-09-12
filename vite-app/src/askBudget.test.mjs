@@ -90,104 +90,115 @@ test("a call reserves the model's whole documented maximum, and holds it when it
 const envelope = (type, message = "no", details) =>
   JSON.stringify({ type: "error", error: details ? { type, message, details } : { type, message }, request_id: "req_011CSHoEeqs5C35K2UUqR7Fy" });
 
-test("only a refusal the provider gave before running anything settles at nothing", () => {
-  // Without this a burst of rate-limit refusals eats a day's ceiling with not
-  // a token spent, which is denial by another road.
-  const owned = [
+test("the only refusal that settles at nothing is the one the vendor puts before its servers", () => {
+  // 413 IS THE WHOLE ALLOW-LIST, and it is the one case the errors page
+  // states rather than implies: "On the direct Claude API, Cloudflare returns
+  // this error before the request reaches the API servers."
+  assert.equal(billedNothing(413, envelope("request_too_large")), true);
+
+  // EVERY OTHER TYPE CAME OFF THE LIST — Codex's reading, and it is right:
+  // the page says what each refusal MEANS, and "the request was refused" is
+  // not "nothing was billed". Each of these used to settle at nought on an
+  // argument of ours rather than a sentence of theirs, and each now keeps its
+  // reservation in full.
+  const wereInferred = [
     [400, "invalid_request_error"], [401, "authentication_error"], [402, "billing_error"],
-    [403, "permission_error"], [404, "not_found_error"], [413, "request_too_large"]
+    [403, "permission_error"], [404, "not_found_error"], [429, "rate_limit_error"]
   ];
-  for (const [status, type] of owned) {
-    assert.equal(billedNothing(status, envelope(type)), true, `${status} ${type} is a refusal the provider owns`);
+  for (const [status, type] of wereInferred) {
+    assert.equal(billedNothing(status, envelope(type)), false, `${status} ${type} is inferred, not stated, so it holds`);
   }
-  // THE TYPE AT A STATUS THE VENDOR DOES NOT DOCUMENT IT AT IS AMBIGUOUS. The
-  // errors page says `invalid_request_error` "may also be used for other 4XX
-  // status codes not listed in this section" — so that type at 422 is the API
-  // declining something this file has never read about, and an unread
-  // decision is not a proof of nothing billed.
-  for (const [status, type] of [[422, "invalid_request_error"], [499, "invalid_request_error"], [400, "not_found_error"], [403, "rate_limit_error"], [404, "request_too_large"]]) {
-    assert.equal(billedNothing(status, envelope(type)), false, `${status} ${type} is not a documented pair`);
+  // The type at a status the vendor does not document it at is ambiguous
+  // twice over, and 413 is not a password: the pair has to match.
+  for (const [status, type] of [[400, "request_too_large"], [422, "request_too_large"], [413, "invalid_request_error"], [499, "request_too_large"]]) {
+    assert.equal(billedNothing(status, envelope(type)), false, `${status} ${type} is not the documented pair`);
   }
   // And everything ambiguous keeps its reservation: the call may have been
   // answered and billed on the far side of a connection we lost. 408 is a
   // timeout wearing a 4xx, so it is named out with the 5xx family.
   for (const status of [408, 500, 502, 503, 504, 529, 200, 0, NaN]) {
-    assert.equal(billedNothing(status, envelope("invalid_request_error")), false, `${status} must keep its reservation`);
+    assert.equal(billedNothing(status, envelope("request_too_large")), false, `${status} must keep its reservation`);
   }
 });
 
-test("a 4xx that is not the provider's own words keeps its reservation", () => {
-  // THE STATUS ALONE PROVES NOTHING. api.anthropic.com is behind Cloudflare —
-  // the docs say so of 413, "Cloudflare returns this error before the request
-  // reaches the API servers" — so a 4xx on this socket may have been written
-  // by a middlebox that never saw whether the call it proxied was run and
-  // billed. Only the documented envelope is the provider speaking.
+test("a 413 that is not the provider's own words keeps its reservation", () => {
+  // THE STATUS ALONE PROVES NOTHING. api.anthropic.com is behind Cloudflare,
+  // so a 4xx on this socket may have been written by a middlebox that never
+  // saw whether the call it proxied was run and billed. Only the documented
+  // envelope is the provider speaking — and 413 is exactly the status a proxy
+  // is likeliest to write on its own.
   const notTheProvider = [
-    "<!DOCTYPE html><html><head><title>403 Forbidden</title></head></html>",
+    "<!DOCTYPE html><html><head><title>413 Request Entity Too Large</title></head></html>",
     "error code: 1015",
     "",
     "{",
-    JSON.stringify({ message: "Forbidden" }),
+    JSON.stringify({ message: "Payload Too Large" }),
     // The envelope's shape but not its contents.
-    JSON.stringify({ type: "error", error: "rate_limit_error" }),
-    JSON.stringify({ type: "message", error: { type: "rate_limit_error" } })
+    JSON.stringify({ type: "error", error: "request_too_large" }),
+    JSON.stringify({ type: "message", error: { type: "request_too_large" } })
   ];
   for (const body of notTheProvider) {
-    assert.equal(billedNothing(429, body), false, `a 429 carrying ${JSON.stringify(body).slice(0, 40)} must keep its reservation`);
+    assert.equal(billedNothing(413, body), false, `a 413 carrying ${JSON.stringify(body).slice(0, 40)} must keep its reservation`);
   }
   // An ALLOW-list, because the versioning policy says the type values "may
   // expand ... over time": a name written into the API after this file must
-  // arrive as ambiguous, not as free. `conflict_error` is the live example —
-  // not documented against the Messages route, so it is not on the list.
+  // arrive as ambiguous, not as free.
   for (const type of ["conflict_error", "api_error", "overloaded_error", "timeout_error", "something_new_error"]) {
-    assert.equal(billedNothing(400, envelope(type)), false, `${type} is not a refusal we can prove cost nothing`);
+    assert.equal(billedNothing(413, envelope(type)), false, `${type} is not a refusal we can prove cost nothing`);
   }
   // Non-strings are not envelopes either, and neither is the object shape
   // arriving already parsed by accident.
   for (const body of [null, undefined, 0, [], { type: "error" }]) {
-    assert.equal(billedNothing(400, body), false, "an unreadable body keeps its reservation");
+    assert.equal(billedNothing(413, body), false, "an unreadable body keeps its reservation");
   }
 });
 
-test("a 429 settles at nothing only when the body names a limit checked before generation", () => {
-  // CODEX'S SECOND POINT, and the docs give a reason to distrust this one
-  // rather than mere silence: of the three rate limits, "ITPM rate limits are
-  // estimated at the beginning of each request" and RPM is a limit on
-  // requests, but "OTPM rate limits are evaluated in real time as output
-  // tokens are produced". A refusal reachable while output is being produced
-  // may already have been billed.
-  //
-  // The spend cap is the one the vendor states outright: "API usage pauses
-  // until 00:00 UTC on the first day of the next month" and "While usage is
-  // paused, API requests return HTTP 429". Paused usage is not billed usage,
-  // and `error.details.error_code` names it.
-  assert.equal(billedNothing(429, envelope(
-    "rate_limit_error",
-    "You have reached your API usage limits: your organization has crossed its monthly API usage threshold.",
-    { error_code: "enforced_spend_limit_reached" })), true);
-  // A 429 arrives "describing which rate limit was exceeded", so a message
-  // naming the request or input-token limit is one of the two decided at the
-  // start of a request.
-  for (const said of [
+test("no 429 settles at nothing, whatever its message says", () => {
+  // CODEX'S LAST POINT, and it is about EVIDENCE rather than caution. Of the
+  // three rate limits only two are settled before generation — "ITPM rate
+  // limits are estimated at the beginning of each request", and RPM bounds
+  // requests — while "OTPM rate limits are evaluated in real time as output
+  // tokens are produced". We tried to tell them apart by reading the message
+  // for "input token" or "requests per minute". That is a guess about prose,
+  // and the objection is exact: a message MENTIONING input tokens does not
+  // state that the refusal preceded generation. A long-input request refused
+  // on OTPM would name both.
+  const wereAccepted = [
     "Number of request tokens has exceeded your per-minute rate limit (input tokens per minute)",
     "This request would exceed your organization's requests per minute rate limit"
-  ]) {
-    assert.equal(billedNothing(429, envelope("rate_limit_error", said)), true, said);
-  }
-  // And everything else holds its reservation in full: output tokens, a
-  // wording we have never seen (an acceleration limit, say), an empty message.
-  for (const said of [
+  ];
+  // The ambiguous middle Codex named: prose that mentions the words the old
+  // check keyed on while saying nothing about when the refusal was decided.
+  const ambiguous = [
+    "Your request had 900000 input tokens and was rejected after output had begun",
+    "Rate limited: input tokens per minute and output tokens per minute both exceeded",
+    "This organization's request rate and output token rate are both over limit",
+    "input token accounting is included in this acceleration limit"
+  ];
+  const alwaysHeld = [
     "This request would exceed your organization's output tokens per minute rate limit",
     "You have exceeded the rate limit for this model",
     "",
     "Too Many Requests"
-  ]) {
+  ];
+  for (const said of [...wereAccepted, ...ambiguous, ...alwaysHeld]) {
     assert.equal(billedNothing(429, envelope("rate_limit_error", said)), false, `"${said}" must keep its reservation`);
   }
-  // A details object that is not the documented shape is not the statement.
-  for (const details of [{ error_code: "something_else" }, { error_code: 7 }, "enforced_spend_limit_reached"]) {
-    assert.equal(billedNothing(429, envelope("rate_limit_error", "", details)), false, "an unread details object keeps its reservation");
-  }
+  // The spend cap went with them. "API usage pauses ... While usage is paused,
+  // API requests return HTTP 429" is a sentence about the ACCOUNT'S state,
+  // not about this request's billing, and one structured field does not turn
+  // an inference into a statement.
+  assert.equal(billedNothing(429, envelope(
+    "rate_limit_error",
+    "You have reached your API usage limits: your organization has crossed its monthly API usage threshold.",
+    { error_code: "enforced_spend_limit_reached" })), false);
+  // Nothing in the decision reads an error message any more: prose is not
+  // evidence about billing, so there is no substring left to key on.
+  const src = read("supabase/functions/_shared/askBudget.ts");
+  const fn = src.slice(src.indexOf("export function billedNothing"));
+  const body = fn.slice(0, fn.indexOf("\n}"));
+  assert.equal(/\.message|toLowerCase|error_code|details/.test(body), false,
+    "billedNothing must decide on the type and status alone");
 });
 
 test("nothing Ask sends can carry the call past the window the ceiling rests on", () => {
