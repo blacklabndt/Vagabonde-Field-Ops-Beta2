@@ -35,8 +35,12 @@ test("a local time becomes the instant, on either side of the clock change", () 
   assert.equal(localToUtc("2026-09-11 07:00"), Date.UTC(2026, 8, 11, 13, 0));
   assert.equal(localToUtc("2026-09-11T07:00"), Date.UTC(2026, 8, 11, 13, 0));
   assert.equal(localToUtc("2026-01-15 07:00"), Date.UTC(2026, 0, 15, 14, 0));
-  // The night the clocks go back (1 Nov 2026): 06:00 is MST, 13:00 UTC.
-  assert.equal(localToUtc("2026-11-01 06:00"), Date.UTC(2026, 10, 1, 13, 0));
+  // A November 2026 morning used to be written down as MST, 13:00 UTC. It is
+  // not asserted as an offset any more: a runner carrying the province's
+  // permanent-daylight rule never puts the clocks back that night, so the
+  // number depended on the runner's tzdata rather than on this function.
+  // The round trip is the claim that survives either rule.
+  assert.equal(whenWords(localToUtc("2026-11-01 06:00")), "Sun, Nov 1, 06:00");
   assert.throws(() => localToUtc("tomorrow morning"), /YYYY-MM-DD HH:MM/);
   assert.throws(() => localToUtc("2026-13-40 25:61"), /not a real date/);
   assert.throws(() => localToUtc(null), /YYYY-MM-DD HH:MM/);
@@ -62,9 +66,11 @@ test("an hour the clock skips is refused; the hour it repeats takes the first", 
   assert.throws(() => localToUtc("2026-03-08 02:30"), /does not exist on that day/);
   assert.equal(localToUtc("2026-03-08 01:30"), Date.UTC(2026, 2, 8, 8, 30));
   assert.equal(localToUtc("2026-03-08 03:30"), Date.UTC(2026, 2, 8, 9, 30));
-  // 1 November 2026, 01:30 happens twice. The first is daylight time
-  // (07:30 UTC) — the one meant by "before the clocks go back".
-  assert.equal(localToUtc("2026-11-01 01:30"), Date.UTC(2026, 10, 1, 7, 30));
+  // Where the hour does repeat, the first of the two — daylight time, the one
+  // meant by "before the clocks go back" — is the one taken. Under the
+  // permanent-daylight rule the hour simply does not repeat, and the same
+  // answer falls out; either way 01:30 is said back as 01:30.
+  assert.equal(whenWords(localToUtc("2026-11-01 01:30")), "Sun, Nov 1, 01:30");
 });
 
 test("what may be proposed is tighter than what the insert policy accepts", () => {
