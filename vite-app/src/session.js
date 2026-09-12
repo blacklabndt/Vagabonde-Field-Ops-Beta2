@@ -62,11 +62,17 @@ export async function restoreSession({
   // answer the boot reads to decide whether anybody still owns what is
   // stored, and a moment's IDB fault is no evidence that nobody does — so the
   // failure is reported as itself and the caller can refuse to act on it.
-  const cached = async reason => {
+  //
+  // A remembered identity is also only this session's to restore. Where there
+  // IS a session — the profile read failed, not the sign-in — the stored
+  // identity must be that same account, or it is the last person's and
+  // belongs to nobody here: show sign-in rather than hand it over.
+  const cached = async (reason, expectId = null) => {
     let identity = null;
     let identityUnreadable = false;
     try { identity = await Promise.resolve(readIdentity()); }
     catch { identityUnreadable = true; }
+    if (identity && expectId && identity.id !== expectId) identity = null;
     if (identity) return { user: identity, offline: true, reason };
     return { user: null, offline: true, reason, identityUnreadable };
   };
@@ -104,14 +110,26 @@ export async function restoreSession({
   try {
     profileResult = await withTimeout(Promise.resolve(fetchProfile(session.user.id)), timeoutMs);
   } catch {
-    return cached("profile-error");
+    return cached("profile-error", session.user.id);
   }
-  if (profileResult === TIMED_OUT) return cached("profile-timeout");
+  if (profileResult === TIMED_OUT) return cached("profile-timeout", session.user.id);
 
   // The critical distinction: a request that failed is not the server saying
-  // this account has no profile.
-  if (profileResult && profileResult.error && isNetworkError(profileResult.error)) {
-    return cached("profile-unreachable");
+  // this account has no profile — and "failed" is ANY error, not only a
+  // network one. isNetworkError is a message match plus navigator.onLine, so a
+  // gateway 502, a PostgREST 5xx or an RLS blip on a device with perfect
+  // signal fell straight through to the sign-out below, which App.jsx answers
+  // by clearing the whole device cache: every half-entered ticket and
+  // assessment on the tablet, gone because Supabase hiccupped at launch. The
+  // sign-in path already knew this — components/auth.jsx keeps the session on
+  // any error but a missing row — and boot did not; the two must agree.
+  //
+  // Revocation is untouched, because it is not an error: a locked or
+  // tab-stripped account still reads its OWN profiles row (profiles_select,
+  // migration 20260908063429) and comes back as data with no error, so it
+  // still reaches identityFrom, still answers null, and is still signed out.
+  if (profileResult && profileResult.error) {
+    return cached("profile-unreadable", session.user.id);
   }
 
   const identity = identityFrom(profileResult && profileResult.data, session.user.email);

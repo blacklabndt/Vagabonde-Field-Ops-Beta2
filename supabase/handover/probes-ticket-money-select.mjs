@@ -64,8 +64,11 @@ try {
       values ('QA-ticket','00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003',current_date,'Approved',123.45,5,17);
   `);
   if (!process.argv.includes('--before')) {
-    await db.exec(read('./ticket-money-select.sql'));
-    await db.exec(read('./ticket-money-select-enforce.sql'));
+    // The two drafts these probes were written beside are applied and filed;
+    // a draft under handover/ is a draft only until then, so the probe reads
+    // the migrations themselves and cannot drift from what is live.
+    await db.exec(read('../migrations/20260912205211_a_ticket_total_is_read_through_a_view.sql'));
+    await db.exec(read('../migrations/20260912210854_a_ticket_total_is_read_through_a_view_enforced.sql'));
   }
   await caller('Helper');
   await refused('select total from public.tickets');
