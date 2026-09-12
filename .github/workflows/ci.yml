@@ -50,7 +50,7 @@ jobs:
 
       - name: Deploy Worker and app
         if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/room/37dbe6165f-beta-2-review' && github.repository == 'blacklabndt/Vagabonde-Field-Ops-Beta2'
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: '39d46bd7c717e6215af2079b0dd804c0'
