@@ -113,7 +113,40 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   re-point the trigger before anything else — HANDOVER.md's Path B says how. An unshipped
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
-  Nothing is waiting there now. The latest is
+  Nothing is waiting there now. The latest three are Ask's spending:
+  `20260912031059_the_ask_ceiling_keeps_its_own_default.sql`,
+  `20260912030901_the_assistant_has_a_daily_allowance.sql` and
+  `20260912025816_the_assistant_has_a_daily_allowance.sql` — the same
+  change applied twice, because an interrupted turn had already applied it,
+  and then a third file because `add column if not exists ... default` does
+  NOTHING when the column exists, not even the default: the live row read
+  10,000,000 while the column carried none, so a fresh replay would have
+  given the assistant no ceiling. All three are filed because the repo and
+  the applied history reconcile 1:1, and 031059 is the one that matters.
+  Together: `ask_leases` (one question at a time per person, `ask_claim_lease`
+  / `ask_release_lease`, a 300-second stale window, the release naming its own
+  request id), `ask_spend` (tokens the PROVIDER reported, by Grande Prairie day
+  and person; Admin reads, nobody writes, like `backup_runs`),
+  `ask_allowance()` / `ask_record_spend()`, and
+  `app_settings.ask_daily_token_cap` (null is no ceiling; the Admin screen's
+  "Daily limit (tokens)" box is the only way to change it, which is why
+  `SPENT_WORDS` may name that screen). All four RPCs are the service role's
+  alone. Eleven probes beside it, run live. The ONE thing they cannot show is
+  two simultaneous claims — that needs two connections holding transactions
+  open at once; the procedure is at the foot of the probes file and is still
+  unrun. Before them,
+  `20260911233656_ask_learned_is_bounded_and_cannot_be_backdated.sql` —
+  `ask_learned` gains a column-list INSERT grant (`note`, `said_by` only, so
+  `created_at` is not the caller's to backdate — backdating was what turned
+  crowding into eviction under the old oldest-first read), a BEFORE INSERT
+  trigger capping one author at 40 behind a per-author advisory xact lock, and
+  `replace_learned(_old, _note)`, SECURITY INVOKER, which takes the same lock,
+  refuses a zero-row delete rather than turning a correction into an addition,
+  and is one transaction. Nine probes beside it, run live under role
+  simulation. A BEFORE INSERT trigger fires AHEAD of the RLS check, so an
+  author already at the cap meets the cap's words when attempting a forged
+  `said_by` — right refusal, wrong reason, and the probe asks that question
+  while the author still has room. Before it,
   `20260911010317_a_reminder_is_a_timer_with_no_mail.sql` —
   `scheduled_sends.kind` gains `reminder`, `job_id` becomes nullable, and
   the insert policy's reminder arm (record_id and to_list pinned empty; a
@@ -511,7 +544,33 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   go and the block says how many). So the input of any one call is
   arithmetic — the system message, the windowed thread, the notes and at
   most one budget of results — which is what a spending limit has to rest
-  on. The key is `app_settings.anthropic_api_key`
+  on. AND THE LIMIT IS NOW THERE: `askBudget.ts` (pure, import-free, in the
+  guard list) and the three RPCs behind it. One question at a time per person
+  (`ask_leases`, claimed before any paid call, released in a `finally` naming
+  its own request id, taken over after `LEASE_STALE_SECONDS`), and a daily
+  ceiling in TOKENS checked before every paid call. The count is the
+  PROVIDER'S and never ours: Anthropic documents its own token counter as an
+  estimate, so the ceiling is enforced on what has been SETTLED — the `usage`
+  block a call came back with, all four of its names, because
+  `input_tokens` alone undercounts the day prompt caching is switched on.
+  That leaves the call in flight, and it is BOUNDED rather than estimated:
+  `cap + (requests in flight) x ONE_CALL_MAX`, where `ONE_CALL_MAX` is the
+  model's context window (a larger input is refused with a 400) plus the
+  `max_tokens` we send — loose, but finite and provider-enforced. The lease
+  is what keeps that first factor small; it is not politeness. A bill that
+  cannot be read, or a ledger write that fails, holds the model's whole
+  maximum against THAT REQUEST for the rest of its life and is never written
+  down as nought — a write an attacker can make fail must not be a ceiling
+  they can switch off, and `ask_record_spend` ADDS, so a retry after an
+  uncertain failure would double-count. BOTH paid calls go through the one
+  metered transport (`meteredFetch`), the learning pass included — it was
+  counted nowhere for a long time, and a second paid call counted nowhere is a
+  ceiling with a hole in it; `askBudget.test.mjs` reads the function back and
+  fails on a bare `fetch(API_URL`. Tokens and not dollars deliberately: input
+  and output price differently and the rate differs per model, so a price
+  table in the code would be a second source of truth that rots in silence,
+  and the office converts once when it sets the number. Null is no ceiling.
+  The key is `app_settings.anthropic_api_key`
   (Admin screen, env fallback, in APP_SETTINGS_SECRETS); without one the
   function refuses in plain words. The thread lives in memory
   (`askThread.js`, forgotten at sign-out beside the chat drafts) and
@@ -1225,8 +1284,8 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   reads both files off disk, strips the types from the function's with
   Node's own stripper, folds the whitespace and compares them. Change one,
   change the other, in the same commit; an interface goes ABOVE the marker,
-  where the twin has nothing to match. Twenty-three shared modules — `backupSchedule.ts`,
-  `askTools.ts`, `askLoop.ts`, `askDrafts.ts`, `askSends.ts`, `scheduledSends.ts`, `askKnowledge.ts`, `askLearn.ts`, `askFiles.ts`,
+  where the twin has nothing to match. Twenty-four shared modules — `backupSchedule.ts`,
+  `askTools.ts`, `askLoop.ts`, `askDrafts.ts`, `askSends.ts`, `scheduledSends.ts`, `askKnowledge.ts`, `askLearn.ts`, `askFiles.ts`, `askBudget.ts`,
   `emailIn.ts`, `chasePlan.ts`, `dayCheck.ts`, `hoursDose.ts`, `attention.ts`, `ticketCheck.ts`,
   `backupTables.ts`, `backupManifest.ts`, `backupRun.ts`, `backupOauth.ts`,
   `drive.ts`, `gzip.ts`, `constantTime.ts` and `activeAdmin.ts` — are erasable TypeScript with

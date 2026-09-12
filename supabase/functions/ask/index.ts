@@ -39,6 +39,7 @@ import { resolveRecipients, jhaSendGate, ticketSendGate, ticketApprovalAddress, 
 import { isKind, localToUtc, checkRunAt, whenWords, labelFor, scheduleWords, cancelWords, rescheduleWords, splitList, reminderText, reminderWords, REPORT_SEND_ROLES } from "../_shared/scheduledSends.ts";
 import { askLoop, systemPrompt, windowTurns, API_URL, API_VERSION } from "../_shared/askLoop.ts";
 import { learnBody, parseLearned, roomFor, learnedLines, forgetWords, MAX_LEARN_REQUEST_CHARS, MAX_LEARNED, type LearnedRow } from "../_shared/askLearn.ts";
+import { LEASE_STALE_SECONDS, usageTokens, unsettledHold, mayCall, BUSY_WORDS, SPENT_WORDS, LEARN_SPENT_WORDS, LEARN_TROUBLE_WORDS } from "../_shared/askBudget.ts";
 import { knowledgeText, cleanContext, whereLines } from "../_shared/askKnowledge.ts";
 import { checkFile, fileWords, fileChars, MAX_FILES, type AskFile } from "../_shared/askFiles.ts";
 import { refuse, plainRefusal, loggedWords } from "../_shared/publicError.ts";
@@ -200,6 +201,10 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   let userId = "";
   let tool = "";
+  // Held outside the try so the finally can let it go however this ends —
+  // an answer, a refusal, or a throw nobody expected. A lease left behind
+  // locks its own owner out of Ask until it goes stale.
+  let lease: { user: string; request: string } | null = null;
   try {
     const asUser = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!,
       { global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } } });
@@ -255,6 +260,84 @@ Deno.serve(async (req) => {
 
     const key = (await appSettings()).anthropicApiKey;
     if (!key) return json({ error: "Ask isn't set up yet — an Admin can add the Anthropic key on the Admin screen." }, 400);
+
+    // ── what this may cost ───────────────────────────────────────────────
+    //
+    // Everything past this line is paid for, so this is where the lease is
+    // taken and the day's spending is read. The service role does these four
+    // things and nothing else; every READ Ask makes is still the caller's
+    // own, under their own policies.
+    //
+    // The lease is one question at a time per person. It is not politeness:
+    // the ceiling is checked before each call against what is already
+    // SETTLED, so the only spending that can cross the line is a call already
+    // in flight when it was crossed — and the lease is what bounds how many
+    // of those there can be. See askBudget.ts for the arithmetic.
+    const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const requestId = crypto.randomUUID();
+    const took = await admin.rpc("ask_claim_lease", { _user: user.id, _request: requestId, _stale_seconds: LEASE_STALE_SECONDS });
+    if (took.error) throw new Error(took.error.message);
+    if (took.data !== true) return json({ error: BUSY_WORDS }, 429);
+    lease = { user: user.id, request: requestId };
+
+    // The day's spending and the ceiling in one answer. The ceiling comes
+    // from here rather than from the shared `appSettings()` select on purpose:
+    // naming a brand-new column there would have made every mail function
+    // refuse until this migration landed, and a deployment order that must be
+    // held in somebody's head is one that gets forgotten.
+    const allow = await admin.rpc("ask_allowance").single();
+    if (allow.error) throw new Error(allow.error.message);
+    const allowance = (allow.data ?? {}) as { spent?: number | string | null; cap?: number | string | null };
+    // `settled` is the day as the database last answered it; `held` is what
+    // this request has spent since and could not write down. They are added
+    // for the check, so a ledger write that fails degrades the ceiling for
+    // the rest of the crew and never for this request — which is the half an
+    // attacker would otherwise aim at.
+    let settled = Number(allowance.spent ?? 0);
+    const cap = allowance.cap === null || allowance.cap === undefined ? null : Number(allowance.cap);
+    let held = 0;
+
+    // The one transport both paid calls go through. Counting it anywhere
+    // else would mean counting it twice or missing a branch: the loop has
+    // several ways to call and the learning pass is a different file.
+    const meteredFetch = async (url: string, init: RequestInit): Promise<Response> => {
+      // The model is read off the head of the body rather than parsed out of
+      // it — the body can be 350,000 characters and this runs on every call.
+      // A name that cannot be read falls back to the largest ceiling we know,
+      // which is the safe direction.
+      const model = (/"model":"([^"]+)"/.exec(String(init.body ?? "").slice(0, 200)) ?? [])[1] ?? "";
+      if (!mayCall(settled, held, cap)) throw refuse(SPENT_WORDS);
+      const res = await fetch(url, init);
+      // A refusal costs nothing and is the caller's to read; only an answer
+      // is billed.
+      if (!res.ok) return res;
+      // Cloned, because the caller still has to read the original. The
+      // figures are the PROVIDER'S — Anthropic documents its own token
+      // counter as an estimate, so nothing computed on this side could be
+      // the ceiling's basis.
+      let cost: { input: number; output: number } | null = null;
+      try { cost = usageTokens(await res.clone().json()); } catch { cost = null; }
+      if (!cost) {
+        // An unreadable bill is not a free call. The model's whole documented
+        // maximum is held against this request instead, because that is the
+        // only figure that cannot be an undercount.
+        held += unsettledHold(model);
+        await logError("ask", `A model reply carried no readable usage; holding ${unsettledHold(model)} tokens against this request.`, { user: userId, model });
+        return res;
+      }
+      const rec = await admin.rpc("ask_record_spend", { _user: user.id, _input: cost.input, _output: cost.output });
+      if (rec.error) {
+        // Not retried: `ask_record_spend` ADDS, so a retry after an uncertain
+        // failure could double-count the day. The figure is held locally for
+        // the rest of this request instead, and the office is told the
+        // ledger has a hole in it.
+        held += cost.input + cost.output;
+        await logError("ask", `A model call was made but not recorded (${cost.input} in, ${cost.output} out): ${rec.error.message}`, { user: userId, model });
+      } else {
+        settled = Number(rec.data ?? settled);
+      }
+      return res;
+    };
 
     // ── Reads, all as the caller ─────────────────────────────────────────
     const findClients = async (q: string): Promise<OrgHit[]> => {
@@ -961,7 +1044,7 @@ Deno.serve(async (req) => {
 
     const result = await askLoop(thread, toolDefinitions(tools),
       systemPrompt({ name: me.name ?? "", role: me.role ?? "" }, Date.now(), { knowledge: knowledgeText(), where }), key,
-      { fetch: (url, init) => fetch(url, init), runTool, trace: traceLine, now: Date.now },
+      { fetch: meteredFetch, runTool, trace: traceLine, now: Date.now },
       // The crew's notes, as data in the conversation and never in the
       // system message. The fence is minted per request: a note written
       // yesterday cannot contain a word invented a moment ago, so it cannot
@@ -975,8 +1058,17 @@ Deno.serve(async (req) => {
     // by a non-Admin is refused by the delete policy and the new note lands
     // beside the old one, where the Admin's list shows both. Best effort:
     // nothing here can fail the answer, and a missed note is not an error.
-    const kept = await learn(asUser, thread, result.answer, learnedRows, key, user.id)
-      .catch(() => ({ added: [], trouble: null }) as LearnResult);
+    // It goes through the SAME metered transport as the loop: a second paid
+    // call counted nowhere is a ceiling with a hole in it, and this one fires
+    // on every answer.
+    const kept = await learn(asUser, thread, result.answer, learnedRows, key, user.id, meteredFetch)
+      // The answer above is already right and already paid for, so nothing
+      // here may fail it — but a note that did not land must not look like
+      // one that did. The allowance running out is its own sentence, because
+      // "try again" is the wrong advice for it.
+      // Named rather than "any marked refusal": a different refusal told as
+      // the allowance would be a sentence that is simply untrue.
+      .catch(e => ({ added: [], trouble: (e as Error)?.message === SPENT_WORDS ? LEARN_SPENT_WORDS : LEARN_TROUBLE_WORDS }) as LearnResult);
     return json({
       ...result, learned: kept.added,
       ...(kept.trouble ? { learnTrouble: kept.trouble } : {}),
@@ -994,12 +1086,25 @@ Deno.serve(async (req) => {
     // function_errors, where the digest and Home's strip read it.
     await logError("ask", loggedWords(e), { user: userId, tool });
     return json({ error: plainRefusal(e) ? message : ASK_TROUBLE }, 400);
+  } finally {
+    // However this ended. The release names its own request id, so a request
+    // that hung past the stale window and woke on the way out cannot take the
+    // lease of the question that has since taken over from it. Best effort:
+    // a release that fails costs its owner one stale window and nothing else,
+    // and there is no answer left to fail.
+    if (lease) {
+      const mine = lease;
+      try {
+        const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+        await admin.rpc("ask_release_lease", { _user: mine.user, _request: mine.request });
+      } catch { /* the stale window is the backstop */ }
+    }
   }
 });
 
 // One extractor call and the writes it asks for, as the caller. Returns the
 // notes added, with their ids, for the card's "Learned:" line.
-async function learn(asUser: SupabaseClient, thread: unknown, answer: string, existing: LearnedRow[], apiKey: string, userId: string): Promise<LearnResult> {
+async function learn(asUser: SupabaseClient, thread: unknown, answer: string, existing: LearnedRow[], apiKey: string, userId: string, send: (url: string, init: RequestInit) => Promise<Response>): Promise<LearnResult> {
   const turns = [...windowTurns(thread), { role: "assistant" as const, text: answer }];
   // Measured before a penny is spent, on the text that actually goes — the
   // same rule the loop's own calls follow. Over the backstop the call is not
@@ -1012,12 +1117,22 @@ async function learn(asUser: SupabaseClient, thread: unknown, answer: string, ex
     await logError("ask", `the learning call was ${chars} characters, over the ${MAX_LEARN_REQUEST_CHARS} ceiling, and was not made`, { user: userId });
     return { added: [], trouble: "This conversation was too long for Ask to learn anything from." };
   }
-  const res = await fetch(API_URL, {
+  // The metered transport, the same one the loop uses: this is the second
+  // paid call of every answer, and for a long time it was counted nowhere.
+  // When the allowance is gone it throws, and the caller's catch turns that
+  // into its own sentence.
+  const res = await send(API_URL, {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": API_VERSION },
     body: payload
   });
-  if (!res.ok) return { added: [], trouble: null };
+  // A refusal from the provider used to be a silent `null` — the card said
+  // nothing and the person had no way to know the note had not been kept.
+  // The words are fixed and ours: the reason belongs in the log.
+  if (!res.ok) {
+    await logError("ask", `the learning call was refused with ${res.status}`, { user: userId });
+    return { added: [], trouble: LEARN_TROUBLE_WORDS };
+  }
   const reply = (await res.json()) as { content?: { type: string; text?: string }[] };
   const text = (reply.content ?? []).filter(b => b.type === "text").map(b => b.text ?? "").join("\n");
   const decided = parseLearned(text, existing.map(e => e.id));

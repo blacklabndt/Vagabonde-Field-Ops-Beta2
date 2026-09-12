@@ -222,10 +222,26 @@ test("every credential column of app_settings is stripped from a backup", () => 
   // The list is checked against the migrations rather than against itself:
   // a column added later whose name says key, secret or token must be
   // added here too, and this is what says so.
-  const credentials = appSettingsColumns().filter(c => /(secret|token|key)/i.test(c));
+  // Named exceptions, never a loosened pattern: the pattern is what catches
+  // the next real secret, and a regex widened to let one column through stops
+  // catching a class of them. A column here has to say why.
+  //
+  //   ask_daily_token_cap — "token" in the billing sense, a COUNT of them.
+  //     Stripping it would mean a restore silently lifted the assistant's
+  //     spending ceiling, which is the opposite of what this list is for, so
+  //     what is asserted below is that it is NOT in it.
+  const NOT_A_CREDENTIAL = ["ask_daily_token_cap"];
+  const credentials = appSettingsColumns()
+    .filter(c => /(secret|token|key)/i.test(c) && !NOT_A_CREDENTIAL.includes(c));
   assert.ok(credentials.length >= 6, "the scan found suspiciously few credential columns");
   for (const c of credentials) {
     assert.ok(APP_SETTINGS_SECRETS.includes(c), `${c} looks like a credential and must be stripped`);
+  }
+  for (const c of NOT_A_CREDENTIAL) {
+    // An excuse for a column the scan can no longer see is an excuse that has
+    // outlived its column, and the next reader would take it for a rule.
+    assert.ok(appSettingsColumns().includes(c), `${c} is excused from a scan it is no longer in`);
+    assert.ok(!APP_SETTINGS_SECRETS.includes(c), `${c} must survive a backup, not be blanked by it`);
   }
   assert.ok(APP_SETTINGS_SECRETS.includes("backup_oauth_state"), "the OAuth nonce is not a backup's business either");
 });
@@ -937,7 +953,7 @@ test("the shared modules read nothing from the world around them", () => {
   // this file outright; the assertion is here so the reason is named.
   for (const f of ["backupTables.ts", "backupManifest.ts", "drive.ts", "backupOauth.ts", "askTools.ts", "askLoop.ts", "askDrafts.ts", "askSends.ts", "scheduledSends.ts", "askKnowledge.ts", "askLearn.ts", "askFiles.ts",
     "emailIn.ts", "chasePlan.ts", "dayCheck.ts", "hoursDose.ts", "attention.ts", "ticketCheck.ts",
-    "backupRun.ts", "backupSchedule.ts", "gzip.ts", "constantTime.ts", "activeAdmin.ts"]) {
+    "askBudget.ts", "backupRun.ts", "backupSchedule.ts", "gzip.ts", "constantTime.ts", "activeAdmin.ts"]) {
     const src = read(`supabase/functions/_shared/${f}`);
     // Every import statement, however it is wrapped: the specifier is the
     // first quoted string after "from", or straight after "import" for a

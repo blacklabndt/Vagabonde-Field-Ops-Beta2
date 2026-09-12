@@ -24,7 +24,7 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
   const [archiveMode, setArchiveMode] = useState(null);
   const [form, setForm] = useState({
     resendApiKey: "", fromReports: "", fromBilling: "", replyTo: "",
-    klipyApiKey: "", anthropicApiKey: "", approvalBaseUrl: "",
+    klipyApiKey: "", anthropicApiKey: "", askDailyTokenCap: "", approvalBaseUrl: "",
     invoiceTerms: "", invoiceRemitTo: "", businessNumber: ""
   });
   // "loading" | "ready" | "failed". Failed matters: saving writes the whole
@@ -52,6 +52,10 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
           replyTo: row.reply_to || "",
           klipyApiKey: row.klipy_api_key || "",
           anthropicApiKey: row.anthropic_api_key || "",
+          // Blank means no limit, and an empty box has to mean exactly that —
+          // so a null stays blank rather than becoming "0", which the save
+          // would then refuse on a form the Admin never touched.
+          askDailyTokenCap: row.ask_daily_token_cap == null ? "" : String(row.ask_daily_token_cap),
           approvalBaseUrl: row.approval_base_url || "",
           invoiceTerms: row.invoice_terms || "",
           invoiceRemitTo: row.invoice_remit_to || "",
@@ -261,6 +265,21 @@ export function AdminSetupScreen({ currentUser, onArchiveCleared }) {
             <input className="input" type="password" value={form.anthropicApiKey}
               onChange={e => set("anthropicApiKey", e.target.value)}
               placeholder="from console.anthropic.com — optional" autoComplete="off" style={{ width: "100%" }} />
+          </Field>
+          {/* The stop on a runaway. Ask refuses to spend past this for the
+              rest of the day and says so, in words that send the person
+              here — so this box has to exist, or that sentence is a lie. */}
+          <p className="body-s" style={{ marginTop: 14 }}>
+            Daily spending limit. Anthropic bills by <em>tokens</em> — roughly a word each, counted
+            both ways: the question and everything Ask reads to answer it, plus the answer itself.
+            A typical question costs a few thousand. The limit below covers the whole crew for one
+            day, and Ask stops until the next morning once it is reached. Leave it blank for no
+            limit. Check the running cost in your Anthropic account.
+          </p>
+          <Field label="Daily limit (tokens)">
+            <input className="input" inputMode="numeric" value={form.askDailyTokenCap}
+              onChange={e => set("askDailyTokenCap", e.target.value)}
+              placeholder="10000000 — blank for no limit" autoComplete="off" style={{ width: "100%" }} />
           </Field>
         </Blueprint>
 

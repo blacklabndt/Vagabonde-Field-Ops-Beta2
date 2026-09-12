@@ -1917,12 +1917,12 @@ export const Db = {
   // Admin-only, so everyone else errors rather than reads blanks.
   async getAppSettings() {
     const { data, error } = await sbClient.from("app_settings")
-      .select("resend_api_key, from_reports, from_billing, reply_to, klipy_api_key, anthropic_api_key, approval_base_url, invoice_terms, invoice_remit_to, business_number").maybeSingle();
+      .select("resend_api_key, from_reports, from_billing, reply_to, klipy_api_key, anthropic_api_key, ask_daily_token_cap, approval_base_url, invoice_terms, invoice_remit_to, business_number").maybeSingle();
     if (error) throw error;
     return data || {};
   },
 
-  async saveAppSettings({ resendApiKey, fromReports, fromBilling, replyTo, klipyApiKey, anthropicApiKey, approvalBaseUrl,
+  async saveAppSettings({ resendApiKey, fromReports, fromBilling, replyTo, klipyApiKey, anthropicApiKey, askDailyTokenCap, approvalBaseUrl,
     invoiceTerms, invoiceRemitTo, businessNumber }) {
     // The approval link is built as `${base}/approve?t=…` and dropped into
     // an email — a bare "app.example.com" renders as dead text in every
@@ -1938,6 +1938,19 @@ export const Db = {
       if (a && FREEMAIL.test(a)) {
         throw new Error(`${label} can't be a personal ${a.split("@")[1] || ""} address — Resend only sends from a domain verified in your Resend account. Leave it blank to stay in testing mode, or use an address on the verified company domain.`);
       }
+    }
+    // Blank is no ceiling at all, which is what the column means and what a
+    // project that has not chosen a number gets. Anything typed has to be a
+    // whole positive count of tokens: a cap saved as 0 would read as "no
+    // ceiling" in the function and as "stop everything" to whoever typed it,
+    // so it is refused in words rather than quietly reinterpreted.
+    const capText = String(askDailyTokenCap ?? "").trim().replace(/[\s,]/g, "");
+    let cap = null;
+    if (capText) {
+      if (!/^\d+$/.test(capText) || Number(capText) <= 0) {
+        throw new Error("The daily Ask allowance needs to be a whole number of tokens above zero — leave it blank for no limit.");
+      }
+      cap = Number(capText);
     }
     const base = (approvalBaseUrl || "").trim();
     if (base) {
@@ -1958,6 +1971,12 @@ export const Db = {
       reply_to: (replyTo || "").trim() || null,
       klipy_api_key: (klipyApiKey || "").trim() || null,
       anthropic_api_key: (anthropicApiKey || "").trim() || null,
+      // Tokens the assistant may spend in one Grande Prairie day, input and
+      // output together, as Anthropic itself reported them. Null is no
+      // ceiling. Tokens and not dollars because output costs several times
+      // input and the rate differs per model — a price table here would be a
+      // second source of truth that rots in silence.
+      ask_daily_token_cap: cap,
       approval_base_url: (approvalBaseUrl || "").trim().replace(/\/+$/, "") || null,
       // What the field invoice prints besides the money. Blank saves null,
       // and a null prints nothing at all — an invoice with an empty "Terms:"

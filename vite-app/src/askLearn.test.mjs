@@ -187,8 +187,13 @@ test("the function checks the ceiling before it spends, and sends the text it me
   const learn = src.slice(start, src.indexOf("\n}", src.indexOf("return { added, trouble };", start)));
 
   const check = learn.indexOf("MAX_LEARN_REQUEST_CHARS");
-  const fetched = learn.indexOf("await fetch(");
-  assert.ok(check > 0 && check < fetched, "the ceiling is asked BEFORE the call, not after");
+  // Anchored on the API address rather than on the word `fetch`: the call now
+  // goes through the request's metered transport, and a test that can only
+  // recognise a bare fetch would have read "no call here" and passed.
+  const fetched = learn.indexOf("(API_URL,");
+  assert.ok(check > 0 && fetched > 0, "the learning call could not be found");
+  assert.ok(check < fetched, "the ceiling is asked BEFORE the call, not after");
+  assert.ok(!/await fetch\(API_URL/.test(learn), "the learning call must not bypass the metered transport");
   assert.match(learn, /body: payload/, "the text sent is the text that was measured");
   assert.match(learn, /logError\("ask", `the learning call was/, "the office hears about a call not made");
   // Learning is best effort: over the ceiling the answer still stands.
