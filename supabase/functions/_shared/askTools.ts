@@ -106,7 +106,7 @@ export const ASK_TOOLS: AskTool[] = [
   },
   {
     name: "search_tickets", tab: "tracker",
-    description: "A page of billing tickets, newest first, with job number, project, client, technician, status, work date, total, when the client was last chased, when it was invoiced, and any query the client rep typed. Filter by status, search by words (ticket number, job number, client, project, technician) and bound by work date. total_count on each row is the size of the whole result. Up to 50 a page.",
+    description: "A page of billing tickets, newest first, with job number, project, client, technician, status, work date, total, when the client was last chased, when it was invoiced, and any query the client rep typed. Filter by status, search by words (ticket number, job number, client, project, technician) and bound by work date. total_count on each row is the size of the whole result. filtered_total is the server-calculated sum of ticket totals across the whole authorized filtered result, before pagination, repeated on every row. Report a non-null filtered_total directly for that search's total even when the page is partial; do not sum the repeated values or pass them to calculate. State the filters and work-date period. It is null for roles without price access; null or an empty page does not establish a zero total. Up to 50 a page.",
     input_schema: {
       type: "object",
       properties: {

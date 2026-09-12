@@ -1,6 +1,28 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as investigation from "../../supabase/functions/_shared/askInvestigation.ts";
+import { searchArgs } from "../../supabase/functions/_shared/askTools.ts";
+
+test("investigation normalization preserves the authorized runner's search arguments", async () => {
+  for (const input of [{}, { status: "Bogus", date_to: "yesterday", page: -2 }, { status: "Approved", q: " Pembina ", date_from: "2026-08-01", date_to: "2026-08-31", page: 2, page_size: 500 }]) {
+    const run = investigation.createInvestigation(async (_name, normalized) => {
+      assert.deepEqual(searchArgs(normalized), searchArgs(input));
+      return [];
+    });
+    await run.runTool("search_tickets", input);
+  }
+});
+
+test("partial search pages preserve server aggregates without allowing row totals", async () => {
+  for (const filtered_total of [90, null]) {
+    const rows = [{ id: "T-1", total: filtered_total === null ? null : 30, total_count: 3, filtered_total }];
+    const run = investigation.createInvestigation(async () => rows);
+    const read = await run.runTool("search_tickets", {});
+    assert.deepEqual(read.records, rows);
+    assert.equal(read.calculation.coverage, "partial");
+    assert.ok((await run.runTool("calculate", { source_id: read.calculation.source_id, field: "total", operation: "sum" })).error);
+  }
+});
 
 test("successful authorized reads become calculation sources and follow-up references", async () => {
   assert.equal(typeof investigation.createInvestigation, "function");
