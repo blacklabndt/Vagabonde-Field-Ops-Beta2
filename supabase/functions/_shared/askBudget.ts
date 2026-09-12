@@ -11,19 +11,31 @@
 // returns with every answer. So the ceiling is enforced on what has been
 // SETTLED — figures the provider itself reported — and never on a guess.
 //
-// THAT LEAVES THE CALL IN FLIGHT, and it is bounded rather than estimated:
+// THAT LEAVES THE CALL IN FLIGHT, and it is CHARGED rather than watched.
+// A reservation is a row in `ask_calls`, written before the call goes out,
+// and the day's total is `sum(coalesce(settled, reserved))` — so a call in
+// flight counts at the provider's documented maximum from before it leaves
+// and keeps counting until the provider's own figure replaces it. Crash,
+// abort, an unreadable bill, a settlement write that fails: every one of them
+// leaves the row unsettled and the maximum held for the rest of the day.
+// There is no refund path and no sweeper, deliberately — a write somebody can
+// make fail must not be a ceiling they can switch off.
 //
-//     worst case  =  cap  +  (requests in flight) x ONE_CALL_MAX
+// The hold used to live in the isolate, and a worker retired between the
+// billed answer and the ledger write lost that spend for good. The first
+// repair proposed was to flush it at the next stale lease takeover; Codex
+// refused it, rightly: THERE MIGHT NEVER BE ANOTHER REQUEST. A reconciliation
+// that waits for traffic is not a ceiling, it is a hope about traffic.
 //
-// The check is made before every paid call, so the only spending that can
-// cross the line is a call already going when it was crossed. `ONE_CALL_MAX`
-// below is per model and is provider-ENFORCED, not counted by us: the context
-// window (a larger input is refused with a 400) plus the `max_tokens` we send
-// ourselves. It is loose — the character caps put the real figure two orders
-// under it — but it is finite, documented, and rests on nothing Anthropic
-// calls an estimate. The per-person lease is what keeps the first factor
-// small; without it one account could hold any number of calls open across
-// the line at once.
+// WHAT THIS COSTS, stated rather than discovered later. The reservation is
+// `ONE_CALL_MAX`, and calls within a request are sequential, so
+//
+//     outstanding  ~  (people asking at once + today's lost calls) x 1,008,000
+//
+// which makes the number the office types a SAFETY ceiling and not a spending
+// plan: for this crew a workable floor is 16-20 million against real use of
+// well under one. Codex's rule — conservative refusal over silent bypass — is
+// what that price buys.
 //
 // Tokens and not dollars, deliberately. Input and output price differently
 // and the rate differs per model, so a price table in here would be a second
@@ -107,13 +119,12 @@ export function usageTokens(body: unknown): { input: number; output: number } | 
   return { input, output: whole(b.output_tokens) };
 }
 
-// A call that could not be settled still has to be carried, or a ledger write
-// that fails becomes the way to spend past the ceiling. When the provider's
-// figure cannot be read or cannot be written down, the request holds this
-// much against itself for the rest of its own life — the model's whole
-// documented maximum, because that is the only number that cannot be an
-// undercount.
-export function unsettledHold(model: string): number {
+// What one call reserves, and what it goes on holding when it cannot be
+// settled. The model's whole documented maximum, because the arithmetic above
+// needs a figure that cannot be exceeded and this is the only kind there is.
+// An unknown model name takes the largest known ceiling: a name we could not
+// read must never become the cheapest guess.
+export function reserveFor(model: string): number {
   const known = ONE_CALL_MAX[model];
   if (typeof known === "number") return known;
   let most = 0;
@@ -121,17 +132,27 @@ export function unsettledHold(model: string): number {
   return most;
 }
 
-// May this call be made? `settled` is the day's total as the database last
-// answered it; `held` is what this request has spent or been unable to settle
-// since. A null or non-positive cap is no ceiling, which is what a project
-// that has not set one gets — and is what applying the migration alone
-// leaves, so nothing changes until the office chooses a number.
-export function mayCall(settled: number, held: number, cap: number | null | undefined): boolean {
-  if (cap === null || cap === undefined) return true;
-  const c = Number(cap);
-  if (!Number.isFinite(c) || c <= 0) return true;
-  return whole(settled) + whole(held) < c;
+// Did this refusal prove that NOTHING was billed? Only the provider can say
+// so, and it says so by refusing before it runs anything: a bad request, a
+// key it will not accept, a rate limit. Those settle at nought, or a burst of
+// 429s would eat a day's ceiling with not a token spent — denial by another
+// road.
+//
+// Everything at 500 and above is AMBIGUOUS and keeps its reservation: an
+// api_error, a 529 overload or a gateway timeout may sit on the far side of a
+// call that was answered and billed. 408 is the same story in the 4xx range —
+// a timeout is not a refusal — so it is named out.
+export function billedNothing(status: number): boolean {
+  return Number.isFinite(status) && status >= 400 && status < 500 && status !== 408;
 }
+
+// There is deliberately no ceiling arithmetic in here any more. Admission is
+// ask_reserve_call's, under a per-day advisory xact lock, because a check on
+// this side would be a second opinion about a number two requests can be
+// changing at once — which is the read-then-write window the lock exists to
+// close. A null or non-positive cap is no ceiling; that reading lives in the
+// function, and the migration is read back by askBudget.test.mjs so it cannot
+// drift out of the one place it is now written.
 
 // ── the words ──────────────────────────────────────────────────────────────
 //

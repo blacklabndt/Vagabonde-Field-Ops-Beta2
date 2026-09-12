@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   LEASE_STALE_SECONDS, ONE_CALL_MAX, worstOvershoot, usageTokens,
-  unsettledHold, mayCall, BUSY_WORDS, SPENT_WORDS, LEARN_SPENT_WORDS, LEARN_TROUBLE_WORDS,
+  reserveFor, billedNothing, BUSY_WORDS, SPENT_WORDS, LEARN_SPENT_WORDS, LEARN_TROUBLE_WORDS,
   WORKER_WALL_MS, CLEANUP_RESERVE_MS, CALL_TIMEOUT_MS, LEARN_TIMEOUT_MS, LEARN_MIN_MS, MIN_CALL_MS,
   requestDeadline, readUntil, callTimeout, timeToLearn, OUT_OF_TIME_WORDS, LEARN_NO_TIME_WORDS
 } from "../../supabase/functions/_shared/askBudget.ts";
@@ -46,15 +46,29 @@ test("an unreadable bill is not a free call", () => {
   assert.deepEqual(usageTokens({ usage: { input_tokens: 3.9, output_tokens: 2.1 } }), { input: 3, output: 2 });
 });
 
-test("what cannot be settled is held at the model's whole documented maximum", () => {
+test("a call reserves the model's whole documented maximum, and holds it when it cannot settle", () => {
   // The only figure that cannot be an undercount. An unknown model takes the
   // largest known one, which is the safe direction: a name we could not read
   // must not become the cheapest guess.
-  assert.equal(unsettledHold(ASK_MODEL), ONE_CALL_MAX[ASK_MODEL]);
-  assert.equal(unsettledHold(LEARN_MODEL), ONE_CALL_MAX[LEARN_MODEL]);
+  assert.equal(reserveFor(ASK_MODEL), ONE_CALL_MAX[ASK_MODEL]);
+  assert.equal(reserveFor(LEARN_MODEL), ONE_CALL_MAX[LEARN_MODEL]);
   const largest = Math.max(...Object.values(ONE_CALL_MAX));
-  assert.equal(unsettledHold(""), largest);
-  assert.equal(unsettledHold("something-nobody-has-heard-of"), largest);
+  assert.equal(reserveFor(""), largest);
+  assert.equal(reserveFor("something-nobody-has-heard-of"), largest);
+});
+
+test("only a refusal the provider gave before running anything settles at nothing", () => {
+  // Without this a burst of rate-limit refusals eats a day's ceiling with not
+  // a token spent, which is denial by another road.
+  for (const status of [400, 401, 403, 404, 413, 422, 429]) {
+    assert.equal(billedNothing(status), true, `${status} is a refusal and was billed nothing`);
+  }
+  // And everything ambiguous keeps its reservation: the call may have been
+  // answered and billed on the far side of a connection we lost. 408 is a
+  // timeout wearing a 4xx, so it is named out with the 5xx family.
+  for (const status of [408, 500, 502, 503, 504, 529, 200, 0, NaN]) {
+    assert.equal(billedNothing(status), false, `${status} must keep its reservation`);
+  }
 });
 
 test("both models Ask actually calls have a documented ceiling", () => {
@@ -74,21 +88,35 @@ test("the overshoot is the lease count times one call, and nothing in flight is 
   assert.equal(worstOvershoot(-3), 0);
 });
 
-test("no ceiling set is no ceiling, and that is what the migration alone leaves", () => {
-  for (const cap of [null, undefined, 0, -1, NaN, "not a number"]) {
-    assert.equal(mayCall(9e12, 9e12, cap), true, `cap ${String(cap)} must not refuse anything`);
-  }
-});
+// The admission arithmetic is the DATABASE's now — one place, under a per-day
+// advisory xact lock — so it is asserted where it lives. A check on this side
+// would be a second opinion about a number two requests can be changing at
+// once, which is the read-then-write window the lock exists to close.
+const reserve = read("supabase/migrations/20260912034222_the_ceiling_is_charged_before_the_call.sql");
 
-test("the check counts what could not be written down as well as what was", () => {
-  // Settled alone would let a request whose ledger writes all fail spend the
-  // day twice over — which is the half an attacker aims at, because a write
-  // they can make fail is a ceiling they can switch off.
-  assert.equal(mayCall(900, 0, 1000), true);
-  assert.equal(mayCall(900, 99, 1000), true);
-  assert.equal(mayCall(900, 100, 1000), false, "exactly at the line is spent");
-  assert.equal(mayCall(0, 5000, 1000), false, "held alone must be able to stop it");
-  assert.equal(mayCall(5000, 0, 1000), false);
+test("admission is one function, under the lock, counting reservations as well as settlements", () => {
+  // The lock first, and on the DAY: two reservations for the same day must
+  // not both read the pre-insert total. Verified live with two connections on
+  // 12 Sept — B blocked 5,475 ms and was refused; without the lock it
+  // answered true in 4 ms and the day committed 2,000 against a cap of 1,000.
+  assert.match(reserve, /pg_advisory_xact_lock\(pg_catalog\.hashtext\('ask_calls'\), pg_catalog\.hashtext\(d::text\)\)/);
+  // A reservation counts from the moment it exists, at its reserved figure,
+  // until the provider's own number replaces it. This one line is the whole
+  // mechanism; everything else follows from it.
+  assert.match(reserve, /sum\(coalesce\(k\.settled, k\.reserved\)\)/);
+  // The proposed reservation is counted too — a check of what is already
+  // outstanding, with the new call left out, admits one call past the line
+  // every time.
+  assert.match(reserve, /if outstanding \+ want > c then\s*\n\s*return false;/);
+  // Null or non-positive is no ceiling, which is what the migration alone
+  // leaves: a project that has not chosen a number is refused nothing.
+  assert.match(reserve, /if c is not null and c > 0 then/);
+  // Settlement names one row and writes only while it is unsettled, so a
+  // retry after an uncertain failure cannot double-count the day.
+  assert.match(reserve, /where call_id = _call and settled is null/);
+  // And the old door into the ledger is gone: a second way in that skipped
+  // the reservation would be a second way to spend past the ceiling.
+  assert.match(reserve, /drop function if exists public\.ask_record_spend/);
 });
 
 test("both the person and the office are told what to do", () => {
@@ -141,17 +169,41 @@ test("the lease is taken before any paid call and let go however the request end
   assert.match(ask, /ask_release_lease",\s*\{\s*_user:[^}]*_request:/);
 });
 
-test("the ceiling is read before the calls and moved by their answers", () => {
-  const allowance = ask.indexOf("ask_allowance");
-  const metered = ask.indexOf("const meteredFetch");
-  assert.ok(allowance > 0 && metered > allowance, "the day must be read before the transport uses it");
+test("every paid call reserves before it goes and settles from the provider's own figure", () => {
+  // The order is the whole claim: a reservation written AFTER the call is a
+  // hold that a retired worker loses, which is the defect this replaced.
+  const reserveAt = ask.indexOf('admin.rpc("ask_reserve_call"');
+  const send = ask.indexOf("res = await fetch(url, { ...init,");
+  const settleAt = ask.indexOf('admin.rpc("ask_settle_call"');
+  assert.ok(reserveAt > 0, "no reservation is written");
+  assert.ok(send > reserveAt, "the money is spent before the reservation is written");
+  assert.ok(settleAt > send, "the settlement must follow the call it settles");
+  // A refusal answers false rather than throwing, so the false must refuse.
+  assert.match(ask, /if \(got\.data !== true\) throw refuse\(SPENT_WORDS\);/);
+  // And a reservation that could not be WRITTEN refuses too: spend-and-hope
+  // makes a database somebody can trouble into the way past the ceiling.
+  assert.match(ask, /if \(got\.error\) \{[\s\S]{0,600}?throw refuse\(SPENT_WORDS\);/);
   // Settled from the provider's figures, on a CLONE — the caller still has to
   // read the original, and a body read twice is a body the loop never sees.
   assert.match(ask, /usageTokens\(await res\.clone\(\)\.json\(\)\)/);
-  // The refusal is checked before the call, not after it.
-  const check = ask.indexOf("mayCall(settled, held, cap)");
-  const send = ask.indexOf("res = await fetch(url, { ...init,");
-  assert.ok(check > 0 && send > check, "the allowance must be checked before the money is spent");
+  // Nothing about the day's total may live in the isolate again: no local
+  // running total, and no second reading of the allowance to go stale.
+  assert.ok(!/ask_allowance/.test(ask), "the day is being read into the isolate again");
+  assert.ok(!/ask_record_spend/.test(ask.replace(/\/\/[^\n]*/g, "")), "the dropped ledger door is back in the code");
+});
+
+test("an ambiguous failure keeps its reservation and only a provider refusal settles at nothing", () => {
+  // The three ways a call can end without a readable bill — aborted, refused,
+  // unreadable — and only the middle one may be written down as nought.
+  assert.match(ask, /if \(billedNothing\(res\.status\)\) \{\s*\n\s*const back = await admin\.rpc\("ask_settle_unbilled"/);
+  // The abort path settles NOTHING: our fetch giving up proves nothing about
+  // what the provider did with the request.
+  const abort = ask.slice(ask.indexOf("} catch (e) {", ask.indexOf("res = await fetch(url, { ...init,")), ask.indexOf("if (!res.ok) {"));
+  assert.ok(!/ask_settle/.test(abort), "an aborted call must never be settled");
+  assert.match(abort, /throw refuse\(OUT_OF_TIME_WORDS\)/);
+  // An unreadable bill is not a free call either: it simply is not settled.
+  const unreadable = ask.slice(ask.indexOf("if (!cost) {"), ask.indexOf("let wrote = await admin.rpc"));
+  assert.ok(!/ask_settle/.test(unreadable), "an unreadable bill must never be settled");
 });
 
 test("a learning pass that did not land says so", () => {
@@ -185,11 +237,11 @@ test("the sentence sends the Admin to a screen that really has the box", () => {
 });
 
 test("blank is no limit all the way down, and zero is refused instead of reinterpreted", () => {
-  // mayCall already treats 0 as no ceiling, because that is the only safe
+  // ask_reserve_call reads 0 as no ceiling, because that is the only safe
   // reading of a column that means "unset" when null. Which makes a saved 0
   // dangerous in the other direction: somebody typing it means "stop
   // everything" and would get "spend anything". The save refuses it in words.
-  assert.equal(mayCall(1e9, 1e9, 0), true, "the function reads 0 as no ceiling");
+  assert.match(reserve, /if c is not null and c > 0 then/, "the function reads 0 as no ceiling");
   const db = read("vite-app/src/db.js");
   assert.match(db, /Number\(capText\) <= 0/, "the save no longer refuses a zero cap");
   assert.match(db, /leave it blank for no limit/i, "the refusal must say what blank does");
@@ -315,7 +367,7 @@ test("a call we stopped waiting for is held in full, never written down as nough
   const caught = ask.indexOf("} catch (e) {", metered);
   assert.ok(caught > metered && caught < loop, "the transport does not catch a failed send");
   const block = ask.slice(caught, ask.indexOf("throw refuse(OUT_OF_TIME_WORDS)", caught));
-  assert.match(block, /held \+= unsettledHold\(model\)/, "an aborted call must keep its whole hold");
-  assert.ok(!/settled = /.test(block), "an aborted call must not move the settled figure");
+  assert.ok(!/ask_settle/.test(block), "an aborted call must never be settled — its reservation stands whole");
+  assert.match(block, /reserveFor\(model\)/, "the office must be told what the call is still holding");
   assert.match(block, /logError/, "the office must hear that a call was cut off");
 });

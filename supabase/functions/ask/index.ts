@@ -40,7 +40,7 @@ import { isKind, localToUtc, checkRunAt, whenWords, labelFor, scheduleWords, can
 import { askLoop, systemPrompt, windowTurns, API_URL, API_VERSION } from "../_shared/askLoop.ts";
 import { learnBody, parseLearned, roomFor, learnedLines, forgetWords, LEARN_MODEL, MAX_LEARN_REQUEST_CHARS, MAX_LEARNED, type LearnedRow } from "../_shared/askLearn.ts";
 import {
-  LEASE_STALE_SECONDS, usageTokens, unsettledHold, mayCall,
+  LEASE_STALE_SECONDS, usageTokens, reserveFor, billedNothing,
   requestDeadline, readUntil, callTimeout, timeToLearn,
   CALL_TIMEOUT_MS, LEARN_TIMEOUT_MS, MIN_CALL_MS,
   BUSY_WORDS, SPENT_WORDS, OUT_OF_TIME_WORDS, LEARN_SPENT_WORDS, LEARN_TROUBLE_WORDS, LEARN_NO_TIME_WORDS
@@ -292,22 +292,26 @@ Deno.serve(async (req) => {
     if (took.data !== true) return json({ error: BUSY_WORDS }, 429);
     lease = { user: user.id, request: requestId };
 
-    // The day's spending and the ceiling in one answer. The ceiling comes
-    // from here rather than from the shared `appSettings()` select on purpose:
-    // naming a brand-new column there would have made every mail function
-    // refuse until this migration landed, and a deployment order that must be
-    // held in somebody's head is one that gets forgotten.
-    const allow = await admin.rpc("ask_allowance").single();
-    if (allow.error) throw new Error(allow.error.message);
-    const allowance = (allow.data ?? {}) as { spent?: number | string | null; cap?: number | string | null };
-    // `settled` is the day as the database last answered it; `held` is what
-    // this request has spent since and could not write down. They are added
-    // for the check, so a ledger write that fails degrades the ceiling for
-    // the rest of the crew and never for this request — which is the half an
-    // attacker would otherwise aim at.
-    let settled = Number(allowance.spent ?? 0);
-    const cap = allowance.cap === null || allowance.cap === undefined ? null : Number(allowance.cap);
-    let held = 0;
+    // ── the ceiling ────────────────────────────────────────────
+    //
+    // Nothing about the day's total lives in this isolate any more, and that
+    // is the whole of the repair. A reservation is a ROW, written before its
+    // call goes out, and the day's total is
+    //
+    //     sum(coalesce(settled, reserved))
+    //
+    // so a call counts against the ceiling from before it leaves and keeps
+    // counting at the provider's documented maximum until the provider's own
+    // figure replaces it. A worker retired between the billed answer and the
+    // ledger write — routine, and likeliest inside `res.clone().json()` —
+    // used to lose that spend permanently, because the hold was a number in
+    // memory. Now it is a committed row, and the crash leaves it unsettled:
+    // held at the maximum for the rest of the day, which is the safe
+    // direction and needs no sweeper to reach it.
+    //
+    // Admission is the DATABASE's decision, taken under a per-day advisory
+    // xact lock. There is no local copy of the day to go stale here and no
+    // second piece of ceiling arithmetic to disagree with ask_reserve_call's.
 
     // The one transport both paid calls go through. Counting it anywhere
     // else would mean counting it twice or missing a branch: the loop has
@@ -318,7 +322,6 @@ Deno.serve(async (req) => {
       // A name that cannot be read falls back to the largest ceiling we know,
       // which is the safe direction.
       const model = (/"model":"([^"]+)"/.exec(String(init.body ?? "").slice(0, 200)) ?? [])[1] ?? "";
-      if (!mayCall(settled, held, cap)) throw refuse(SPENT_WORDS);
       // The same transport meters the clock, for the same reason it meters
       // the money: a second paid call bounded nowhere is a deadline with a
       // hole in it. Each call waits for its own ceiling or for whatever is
@@ -330,22 +333,47 @@ Deno.serve(async (req) => {
       // database's time and is not bounded by us — and a refusal in words is
       // a better end than a retirement, which returns nothing at all.
       if (wait < MIN_CALL_MS) throw refuse(OUT_OF_TIME_WORDS);
+      // The reservation, before the call and never beside it. The id is
+      // minted here so every attempt to settle can name the same row:
+      // ask_settle_call writes only while `settled is null`, which
+      // ask_record_spend's ADD could never promise.
+      const callId = crypto.randomUUID();
+      const got = await admin.rpc("ask_reserve_call", { _user: user.id, _call: callId, _model: model, _reserved: reserveFor(model) });
+      if (got.error) {
+        // A ceiling that cannot be consulted REFUSES. The other reading —
+        // spend and hope — would make a database somebody can trouble into
+        // the way to spend past the line, which is the shape this whole
+        // design exists to close.
+        await logError("ask", `A reservation could not be written, so the call was not made: ${got.error.message}`, { user: userId, model });
+        throw refuse(SPENT_WORDS);
+      }
+      if (got.data !== true) throw refuse(SPENT_WORDS);
       let res: Response;
       try {
         res = await fetch(url, { ...init, signal: AbortSignal.timeout(wait) });
       } catch (e) {
         // ABORTING OUR FETCH PROVES NOTHING ABOUT THE PROVIDER. The call may
         // have been answered, and billed, after we stopped waiting. So it is
-        // settled at NOTHING and its hold is retained in full — the same rule
-        // an unreadable bill gets, and for the same reason: the only figure
-        // that cannot be an undercount is the model's documented maximum.
-        held += unsettledHold(model);
-        await logError("ask", `A model call was cut off after ${wait} ms and is held at ${unsettledHold(model)} tokens: ${(e as Error)?.message ?? "no reason given"}`, { user: userId, model });
+        // never settled and its reservation stands in full — the same rule an
+        // unreadable bill gets, and for the same reason: the only figure that
+        // cannot be an undercount is the model's documented maximum.
+        await logError("ask", `A model call was cut off after ${wait} ms and is held at ${reserveFor(model)} tokens: ${(e as Error)?.message ?? "no reason given"}`, { user: userId, model });
         throw refuse(OUT_OF_TIME_WORDS);
       }
-      // A refusal costs nothing and is the caller's to read; only an answer
-      // is billed.
-      if (!res.ok) return res;
+      if (!res.ok) {
+        // The one case where nothing was billed and the PROVIDER ITSELF says
+        // so: a refusal it gave before running anything. Those settle at
+        // nought, because without it a burst of rate-limit refusals would eat
+        // a day's ceiling with not a token spent — denial by another road. A
+        // 5xx, a 529 or a gateway timeout is AMBIGUOUS and keeps its
+        // reservation: the call may have been answered and billed on the far
+        // side of a connection we lost.
+        if (billedNothing(res.status)) {
+          const back = await admin.rpc("ask_settle_unbilled", { _call: callId });
+          if (back.error) await logError("ask", `A refusal (${res.status}) could not be settled at nothing, so its reservation stands: ${back.error.message}`, { user: userId, model });
+        }
+        return res;
+      }
       // Cloned, because the caller still has to read the original. The
       // figures are the PROVIDER'S — Anthropic documents its own token
       // counter as an estimate, so nothing computed on this side could be
@@ -353,23 +381,24 @@ Deno.serve(async (req) => {
       let cost: { input: number; output: number } | null = null;
       try { cost = usageTokens(await res.clone().json()); } catch { cost = null; }
       if (!cost) {
-        // An unreadable bill is not a free call. The model's whole documented
-        // maximum is held against this request instead, because that is the
-        // only figure that cannot be an undercount.
-        held += unsettledHold(model);
-        await logError("ask", `A model reply carried no readable usage; holding ${unsettledHold(model)} tokens against this request.`, { user: userId, model });
+        // An unreadable bill is not a free call. The reservation stays
+        // unsettled and goes on holding the model's whole documented maximum,
+        // because that is the only figure that cannot be an undercount.
+        await logError("ask", `A model reply carried no readable usage; its reservation of ${reserveFor(model)} tokens stands.`, { user: userId, model });
         return res;
       }
-      const rec = await admin.rpc("ask_record_spend", { _user: user.id, _input: cost.input, _output: cost.output });
-      if (rec.error) {
-        // Not retried: `ask_record_spend` ADDS, so a retry after an uncertain
-        // failure could double-count the day. The figure is held locally for
-        // the rest of this request instead, and the office is told the
-        // ledger has a hole in it.
-        held += cost.input + cost.output;
-        await logError("ask", `A model call was made but not recorded (${cost.input} in, ${cost.output} out): ${rec.error.message}`, { user: userId, model });
-      } else {
-        settled = Number(rec.data ?? settled);
+      // Settlement MAY be retried, where the old ADD could not be: this names
+      // one row and writes only while it is unsettled, so a second attempt
+      // after an uncertain first cannot double-count the day. Twice and no
+      // more — the deadline is the other thing being spent here.
+      let wrote = await admin.rpc("ask_settle_call", { _call: callId, _input: cost.input, _output: cost.output });
+      if (wrote.error) wrote = await admin.rpc("ask_settle_call", { _call: callId, _input: cost.input, _output: cost.output });
+      if (wrote.error) {
+        // The reservation stands at the maximum, so a failure here costs the
+        // day some room and never the ceiling itself. The office is told,
+        // because a ledger with a hole in it is worth knowing about even when
+        // nothing spent past the line.
+        await logError("ask", `A model call was made but not settled (${cost.input} in, ${cost.output} out); it stays reserved at ${reserveFor(model)}: ${wrote.error.message}`, { user: userId, model });
       }
       return res;
     };
