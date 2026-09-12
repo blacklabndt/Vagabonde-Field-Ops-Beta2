@@ -83,7 +83,13 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   implements every method of `DriveClient`, and backupSchedule.ts's shared
   core is annotated — see the twin rule below for how its JavaScript twin
   is compared.
-- Build: `npm --prefix vite-app run build`
+- Build: `npm --prefix vite-app run build` (Vite 7). `build.target` is
+  pinned in `vite.config.js` to the list Vite 5 called `"modules"` —
+  es2020/edge88/firefox78/chrome87/safari14 — because Vite 7 dropped that
+  alias and its own default, `"baseline-widely-available"`, is
+  chrome107/edge107/firefox104/safari16: two years of tablets narrower. A
+  toolchain upgrade must not decide which devices the crew can still use.
+  Moving it is a decision of its own; leave it alone when Vite is bumped.
 - Deploy: `npm run build && npx wrangler deploy` (from repo root)
 - Dev server: use the `.claude/launch.json` `beta2-dev` config, not Bash
 

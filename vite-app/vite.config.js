@@ -181,6 +181,17 @@ export default defineConfig({
     })
   ],
   build: {
+    // What Beta 1 and Beta 2 have always been built for, spelled out.
+    // Vite 5 called this list `"modules"` and used it as the default; Vite 7
+    // dropped that alias and defaults to `"baseline-widely-available"`
+    // (chrome107/edge107/firefox104/safari16) instead — two years of devices
+    // narrower. Nothing about the dependency upgrade that brought Vite 7 in
+    // was a decision to stop supporting a tablet bought in 2021, so the old
+    // list stays here verbatim (vite@5.4.21 constants.js,
+    // ESBUILD_MODULES_TARGET) and moving it is a decision of its own.
+    // `build.cssTarget` follows `build.target` unless it is set, so the
+    // stylesheet is compiled for the same browsers as the code.
+    target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"],
     rollupOptions: {
       output: {
         manualChunks: {
