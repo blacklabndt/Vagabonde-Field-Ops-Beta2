@@ -35,7 +35,7 @@ const MODULE_TS = "supabase/functions/_shared/crashReport.ts";
 const MODULE_JS = "vite-app/src/crashReport.js";
 const FUNCTION = "supabase/functions/report-error/index.ts";
 const HANDLER = "supabase/functions/report-error/handler.ts";
-const DRAFT = "supabase/handover/draft-browser-crashes.sql";
+const DRAFT = "supabase/migrations/20260912160845_browser_crashes.sql";
 
 const CORE = /\/\/ ═══ shared core[^\n]*\n([\s\S]*?)\/\/ ═══ end shared core ═══/;
 const coreOf = file => {

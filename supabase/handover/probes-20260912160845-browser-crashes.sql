@@ -1,3 +1,11 @@
+-- LIVE RELEASE 2026-09-12: migration 20260912160845 applied.
+-- Probes 1-9/8b passed via the assertion-based companion *-live.sql.
+-- Probe 10 passed with two concurrent Management API database sessions:
+-- A held its transaction open; B observed waiting on transactionid with
+-- one blocker, then returned rate_limited after A committed. One ledger
+-- row and one log row verified; both probe rows removed afterwards.
+-- Historical offline notes below describe the pre-release run.
+
 -- Probes for draft-browser-crashes.sql. Run as the postgres role AFTER the
 -- draft is applied; every block rolls back, so no crash row survives the
 -- probe. Role simulation through request.jwt.claims, per the RLS rule.

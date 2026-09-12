@@ -113,42 +113,16 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   re-point the trigger before anything else — HANDOVER.md's Path B says how. An unshipped
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
-  ONE is waiting now, and it is the only thing in this repo that is:
-  `draft-the-ceiling-is-charged-before-the-call.sql` with
-  `probes-draft-the-ceiling-is-charged-before-the-call.sql` beside it —
-  `ask_calls` (one row per paid call, the day's total being
-  `sum(coalesce(settled, reserved))`, so a reservation counts from before its
-  call goes and keeps counting until the provider's figure replaces it),
-  `ask_reserve_call` behind a per-day advisory xact lock, `ask_settle_call`
-  idempotent by call id, `ask_settle_unbilled` for the one case the provider
-  itself says was not billed, a three-number `ask_allowance()`, and
-  `ask_record_spend` dropped because a second door into the ledger that skips
-  the reservation is a second way to spend past the ceiling. Its draft header
-  says how to ship it and in what order; the FUNCTION side is deliberately
-  not written yet, because a ceiling with a PGRST202 fallback is one anybody
-  can switch off by breaking a function name. The latest three applied are
-  Ask's spending:
-  `20260912031059_the_ask_ceiling_keeps_its_own_default.sql`,
-  `20260912030901_the_assistant_has_a_daily_allowance.sql` and
-  `20260912025816_the_assistant_has_a_daily_allowance.sql` — the same
-  change applied twice, because an interrupted turn had already applied it,
-  and then a third file because `add column if not exists ... default` does
-  NOTHING when the column exists, not even the default: the live row read
-  10,000,000 while the column carried none, so a fresh replay would have
-  given the assistant no ceiling. All three are filed because the repo and
-  the applied history reconcile 1:1, and 031059 is the one that matters.
-  Together: `ask_leases` (one question at a time per person, `ask_claim_lease`
-  / `ask_release_lease`, a 300-second stale window, the release naming its own
-  request id), `ask_spend` (tokens the PROVIDER reported, by Grande Prairie day
-  and person; Admin reads, nobody writes, like `backup_runs`),
-  `ask_allowance()` / `ask_record_spend()`, and
-  `app_settings.ask_daily_token_cap` (null is no ceiling; the Admin screen's
-  "Daily limit (tokens)" box is the only way to change it, which is why
-  `SPENT_WORDS` may name that screen). All four RPCs are the service role's
-  alone. Eleven probes beside it, run live. The ONE thing they cannot show is
-  two simultaneous claims — that needs two connections holding transactions
-  open at once; the procedure is at the foot of the probes file and is still
-  unrun. Before them,
+  Browser crash reporting is applied as
+  `20260912160845_browser_crashes.sql`: `browser_crashes` records the
+  account/minute rate limit, and service-only `file_browser_crash` writes
+  it and the Recent failures entry in one transaction. Live release probes
+  cover permissions, validation, atomic rollback and duplicate reporting.
+  Ask's reservation ceiling is applied as
+  `20260912034222_the_ceiling_is_charged_before_the_call.sql`, followed by
+  `20260912041955_a_refusal_that_settles_nothing_answers_false.sql` and
+  `20260912045301_a_busy_lease_answers_false.sql`. These are live migrations,
+  not pending drafts. Before them,
   `20260911233656_ask_learned_is_bounded_and_cannot_be_backdated.sql` —
   `ask_learned` gains a column-list INSERT grant (`note`, `said_by` only, so
   `created_at` is not the caller's to backdate — backdating was what turned
