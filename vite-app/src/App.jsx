@@ -781,7 +781,7 @@ export function App() {
     // could not be read means the wipe is not attempted at all.
     let markerAtBoot = null;
     let markerRead = false;
-    try { markerAtBoot = await OfflineCache.marker(); markerRead = true; }
+    try { markerAtBoot = await OfflineCache.authority(); markerRead = true; }
     catch (e) { console.error("Couldn't read who this device's stored data belongs to:", e); }
     try {
       const { user, offline, reason, signedOut, identityUnreadable } = await restoreSession({
@@ -1242,6 +1242,17 @@ export function App() {
   // the next person to pick one up should not be able to page through the
   // last crew's jobs and rates without signing in.
   const signOut = async () => {
+    // Captured at ENTRY, before the first await. Everything below this line
+    // takes real time — the draft scan reads the whole store, the push
+    // cleanup goes to the network — and a shared tablet can change hands
+    // across it. Asked afterwards, this reads whoever has the device NOW:
+    // the wipe would then run on the arriving person's authority and delete
+    // their work. It comes from the LEASE this tab holds, never from a
+    // reading of the disk, which can only say who the store belongs to and
+    // never "not yours"; holding no lease is holding no authority, and the
+    // wipe is not attempted at all. It is re-checked inside the clearing
+    // transaction, so an arrival during the wipe itself keeps the store.
+    const authAtSignOut = OfflineCache.heldAuthority();
     // Signing out wipes this device's cache, and the recovery copies of a
     // half-entered ticket or assessment live in it; the outbox survives but
     // is this person's alone, so it won't send until they sign in again.
@@ -1273,6 +1284,12 @@ export function App() {
     // without a password. On a shared tablet that is exactly the handover
     // this whole function exists to make safe, so the session is removed by
     // hand when the sign-out says it failed.
+    // Captured BEFORE the session goes. The sign-out announcement retires
+    // this tab's lease the instant supabase-js broadcasts it, and a clear
+    // holding no lease empties nothing — so the authority for this wipe is
+    // taken here, at the moment it is still unambiguously this person's
+    // device, and re-checked inside the clearing transaction. Anybody
+    // arriving in between owns the store instead, and keeps it.
     const { error: signOutErr } = await sbClient.auth.signOut();
     if (signOutErr) {
       console.warn("Sign-out couldn't reach the server; removing the stored session locally:", signOutErr.message || signOutErr);
@@ -1287,7 +1304,8 @@ export function App() {
     // person holding the tablet is the only one who can act on it, so it is
     // said out loud rather than swallowed.
     try {
-      await OfflineCache.clear();
+      if (authAtSignOut) await OfflineCache.clear({ expect: authAtSignOut });
+      else console.warn("This tab holds no claim on the device's cached data, so the sign-out left it alone.");
     } catch (e) {
       Toasts.show(e.message || "Couldn't clear this device's cached data.", "error");
       console.error("Sign-out could not clear the offline cache:", e);

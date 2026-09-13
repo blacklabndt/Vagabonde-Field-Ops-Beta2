@@ -37,12 +37,16 @@ async function withUnreadable(key, fn) {
 
 // readThrough deliberately does not await the write it starts — a read must
 // not wait on disk. So poll for the outcome instead of sleeping.
+// The deadline is performance.now() and never Date.now(), because `at()` below
+// holds Date.now still — so a wait inside one that never came true polled for
+// ever instead of failing, and one hung test file took the whole suite's
+// summary with it.
 async function eventually(fn, what = "the expected state", ms = 2000) {
-  const until = Date.now() + ms;
+  const until = performance.now() + ms;
   for (;;) {
     const v = await fn();
     if (v) return v;
-    if (Date.now() > until) throw new Error(`Timed out waiting for ${what}`);
+    if (performance.now() > until) throw new Error(`Timed out waiting for ${what}`);
     await new Promise(r => setTimeout(r, 5));
   }
 }

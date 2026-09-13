@@ -384,6 +384,21 @@ sbClient.auth.onAuthStateChange((_event, session) => {
     // "contacts" and "profiles" are the last account's rows under keys that
     // name no account at all. Everything settled goes, and the account
     // counter moves so a walk that is only in flight settles into nothing.
+    //
+    // And memory is only half of it: the DISK still carries the last account's
+    // rows under a marker that still names them, and the new account's claim
+    // is a separate transaction that has not happened yet — it may be slow, it
+    // may be another tab's, it may fail outright. Every fenced read between
+    // the two would be answered, correctly by the marker and wrongly by every
+    // other measure, out of the account that has just been replaced. So the
+    // tab's disk authority is retired here, synchronously, at the one moment
+    // the change is known: it deletes nothing (the owner may sign back in and
+    // find their half-entered tickets) and adopts nothing (a claim is the only
+    // way in), it simply stops this tab reading or writing rows until somebody
+    // claims the device again. A same-account announcement — the hourly
+    // refresh, or the first one after the boot's own claim — is not a change
+    // of hands and leaves the lease where it is.
+    OfflineCache.retireUnless(id);
     forgetRememberedRows();
   }
 });

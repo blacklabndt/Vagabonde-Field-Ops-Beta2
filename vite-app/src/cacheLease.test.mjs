@@ -252,7 +252,11 @@ test("every change of lease is announced, which is how the memory caches empty",
   stop();
   await tabA.clear();
 
-  assert.deepEqual(seen, ["tech-a", "tech-a", null, "tech-b"], "a claim, an adoption and a clear each say so");
+  // The adoption in the middle settles on the marker the claim already left,
+  // so it is not a change and is not announced: an announcement empties every
+  // row the app is holding in memory, and doing that on a re-claim of the same
+  // store would throw away the work of the person who never left.
+  assert.deepEqual(seen, ["tech-a", null, "tech-b"], "every CHANGE of lease says so, and nothing else does");
 });
 
 test("a stale tab's clear is refused every time it is tried, not just the first", async () => {
@@ -276,8 +280,8 @@ test("the boot's own wipe is fenced on the marker it read before asking the serv
 
   // Tab B boots. It holds no lease yet — nothing has been claimed — and reads
   // who this device belongs to BEFORE it asks the server about the session.
-  const atBoot = await tabB.marker();
-  assert.deepEqual(atBoot, { owner: "tech-a", epoch: 1 });
+  const atBoot = await tabB.authority();
+  assert.deepEqual(atBoot.marker, { owner: "tech-a", epoch: 1 });
 
   // The profile read is slow, and while it is in flight somebody signs in on
   // another tab and starts working.
@@ -290,7 +294,7 @@ test("the boot's own wipe is fenced on the marker it read before asking the serv
   assert.ok(await rawRead("ticket.wip.J-90"), "the new owner's morning is untouched");
 
   // And with nothing having moved, the same wipe lands.
-  const now = await tabB.marker();
+  const now = await tabB.authority();
   assert.equal(await tabB.clear({ expect: now }), true);
   assert.equal(await rawRead("ticket.wip.J-90"), null);
 });
@@ -307,12 +311,15 @@ test("the boot's wipe of a device nobody has ever claimed", async () => {
   // `expect: null` is a state of its own — a store with no marker at all —
   // and not the absence of an expectation.
   await rawPut("ticket.wip.J-77", { weldLines: [] });
-  assert.equal(await tabA.marker(), null);
+  const atBoot = await tabA.authority();
+  assert.equal(atBoot.marker, null);
   await tabB.claimFor("tech-b");                    // claimed while the boot thought
-  assert.equal(await tabA.clear({ expect: null }), false);
+  assert.equal(await tabA.clear({ expect: atBoot }), false);
   await rawWipe();
   await rawPut("ticket.wip.J-77", { weldLines: [] });
-  assert.equal(await tabA.clear({ expect: null }), true, "an unclaimed store is the boot's to empty");
+  const now = await tabA.authority();
+  assert.equal(now.marker, null);
+  assert.equal(await tabA.clear({ expect: now }), true, "an unclaimed store is the boot's to empty");
   assert.equal(await rawRead("ticket.wip.J-77"), null);
 });
 
@@ -366,8 +373,13 @@ test("the per-client job lists are swept under the caller's lease, not a fresh o
   await dropClientJobLists(held);
   assert.ok(await rawRead("jobs.client.acme"), "A's delete does not sweep B's lists");
 
-  // And under a lease that still stands it does its job.
-  await dropClientJobLists(tabB.hold());
+  // And under a lease that still stands it does its job. Claimed in tabA's own
+  // module rather than borrowed from tabB's: a lease is a token of ONE
+  // module's binding — it carries the serial of the tab that minted it — and
+  // in the app it never crosses a tab, because a tab hands it only to its own
+  // helpers. tech-b already owns the store, so this claim empties nothing.
+  await tabA.claimFor("tech-b");
+  await dropClientJobLists(tabA.hold());
   assert.equal(await rawRead("jobs.client.acme"), null);
 });
 

@@ -33,12 +33,20 @@ function build() {
   let announce = () => {};
   const sbClient = { auth: { onAuthStateChange: fn => { announce = fn; return { data: { subscription: { unsubscribe() {} } } } } } };
   let leaseChanged = () => {};
-  const OfflineCache = { onLeaseChange: fn => { leaseChanged = fn; return () => {}; } };
+  // The disk fence's own half is cacheAuthRetire.test.mjs's; here it only has
+  // to exist, because the auth region calls it beside forgetRememberedRows and
+  // a stub that does not answer would hide the memory half behind a TypeError.
+  const retired = [];
+  const OfflineCache = {
+    onLeaseChange: fn => { leaseChanged = fn; return () => {}; },
+    retireUnless: id => { retired.push(id); return false; }
+  };
   const api = new Function("OfflineCache", "sbClient",
     memory + "\n" + auth + "\nreturn { cached, _cache, _inflight };"
   )(OfflineCache, sbClient);
   return {
     ...api,
+    retired,
     signIn: id => announce("SIGNED_IN", id ? { user: { id } } : null),
     handover: () => leaseChanged(null)
   };

@@ -76,8 +76,57 @@ function asMarker(value) {
 // binding exactly as they were.
 let lease = null;
 
+// How many times this tab's binding has actually changed, stamped into every
+// lease it hands out. The marker on the disk is the OTHER tabs' fence; this is
+// this tab's own, and it is needed because the two questions are not the same
+// one. A tab told by Auth that the account here is now somebody else has
+// learned that its own authority is gone WITHOUT anything on the disk having
+// moved yet — the new account's claim is a separate transaction that may be
+// slow, may be in another tab, may fail. Until it lands, the marker still says
+// what this tab holds, so the disk alone would answer "yes, still yours" to a
+// read for an account that has already been replaced. A token minted before a
+// retirement therefore carries a serial that no longer exists, and is refused
+// however unchanged the disk is.
+let leaseSerial = 0;
+
+// How many times a lease has been bound TO AN OWNER — a claim or an adoption
+// landing, never a retirement. `leaseSerial` cannot answer the question a
+// wipe has to ask, because a sign-out's own announcement retires the lease
+// it is speaking for and would invalidate its own authority. This counts
+// only the event that matters to somebody else's data: another claim landed
+// and this store is now being filled under it.
+let bindings = 0;
+
+// The account Auth has most recently said is here, once it has said anything
+// at all (`undefined` until then, and `null` for nobody). It is not the lease
+// and it is not the marker: it is the only record of an announcement that a
+// tab holding NOTHING has heard, and without it a claim for the account that
+// has just left — started before the announcement, landing after it — binds a
+// lease for somebody who is gone, because retiring nothing bumps no serial.
+let announced;
+
+// How many times an ACCOUNT HAS ARRIVED on this device, counted for the tab
+// whether or not it held a lease. `announced` alone answers "who is here
+// now", and that is not the question a piece of work started earlier has to
+// ask: A → B → A leaves the same answer it started with, while another
+// account has owned, emptied and refilled this store in between. So every
+// announcement of a named account that is not the one already announced
+// moves this, monotonically, and anything that captured it earlier is
+// refused on the strength of the count rather than the name.
+//
+// A departure (a sign-out, `null`) is NOT an arrival: nobody has taken the
+// device, and counting it would refuse the sign-out's own wipe, which is
+// captured before the session goes and runs after it. The first
+// announcement of all — `undefined` to somebody — is not one either: it is
+// the boot learning who it already is, and the claim it would refuse is
+// that same boot's.
+let arrivals = 0;
+
 function matches(markerValue, held) {
   if (!held) return false;
+  // Retired, or minted under a binding this tab has since let go of. Nothing
+  // about the disk can rescue it.
+  if (held.serial !== leaseSerial || !lease) return false;
   const marker = asMarker(markerValue);
   return !!marker && marker.owner === held.owner && marker.epoch === held.epoch;
 }
@@ -182,7 +231,17 @@ function setState(next) {
 // let the next one's identical fetch skip the write it actually needs.
 const onBind = new Set();
 function bind(next) {
-  lease = next;
+  // A re-claim that settles on the marker this tab already holds is not a
+  // change of anything: same account, same store, same epoch. Rebinding it
+  // would mint a new serial and kill every token a fetch in flight is holding,
+  // so an hourly token refresh — or the boot's own claim arriving after the
+  // screens have started reading — would drop that minute's answers on the
+  // floor. Same-account work stays valid across it.
+  if (next && lease && next.owner === lease.owner && next.epoch === lease.epoch) return;
+  if (!next && !lease) return;
+  leaseSerial += 1;
+  if (next) bindings += 1;
+  lease = next ? { owner: next.owner, epoch: next.epoch, serial: leaseSerial } : null;
   rtLastWritten.clear();
   // Everything else in the app that remembers a row in MEMORY is told at the
   // same instant, from the one place a lease can change, so no transition can
@@ -213,6 +272,35 @@ export const OfflineCache = {
   // For anything holding rows in memory, which the fence cannot reach: see
   // bind() above. Registered once at module load and never removed.
   onLeaseChange(fn) { onBind.add(fn); return () => onBind.delete(fn); },
+
+  // Auth says this device is now somebody else's, or nobody's. Synchronous,
+  // and deliberately neither a clear nor a claim: the account that has just
+  // gone owns the rows on that disk, and the account that has just arrived
+  // has its own claim to make (`claimFor`, which empties a stranger's store at
+  // the door) or its own restore to adopt. What this does is put THIS TAB out
+  // of business until one of those lands — no read, no write, no fallback,
+  // including from any token minted before now.
+  //
+  // It has to happen at the announcement and not at the claim, because a claim
+  // is a transaction that may be slow, may belong to another tab and may fail,
+  // and every read between the two would otherwise be answered off the last
+  // account's disk under the last account's marker. Same-account announcements
+  // (the hourly refresh, the first one after a boot claim) change nothing, so
+  // a person's own half-entered work survives them.
+  //
+  // Nothing is deleted: the owner may sign back in and find their tickets.
+  retireUnless(userId) {
+    // Recorded whatever else happens, so a claim in flight for a different
+    // account can be refused on landing even when there was no lease to retire.
+    const next = userId || null;
+    if (next && announced !== undefined && next !== announced) arrivals += 1;
+    announced = next;
+    if (!lease) return false;
+    if (userId && lease.owner === userId) return false;
+    bind(null);
+    setState({ servingCached: false, at: null });
+    return true;
+  },
 
   // The lease to write an answer under, taken BEFORE the work that produces
   // it starts. A caller that fetches and then puts must hold one across the
@@ -297,6 +385,38 @@ export const OfflineCache = {
     return asMarker(hit ? hit.value : null);
   },
 
+  // The marker AND the arrival count, captured together: the authority a
+  // caller holding no lease comes back to clear() with. The marker on its own
+  // was not enough — a claim by the account that already owns the store keeps
+  // the marker exactly as it was (nothing is emptied, so the epoch stands),
+  // so a wipe decided before that claim matched it afterwards and took the
+  // freshly claimed store with it. The count answers the question the disk
+  // cannot: has anybody arrived since.
+  // It carries four things and needs all four. The marker is what the store
+  // says; `gen` is how many accounts have ARRIVED; `serial` counts the leases
+  // BOUND TO AN OWNER on this tab, so a claim that landed and bound while the wipe was being
+  // decided is an intervening event even when the marker it settled on is
+  // the same one (the same account re-claiming its own store empties
+  // nothing, so the epoch does not move); and `seen` is what Auth had
+  // announced at capture, because the FIRST announcement of all bumps no
+  // count — a boot that reads the marker before Auth has said anything, and
+  // is then told the device is somebody's, must not empty what that somebody
+  // has just claimed.
+  async authority() {
+    return { marker: await this.marker(), gen: arrivals, serial: bindings, seen: announced };
+  },
+
+  // The authority of a tab that HOLDS one — a sign-out's. Synchronous and
+  // taken from the lease itself, never from a read of the disk: a stale tab
+  // (retired an hour ago, its account long replaced) reads the marker of
+  // whoever owns the device NOW, and a wipe authorised by that reading
+  // deletes the current account's half-entered work. No lease is no
+  // authority, and answers null: this tab has nothing to empty.
+  heldAuthority() {
+    if (!lease) return null;
+    return { marker: { owner: lease.owner, epoch: lease.epoch }, gen: arrivals, serial: bindings, seen: announced };
+  },
+
   // The boot's explicit, unfenced doors, and the only ones. Reading who
   // was last signed in here is what DECIDES the claim, so it cannot be
   // behind the claim; forgetting them is never a disclosure.
@@ -335,8 +455,10 @@ export const OfflineCache = {
   // the rest of it. Fail closed: the screens show an error, not somebody
   // else's jobs.
   async adopt(userId) {
+    const gen = leaseSerial;
+    const arrived = arrivals;
     const settled = await settleOwner(userId, false);
-    if (!settled) {
+    if (!settled || settled.stale) {
       // Refused, and the refusal RETIRES whatever this tab was holding. The
       // marker names somebody else, which is proof this device changed hands
       // since — so the lease from before it did describes a store that is no
@@ -345,7 +467,15 @@ export const OfflineCache = {
       // storage FAILURE is not this: settleOwner throws on one, and the
       // binding is left exactly as it was, because an IndexedDB blip is not
       // evidence of anything.
-      bind(null);
+      //
+      // And a refusal only ever retires ITS OWN binding. An adoption that
+      // was overtaken — the device changed hands, or another claim landed
+      // and bound while this one was in flight — is speaking about a world
+      // that has gone, and the lease standing now belongs to whoever won it.
+      // Letting go of that one would put the account that has just arrived
+      // out of business on a stale refusal's word, which is the same mistake
+      // as the sign-out's.
+      if (leaseSerial === gen && arrivals === arrived) bind(null);
       return false;
     }
     return true;
@@ -484,12 +614,39 @@ export const OfflineCache = {
     // held the last serializations, so the next session's unchanged fetches
     // skipped their writes and the offline fallback was silently gone.
     rtLastWritten.clear();
+    // `expect` is an AUTHORITY — `OfflineCache.authority()`, the marker and
+    // the arrival count read at one instant — and not a bare marker: see
+    // authority() for why the marker alone let a wipe decided before a claim
+    // land after it.
     const stated = !!opts && Object.prototype.hasOwnProperty.call(opts, "expect");
-    const expect = stated ? asMarker(opts.expect) : lease;
+    const held = stated && opts.expect ? opts.expect : null;
+    const expect = stated ? asMarker(held ? held.marker : null) : lease;
+    // Nobody may have ARRIVED since the authority was captured. A departure
+    // has not: the sign-out's own wipe is captured before the session goes
+    // and runs after it, and the account that left is the one asking.
     // Neither a lease nor a stated expectation: nothing to be sure of, so
     // nothing is deleted. The tab is left as it was — it holds no lease
     // anyway — and the caller is told it emptied nothing.
     if (!stated && !lease) return false;
+    // Same reason as a claim's: the marker on the disk does not move when Auth
+    // says the device has changed hands, so a sign-out that was already in
+    // flight would still match it and empty the store the next account is
+    // about to be handed — or has already claimed under the same marker, an
+    // epoch that did not move because nothing was emptied.
+    // Every baseline comes from the AUTHORITY where one was stated, and not
+    // from this instant: the whole point of the authority is that it was
+    // captured before the async work, so re-reading any of it here would
+    // simply forgive whatever happened in between.
+    const gen = held && typeof held.serial === "number" ? held.serial : bindings;
+    const arrived = held && typeof held.gen === "number" ? held.gen : arrivals;
+    const seen = held && Object.prototype.hasOwnProperty.call(held, "seen") ? held.seen : announced;
+    // Nobody NAMED may have been announced since. A departure (`null`) is not
+    // one — the sign-out's own wipe is captured before the session goes and
+    // runs after it — but an arrival is, including the first announcement of
+    // all, which bumps no count.
+    const moved = () => bindings !== gen
+      || arrivals !== arrived
+      || (announced != null && announced !== seen);
     const db = await ocOpenDb();
     const emptied = await new Promise((resolve, reject) => {
       const tx = db.transaction(OC_STORE, "readwrite");
@@ -498,7 +655,8 @@ export const OfflineCache = {
       const req = store.get(CACHE_OWNER_KEY);
       req.onsuccess = () => {
         const value = req.result ? req.result.value : null;
-        if (!sameMarker(value, expect)) return;
+        if (moved()) return;
+        if (stated ? !sameMarker(value, expect) : !matches(value, expect)) return;
         const marker = asMarker(value);
         store.clear();
         store.put({ key: CACHE_OWNER_KEY, value: { owner: OWNERLESS, epoch: (marker ? marker.epoch : 0) + 1 }, at: Date.now() });
@@ -510,9 +668,14 @@ export const OfflineCache = {
     });
     // This tab's own lease went with the store it named, whether or not the
     // store was this tab's to empty. Whoever signs in next binds a new one;
-    // until then nothing fenced is read or written.
-    bind(null);
-    setState({ servingCached: false, at: null });
+    // until then nothing fenced is read or written. Unless the authority moved
+    // while this was in flight: the lease standing then is not the one this
+    // sign-out was speaking for, and letting go of it would put the account
+    // that has just arrived out of business on the last one's word.
+    if (!moved()) {
+      bind(null);
+      setState({ servingCached: false, at: null });
+    }
     return emptied;
   }
 };
@@ -525,6 +688,26 @@ export const OfflineCache = {
 // Answers the marker it settled on, or null for "not this tab's to hold".
 async function settleOwner(userId, mayClear) {
   if (!userId) return null;
+  // The authority this claim was started under. A claim is a transaction that
+  // takes real time, and Auth can say the device changed hands while it is in
+  // flight; binding on its return would then hand the tab a lease for the
+  // account that has just left — and the disk cannot tell, because a
+  // retirement moves nothing on it. The emptying, if it happened, stands:
+  // deleted is deleted, and it is the binding that has to be refused.
+  const gen = leaseSerial;
+  // Asked again INSIDE the transaction, immediately before anything is
+  // written or emptied. Refusing to bind on the way out is not enough: a
+  // claim that opens its transaction after the device has changed hands
+  // finds a marker naming somebody else and empties the store on that
+  // basis, and the account it just deleted is the one that is here NOW.
+  // Deleted is deleted, and no refusal afterwards puts a half-entered
+  // ticket back. The gap is real and is the whole boot: `ocOpenDb` is
+  // where the first claim of a tab waits, and another tab can claim and
+  // write the device across it.
+  const arrived = arrivals;
+  const moved = () => leaseSerial !== gen
+    || arrivals !== arrived
+    || (announced !== undefined && announced !== userId);
   const db = await ocOpenDb();
   const settled = await new Promise((resolve, reject) => {
     const tx = db.transaction(OC_STORE, "readwrite");
@@ -544,6 +727,10 @@ async function settleOwner(userId, mayClear) {
     // just deleted.
     const failed = e => { out = null; try { tx.abort(); } catch { /* already gone */ } reject(e); };
     const decide = marker => {
+      // Nothing this claim could write is this tab's to write any more. The
+      // transaction ends having read the marker and touched nothing, and the
+      // caller is refused exactly as a claim on a stranger's store is.
+      if (moved()) return;
       if (marker && marker.owner === userId) {
         // Already theirs. The epoch stands: nothing was emptied, so every
         // lease against it is still describing the store it describes.
@@ -568,6 +755,9 @@ async function settleOwner(userId, mayClear) {
         iReq.onsuccess = () => {
           try {
             const hit = iReq.result;
+            // Asked again: the identity read is a second trip and the
+            // announcement can land across it.
+            if (moved()) return;
             if (hit && hit.value && hit.value.id === userId) {
               const next = { owner: userId, epoch: marker ? marker.epoch : 0 };
               store.put({ key: CACHE_OWNER_KEY, value: next, at: Date.now() });
@@ -591,9 +781,26 @@ async function settleOwner(userId, mayClear) {
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error);
   });
-  // Bound only now the transaction has committed.
+  // Bound only now the transaction has committed, and only if this tab's
+  // authority is still the one the claim was started under.
   if (!settled) return null;
+  // The last, narrow window: an announcement landing between the decision and
+  // the commit. Nothing can be un-deleted here, which is why the check above
+  // exists; this one keeps the binding honest.
+  if (moved()) {
+    if (settled.cleared) setState({ servingCached: false, at: null });
+    return { marker: settled.marker, cleared: settled.cleared, stale: true };
+  }
   bind(settled.marker);
+  // A store that emptied cannot keep the guard that skips writes, whatever
+  // bind() decided. bind() lets an unchanged marker through untouched — same
+  // account, same epoch, so the leases in flight stay good — and a claim that
+  // WIPED the store can settle on a marker that looks unchanged when the old
+  // marker is missing entirely and the new epoch lands back on the number the
+  // last one had. Left holding the last session's serializations, the next
+  // identical fetch skips the write it now needs and the key has no offline
+  // copy for the rest of the tab's life.
+  if (settled.cleared) rtLastWritten.clear();
   if (settled.cleared) setState({ servingCached: false, at: null });
   return settled;
 }

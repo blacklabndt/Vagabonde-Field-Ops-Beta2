@@ -32,3 +32,4 @@ deno.lock
 # their logs carry real record excerpts and token columns; nothing in here is
 # part of the app, and a committed log is a disclosure nobody meant to make.
 vite-app/e2e/hunt/
+.tmp/

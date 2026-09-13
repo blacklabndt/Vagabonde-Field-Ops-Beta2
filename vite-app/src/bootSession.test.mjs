@@ -49,7 +49,10 @@ function world({ session, profile, hinted = false, claimThrows = false, identity
       // Read before the server is asked, and handed back to clear() as the
       // authority for the retired-account wipe — the boot holds no lease of
       // its own at that point. See OfflineCache.clear.
-      marker: async () => { if (markerThrows) throw new Error("IndexedDB is unavailable"); return marker; },
+      // The marker AND the arrival count, read together: an account that
+      // arrives after this instant owns the store, even where the marker
+      // itself has not moved.
+      authority: async () => { if (markerThrows) throw new Error("IndexedDB is unavailable"); return { marker, gen: 0 }; },
       clear: async opts => { did.cleared = true; did.clearedWith = opts; store.clear(); return true; },
       claimFor: async id => { if (claimThrows) throw new Error("IndexedDB is unavailable"); did.claimed = id; },
       noteServingCached: () => {}
@@ -122,14 +125,14 @@ test("the same missing profile with no recovery in play signs out and wipes", as
   // boot holds no lease — nothing has been claimed — so this is the whole of
   // the wipe's authority, and a device claimed by another tab meanwhile is
   // not emptied by it.
-  assert.deepEqual(did.clearedWith, { expect: { owner: "A", epoch: 1 } });
+  assert.deepEqual(did.clearedWith, { expect: { marker: { owner: "A", epoch: 1 }, gen: 0 } });
 });
 
 test("a device nobody has claimed is still the boot's to empty", async () => {
   const { did, boot } = world({ session: LIVE, profile: NO_PROFILE, marker: null });
   await boot();
   assert.equal(did.cleared, true);
-  assert.deepEqual(did.clearedWith, { expect: null }, "no marker is a state, not the absence of one");
+  assert.deepEqual(did.clearedWith, { expect: { marker: null, gen: 0 } }, "no marker is a state, not the absence of one");
 });
 
 test("an unreadable owner leaves the retired account's data alone", async () => {

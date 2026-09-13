@@ -60,27 +60,23 @@ declare
   _sum    numeric := 0;
   _total  numeric;
 begin
-  -- ── Who is asking ──────────────────────────────────────────────────────
-  -- Definer, so the checks below ARE the gate: nothing about this function
-  -- is decided by a policy. Every one of them is written null-safe, because
-  -- the interesting callers are the ones with nothing: no JWT at all (the
+  -- ── Signed in at all ───────────────────────────────────────────────────
+  -- Definer, so the checks below ARE the gate: nothing about this function is
+  -- decided by a policy. Every one of them is written null-safe, because the
+  -- interesting callers are the ones with nothing: no JWT at all (the
   -- publishable key on its own), a deactivated account (private.user_role()
   -- answers null for one, by 20260904135107), a profile that has gone. `=`
   -- against null is null and `if null then` does not run its branch, so each
   -- test is written to REFUSE on null rather than to permit on a match.
+  --
+  -- This one test is asked before the lock because it cannot change while we
+  -- wait: auth.uid() is read out of the request's own JWT and is a constant
+  -- for the life of the statement. Everything that a person or an Admin could
+  -- change — the role, the deactivation, the ownership, the status — is asked
+  -- AFTER the wait, below, and only after it.
   if _uid is null then
     raise exception 'You are not signed in — sign in again and save the ticket.'
       using errcode = '28000';
-  end if;
-
-  select private.user_role() into _role;
-  if _role is null or _role not in ('Admin', 'Technician') then
-    -- The same rule as the ticket_lines policies: prices are Admins' and
-    -- Technicians'. A role that cannot READ a ticket's lines must never be
-    -- able to replace them — a Coordinator's save once read zero lines and
-    -- deleted the real ones.
-    raise exception 'Your account cannot price tickets, so it cannot change this ticket''s charges.'
-      using errcode = '42501';
   end if;
 
   -- ── The row, locked ────────────────────────────────────────────────────
@@ -98,18 +94,45 @@ begin
       using errcode = 'P0002';
   end if;
 
-  -- ── Whose ticket, and may it still be changed ──────────────────────────
-  -- Mirrors private.can_write_ticket (own draft, or an Admin's) and states it
-  -- rather than borrowing it, so the whole rule is legible at the one door
-  -- that can empty a ticket's billing — and so it is read from the row this
-  -- statement has LOCKED, not from a second, unlocked look at the same table.
-  -- The probes assert the two still agree.
+  -- ── Who is asking, AFTER the wait ──────────────────────────────────────
+  -- The lock can be held by another save for as long as that save takes, and
+  -- an office can do a great deal in that time: change somebody's role, lock
+  -- their account, approve the ticket. Authorization read before the wait and
+  -- spent after it is authorization for a state that has already gone —
+  -- exactly the window this function exists to close, one level up. Read
+  -- COMMITTED gives each statement its own snapshot, so every question below
+  -- is answered against what is true NOW and not against the snapshot the
+  -- wait began under; `_t` itself is the row this statement locked, which is
+  -- likewise the committed one.
+  select private.user_role() into _role;
+  if _role is null or _role not in ('Admin', 'Technician') then
+    -- The same rule as the ticket_lines policies: prices are Admins' and
+    -- Technicians'. A role that cannot READ a ticket's lines must never be
+    -- able to replace them — a Coordinator's save once read zero lines and
+    -- deleted the real ones.
+    raise exception 'Your account cannot price tickets, so it cannot change this ticket''s charges.'
+      using errcode = '42501';
+  end if;
+
+  -- Protected status, from the row this statement has locked, and named in
+  -- words the technician can act on. can_write_ticket below refuses an
+  -- approved ticket too, but it refuses everything with one answer, and
+  -- "another technician's" is not what happened here.
   if _t.approved_at is not null or _t.status in ('Approved', 'Invoiced') then
     raise exception 'Ticket % has been % — its charges cannot be changed. Raise a new ticket for any correction.',
       _ticket_id, case when _t.status = 'Invoiced' then 'invoiced' else 'approved by the client' end
       using errcode = '42501';
   end if;
-  if _role <> 'Admin' and _t.technician_id is distinct from _uid then
+
+  -- Ownership is private.can_write_ticket's answer and not a copy of it. It
+  -- is the gate behind every ticket_lines and ticket_crew write already
+  -- (20260907044223: own draft, or an Admin's), and this function is a door
+  -- into exactly those rows — a second statement of the same rule here is a
+  -- second thing to keep in step, and the one that would be forgotten. It is
+  -- STABLE and called in its own statement after the lock, so it reads the
+  -- committed role and the committed row, not the pre-wait ones.
+  -- `coalesce(…, false)`: a null answer is a refusal.
+  if not coalesce(private.can_write_ticket(_ticket_id), false) then
     raise exception 'Ticket % belongs to another technician — your account cannot change it.', _ticket_id
       using errcode = '42501';
   end if;
@@ -148,16 +171,18 @@ begin
       raise exception 'A charge''s description is longer than the ticket can hold.' using errcode = '22023';
     end if;
     -- jsonb_typeof tells a number from a string that looks like one, so the
-    -- casts below are only reached for real numbers. 'NaN' is a legal numeric
-    -- literal in Postgres and every comparison against it is false, which
-    -- would make it slip past a sign test written the other way round; it is
-    -- caught by name here rather than by luck.
+    -- casts below are only reached for real JSON numbers — and JSON has no
+    -- NaN, so the string 'NaN' (a legal numeric literal in Postgres, and one
+    -- every ordinary comparison lets through) cannot arrive as one. The
+    -- explicit test is kept anyway, and written the one way that works:
+    -- Postgres numeric NaN EQUALS itself, so the `x <> x` this was first
+    -- written as is never true and tests nothing. It is named instead.
     if jsonb_typeof(_line->'quantity') <> 'number' or jsonb_typeof(_line->'unit_rate') <> 'number' then
       raise exception 'A charge''s quantity and rate have to be numbers.' using errcode = '22023';
     end if;
     _qty  := (_line->>'quantity')::numeric;
     _rate := (_line->>'unit_rate')::numeric;
-    if _qty is null or _rate is null or _qty <> _qty or _rate <> _rate then
+    if _qty is null or _rate is null or _qty = 'NaN'::numeric or _rate = 'NaN'::numeric then
       raise exception 'A charge''s quantity and rate have to be numbers.' using errcode = '22023';
     end if;
     if _qty < 0 or _rate < 0 then

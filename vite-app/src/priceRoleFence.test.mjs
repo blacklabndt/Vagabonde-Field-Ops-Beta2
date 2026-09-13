@@ -16,16 +16,24 @@ assert.ok(start > 0 && end > start, "db.js must still hold the price-role region
 const region = source.slice(start, end);
 assert.match(region, /now\.gen !== answer\.gen/, "the generation fence must be in the lifted region");
 assert.match(region, /forgetRememberedRows\(\)/, "a change of account must also empty the in-memory row caches");
+assert.match(region, /OfflineCache\.retireUnless\(/, "a change of account must also retire this tab's disk authority");
 
 // A change of account also empties db.js's in-memory row caches, which live
 // above this region — see memoryCacheAccount.test.mjs, which lifts that half
 // and runs it. Here it is a spy, asserted on: the fence and the forgetting
 // are one decision, and a rewrite that kept the counter and dropped the call
 // would leave the last account's rows readable.
-const build = ({ sbClient, plainError, forgot = [] }) =>
-  new Function("sbClient", "plainError", "seesPrices", "forgetRememberedRows",
+//
+// `OfflineCache` is handed in the same way and for the same reason: retiring
+// this tab's DISK authority is the third limb of the one decision — the
+// generation fence, the memory forget and the retirement — and a rewrite that
+// kept two of the three would leave the last account's rows readable off the
+// store until somebody claimed the device again. Here it is a spy too.
+const build = ({ sbClient, plainError, forgot = [], retired = [] }) =>
+  new Function("sbClient", "plainError", "seesPrices", "forgetRememberedRows", "OfflineCache",
     region + "\nreturn { startPriceRoleLookup, priceRoleAnswer };"
-  )(sbClient, plainError, seesPrices, () => forgot.push(true));
+  )(sbClient, plainError, seesPrices, () => forgot.push(true),
+    { retireUnless: id => { retired.push(id || null); return true; } });
 
 // A client whose signed-in account can be changed mid-flight, the way a
 // shared tablet's is, and whose profiles read is held open until the test
@@ -120,8 +128,9 @@ test("a profile that could not be read is raised, never read as 'no prices'", as
 
 test("a change of account empties the remembered rows; a refresh does not", async () => {
   const forgot = [];
+  const retired = [];
   const sb = fakeClient("A");
-  build({ sbClient: sb, plainError, forgot });
+  build({ sbClient: sb, plainError, forgot, retired });
   // Nothing has been announced yet: the handler learns the account from the
   // first event, and the account arriving (null -> A) is itself a change.
   assert.equal(forgot.length, 0);
@@ -133,4 +142,9 @@ test("a change of account empties the remembered rows; a refresh does not", asyn
   assert.equal(forgot.length, 2);
   sb.become(null);           // and signing out is a change of account too
   assert.equal(forgot.length, 3);
+
+  // The disk is retired at each of those same moments, and told who is here
+  // NOW rather than who has gone — that is what lets the retirement tell a
+  // token refresh from a handover itself and leave A's own lease alone.
+  assert.deepEqual(retired, ["A", "B", null]);
 });
