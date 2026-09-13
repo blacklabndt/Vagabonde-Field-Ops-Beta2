@@ -1,10 +1,10 @@
 # Ticket read compatibility probes
 
-Status: **live SQL metadata verified through signed-in Chrome on 2026-09-13; REST probes still pending**. The live view exposes both `gst_rate` and `client_key`. Its options are `security_barrier=true` and `security_invoker=false`; its explicit `is_staff()` predicate gates rows and its CASE exposes `total` only for Admin/Technician. SQL metadata alone does not verify PostgREST embeds or runtime role enforcement.
+Status: **live SQL metadata verified through signed-in Chrome on 2026-09-13; anonymous REST schema probes verified below; authenticated runtime checks still pending**. The live view exposes both `gst_rate` and `client_key`. Its options are `security_barrier=true` and `security_invoker=false`; its explicit `is_staff()` predicate gates rows and its CASE exposes `total` only for Admin/Technician. SQL metadata alone does not verify PostgREST embeds or runtime role enforcement.
 
-Live migration history contains `20260912205211_a_ticket_total_is_read_through_a_view` (view and reporting routines) and `20260912210854_a_ticket_total_is_read_through_a_view_enforced` (column grants). Both stored statements retain historical DRAFT comments despite being present in applied migration history. The enforcement migration is now filed locally verbatim from the statements Kyle supplied on 2026-09-13; the earlier view migration still needs filing. Enforcement excludes `total` from authenticated base-table SELECT but includes `gst_rate`.
+Live migration history contains `20260912205211_a_ticket_total_is_read_through_a_view` (view and reporting routines) and `20260912210854_a_ticket_total_is_read_through_a_view_enforced` (column grants). Both stored statements retain historical DRAFT comments despite being present in applied migration history. The enforcement migration is now filed locally verbatim from the statements Kyle supplied on 2026-09-13; the earlier view migration is also now filed verbatim from Kyle’s supplied statements. Enforcement excludes `total` from authenticated base-table SELECT but includes `gst_rate`.
 
-The signed-in Kyle Keith browser still reproduces the original permission-denied error on S-12105 after reload. This verifies the current browser is still affected, not that the working-tree fix has failed. No deployment or live schema changes were performed. Browser control provides UI interaction and read-only DOM inspection; it does not provide an authenticated REST-request execution surface, so the HTTP probes below remain unexecuted.
+The signed-in Kyle Keith browser still reproduces the original permission-denied error on S-12105 after reload. This verifies the current browser is still affected, not that the working-tree fix has failed. No deployment or live schema changes were performed. Browser control provides UI interaction and read-only DOM inspection; it does not provide an authenticated REST-request execution surface, so authenticated HTTP probes remain unexecuted; the later anonymous schema probes are recorded below.
 
 The browser now reads prices through `tickets_read` for job cards, offline prefetch, archive export, My Tickets drafts, both createTicket idempotency lookups, reopening drafts, and updateTicket's existing-draft save/replay precheck. Writes remain on `tickets`. Mark-invoiced uses its existing RPC.
 
@@ -78,7 +78,7 @@ role-dependent masking of `total` (Helper: 28,816 rows, zero totals).
 The remaining gap is runtime behaviour under a real session, which the
 deploy itself exercises: load a job page as an Admin and as a Helper.
 
-## Still outstanding for the repo
+## Live migrations filed locally
 
 `20260912210854_a_ticket_total_is_read_through_a_view_enforced.sql` is now
 filed in `supabase/migrations/` verbatim from Kyle's supplied live-history
