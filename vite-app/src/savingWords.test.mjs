@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { savingLabel, deviceOffline, SLOW_SAVE_MS, SLOW_SAVE_WORDS } from "./savingWords.js";
+import { savingLabel, deviceOffline, readFailure, SLOW_SAVE_MS, SLOW_SAVE_WORDS } from "./savingWords.js";
 
 test("a save that lands quickly keeps the screen's own word", () => {
   assert.equal(savingLabel(0, "Saving…"), "Saving…");
@@ -28,4 +28,26 @@ test("only a flat false means the device knows it is offline", () => {
   // guessing offline here would send every save straight to the outbox.
   assert.equal(deviceOffline(null), false);
   assert.equal(deviceOffline({}), false);
+});
+
+test("readFailure names a missing grant as the office's problem", () => {
+  const out = readFailure({ code: "42501", message: "permission denied for table tickets" });
+  assert.match(out, /permission denied for table tickets/);
+  assert.match(out, /42501/);
+  assert.match(out, /office/);
+});
+
+test("readFailure recognises a permission refusal with no code", () => {
+  assert.match(readFailure(new Error("permission denied for table tickets")), /42501/);
+});
+
+test("readFailure passes every other failure through in the server's words", () => {
+  assert.equal(readFailure(new Error("Failed to fetch")), "Failed to fetch");
+  assert.equal(readFailure({ code: "PGRST103", message: "Requested range not satisfiable" }),
+    "Requested range not satisfiable");
+});
+
+test("readFailure never returns nothing", () => {
+  assert.equal(readFailure(null), "the read failed");
+  assert.equal(readFailure({}), "the read failed");
 });

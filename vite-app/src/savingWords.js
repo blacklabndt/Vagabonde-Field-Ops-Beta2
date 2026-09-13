@@ -41,3 +41,23 @@ export function savingLabel(elapsedMs, base) {
 export function deviceOffline(nav = typeof navigator === "undefined" ? null : navigator) {
   return !!nav && nav.onLine === false;
 }
+
+// What one failed read is worth saying out loud. A PostgREST error carries a
+// code beside its message, and the code is the half that says whose problem
+// it is: 42501 is a missing GRANT in the database, which no amount of
+// reloading or signing in again will fix and which the person looking at the
+// screen can do nothing about but report. Saying so — with the code, so the
+// office can look it up — beats a sentence about permissions that reads like
+// the account's own fault.
+//
+// Everything else is passed through as the server worded it: a network
+// failure, a timeout and a broken filter all read better in their own words
+// than under a category this function would have to guess at.
+export function readFailure(err) {
+  const msg = (err && err.message) || "";
+  const code = (err && err.code) || "";
+  if (code === "42501" || /permission denied/i.test(msg)) {
+    return `${msg || "permission denied"} (database grant ${code || "42501"} — the office's to fix, not yours)`;
+  }
+  return msg || "the read failed";
+}

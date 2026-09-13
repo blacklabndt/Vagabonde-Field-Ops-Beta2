@@ -6,7 +6,7 @@ import { Db } from "../db.js";
 import { describeScheduled } from "../scheduledSends.js";
 import { OfflineCache } from "../offlineCache.js";
 import { OfflineQueue } from "../offlineQueue.js";
-import { deviceOffline } from "../savingWords.js";
+import { deviceOffline, readFailure } from "../savingWords.js";
 import { Toasts } from "../toastBus.js";
 
 // An idempotency key for a save (see Db.createTicket / uploadReport).
@@ -210,15 +210,23 @@ export function JobDetailScreen({ job, currentUser, onStartJha, onOpenTicket, on
     const fresh = set => rows => { if (mine === filedSeq.current) set(rows); };
     setLoading(true);
     setFiledError("");
-    const out = await Promise.allSettled([
-      Db.listJhasForJob(job.dbId).then(fresh(setJhas)),
-      Db.listReportsForJob(job.dbId).then(fresh(setReports)),
-      Db.listTicketsForJob(job.dbId).then(fresh(setTickets)),
-      Db.listScheduledSendsForJob(job.dbId).then(fresh(setScheduled))
-    ]);
+    // Each read is named, because the message it produces is the only
+    // evidence anybody has that something is wrong: an unlabelled
+    // "permission denied for table tickets" could have come from any of the
+    // four, and three of them never touch tickets. Every failure is named,
+    // not just the first, so one broken grant cannot hide another behind it.
+    const reads = [
+      ["assessments", () => Db.listJhasForJob(job.dbId).then(fresh(setJhas))],
+      ["reports", () => Db.listReportsForJob(job.dbId).then(fresh(setReports))],
+      ["tickets", () => Db.listTicketsForJob(job.dbId).then(fresh(setTickets))],
+      ["scheduled sends", () => Db.listScheduledSendsForJob(job.dbId).then(fresh(setScheduled))]
+    ];
+    const out = await Promise.allSettled(reads.map(([, run]) => run()));
     if (mine !== filedSeq.current) return;
-    const bad = out.find(r => r.status === "rejected");
-    if (bad) setFiledError(`Couldn't read what's filed against ${job.id}: ${(bad.reason && bad.reason.message) || "the read failed."} The cards below are incomplete — reload before deleting anything.`);
+    const bad = out
+      .map((r, i) => (r.status === "rejected" ? `${reads[i][0]} — ${readFailure(r.reason)}` : null))
+      .filter(Boolean);
+    if (bad.length) setFiledError(`Couldn't read what's filed against ${job.id}: ${bad.join("; ")}. The cards below are incomplete — reload before deleting anything.`);
     setLoading(false);
   };
   // biome-ignore lint/correctness/useExhaustiveDependencies: the cards are read once per job; App remounts this screen when another job opens
