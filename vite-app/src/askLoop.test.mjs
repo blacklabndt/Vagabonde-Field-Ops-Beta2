@@ -333,6 +333,15 @@ test("the system prompt names the person, the day in Grande Prairie and the rule
   // an Admin's word is about the app, not about everything.
   assert.match(s, /short task methods/);
   assert.match(s, /never promise that something will be remembered/);
+  // Codex's live findings A, B and C: no "goes in" before the pass has run;
+  // a taught method needs no "that worked"; a long lesson is said to be too
+  // long rather than left to vanish; a secret is neither said to be saved
+  // nor guaranteed away; a correction is never followed by a Forget card.
+  assert.match(s, /never say a thing 'goes in', 'is saved' or 'will appear below'/);
+  assert.match(s, /never ask a person to confirm a method they have just taught/);
+  assert.match(s, /up to 300 characters/);
+  assert.match(s, /never that a secret has been saved and never a stronger guarantee/);
+  assert.match(s, /never propose forgetting the old one/);
   assert.match(s, /attribution, not expertise/);
   assert.match(s, /this message wins/);
   // Money and drafting rules are untouched by any of it.

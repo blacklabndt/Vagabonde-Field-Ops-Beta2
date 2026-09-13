@@ -58,7 +58,7 @@ interface Me { name: string | null; role: string | null; tab_access: string[] | 
 // What the learning pass kept, and what it could not. `trouble` is words for
 // the card: the answer is never failed for a note, but a note the database
 // refused must not look like one that landed.
-interface LearnResult { added: { id: string; note: string }[]; trouble: string | null }
+interface LearnResult { added: { id: string; note: string }[]; replaced: string[]; trouble: string | null }
 interface OrgHit { org_id: string; name: string; contact_count: number }
 interface JobRow {
   id: string; job_number: string; project: string | null; client_name: string | null; contractor_name: string | null;
@@ -1178,12 +1178,20 @@ Deno.serve(async (req) => {
       // untrue.
       .catch(e => {
         const words = (e as Error)?.message;
-        return { added: [], trouble: words === SPENT_WORDS ? LEARN_SPENT_WORDS : words === OUT_OF_TIME_WORDS ? LEARN_NO_TIME_WORDS : LEARN_TROUBLE_WORDS } as LearnResult;
+        return { added: [], replaced: [], trouble: words === SPENT_WORDS ? LEARN_SPENT_WORDS : words === OUT_OF_TIME_WORDS ? LEARN_NO_TIME_WORDS : LEARN_TROUBLE_WORDS } as LearnResult;
       });
+    // A Forget card for a note the learning pass has just replaced points at
+    // a row that is already gone: the person would confirm and be told
+    // "already gone, or not yours". The correction is on the receipt as the
+    // new note; the card is dropped rather than offered.
+    // (Read through a typed local: `action` is assigned inside the tool
+    // handler, and TypeScript still sees the `null` it started as here.)
+    const proposed = action as Record<string, unknown> | null;
+    const stale = proposed?.kind === "forget_learned" && kept.replaced.includes(String(proposed.id));
     return json({
       ...result, learned: kept.added, followUp: investigation.followUp(),
       ...(kept.trouble ? { learnTrouble: kept.trouble } : {}),
-      ...(action ? { action } : {}),
+      ...(proposed && !stale ? { action: proposed } : {}),
       ...(files.length ? { files: files.map(f => ({ ...f, words: fileWords(f) })) } : {})
     });
   } catch (e) {
@@ -1222,7 +1230,7 @@ async function learn(asUser: SupabaseClient, thread: unknown, answer: string, ex
   // stopping here is a thing not remembered — never a question not answered.
   // Not logged: running out of time on a long question is ordinary, and an
   // error log that fills with ordinary events is one nobody reads.
-  if (!timeToLearn(deadline, Date.now())) return { added: [], trouble: LEARN_NO_TIME_WORDS };
+  if (!timeToLearn(deadline, Date.now())) return { added: [], replaced: [], trouble: LEARN_NO_TIME_WORDS };
   const turns = [...windowTurns(thread), { role: "assistant" as const, text: answer }];
   // Measured before a penny is spent, on the text that actually goes — the
   // same rule the loop's own calls follow. Over the backstop the call is not
@@ -1233,7 +1241,7 @@ async function learn(asUser: SupabaseClient, thread: unknown, answer: string, ex
   const { payload, chars } = learnBody(turns, existing.map(e => ({ id: e.id, note: e.note })));
   if (chars > MAX_LEARN_REQUEST_CHARS) {
     await logError("ask", `the learning call was ${chars} characters, over the ${MAX_LEARN_REQUEST_CHARS} ceiling, and was not made`, { user: userId });
-    return { added: [], trouble: "This conversation was too long for Ask to learn anything from." };
+    return { added: [], replaced: [], trouble: "This conversation was too long for Ask to learn anything from." };
   }
   // The metered transport, the same one the loop uses: this is the second
   // paid call of every answer, and for a long time it was counted nowhere.
@@ -1249,7 +1257,7 @@ async function learn(asUser: SupabaseClient, thread: unknown, answer: string, ex
   // The words are fixed and ours: the reason belongs in the log.
   if (!res.ok) {
     await logError("ask", `the learning call was refused with ${res.status}`, { user: userId });
-    return { added: [], trouble: LEARN_TROUBLE_WORDS };
+    return { added: [], replaced: [], trouble: LEARN_TROUBLE_WORDS };
   }
   // What the reply means is decided in askLearn.ts, where the suite can
   // reach it: a reply the provider cut off learns nothing, whatever JSON its
@@ -1259,7 +1267,7 @@ async function learn(asUser: SupabaseClient, thread: unknown, answer: string, ex
   const { decided, cutOff } = decideLearned(reply, existing.map(e => e.id), turns);
   if (cutOff) {
     await logError("ask", `the learning reply was cut off (stop_reason ${String(reply?.stop_reason)}) and nothing was kept from it`, { user: userId });
-    return { added: [], trouble: LEARN_TROUBLE_WORDS };
+    return { added: [], replaced: [], trouble: LEARN_TROUBLE_WORDS };
   }
   // The writes, as the caller under RLS, through the same orchestrator the
   // suite runs against a played database (applyLearned): a correction is one
@@ -1278,7 +1286,7 @@ async function learn(asUser: SupabaseClient, thread: unknown, answer: string, ex
     }
   });
   for (const line of outcome.log) await logError("ask", line, { user: userId });
-  return { added: outcome.added, trouble: outcome.trouble };
+  return { added: outcome.added, replaced: outcome.replaced, trouble: outcome.trouble };
 }
 
 // Best-effort, never masks the real error (admin-digest's shape).

@@ -286,7 +286,7 @@ export const ASK_TOOLS: AskTool[] = [
   },
   {
     name: "forget_learned", tab: "board",
-    description: "Propose forgetting one learned note — an app fact or a Task: method — by the id list_learned gave: the card asks the person to confirm. Only the person who said it, or an Admin, can forget it; nothing changes until they confirm.",
+    description: "Propose forgetting one learned note — an app fact or a Task: method — by the id list_learned gave: the card asks the person to confirm. Only the person who said it, or an Admin, can forget it; nothing changes until they confirm. Not for a note the person has just corrected: the correction replaces that note after the answer, so a Forget card for it would point at a note already gone.",
     input_schema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false }
   },
   {

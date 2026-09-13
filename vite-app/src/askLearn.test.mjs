@@ -62,9 +62,13 @@ test("the answer is read strictly: JSON or nothing, bounded, deduplicated, repla
   // Too short, too long, not an object, and a duplicate: dropped. A recipe
   // over the limit is dropped whole — never cut down to fit.
   const long = `Task: ${"x".repeat(NOTE_CHARS)}`;
-  assert.deepEqual(
-    parseLearned(JSON.stringify({ add: [evidence("no"), evidence(long), 42, evidence("Kept."), evidence("kept.")] }), [], TAUGHT).add,
-    ["Kept."]);
+  const dropped = parseLearned(JSON.stringify({ add: [evidence("no"), evidence(long), 42, evidence("Kept."), evidence("kept.")] }), [], TAUGHT);
+  assert.deepEqual(dropped.add, ["Kept."]);
+  // ...and the drop is COUNTED, so the card can say a long method was not
+  // kept. A pass with nothing over the limit carries no count at all: the
+  // shape of "nothing learned" is unchanged.
+  assert.equal(dropped.tooLong, 1);
+  assert.equal("tooLong" in parseLearned(JSON.stringify({ add: [evidence("Short.")] }), [], TAUGHT), false);
   // A replace must name an existing note; a second replace of the same id is dropped.
   const r = parseLearned(JSON.stringify({
     add: [],
@@ -433,14 +437,14 @@ test("the function checks the ceiling before it spends, and sends the text it me
   assert.match(learn, /body: payload/, "the text sent is the text that was measured");
   assert.match(learn, /logError\("ask", `the learning call was/, "the office hears about a call not made");
   // Learning is best effort: over the ceiling the answer still stands.
-  assert.match(learn, /return \{ added: \[\], trouble: "This conversation was too long/);
+  assert.match(learn, /return \{ added: \[\], replaced: \[\], trouble: "This conversation was too long/);
 });
 
 // ---------------------------------------------------------------------------
 // The pass after the call, run through the SAME code ask/index.ts calls
 // (decideLearned, applyLearned) against a played database.
 // ---------------------------------------------------------------------------
-import { decideLearned, applyLearned, LEARN_TROUBLE, LEARN_FULL_WORDS } from "../../supabase/functions/_shared/askLearn.ts";
+import { decideLearned, applyLearned, LEARN_TROUBLE, LEARN_FULL_WORDS, LEARN_LONG_WORDS } from "../../supabase/functions/_shared/askLearn.ts";
 
 const TURNS = [{ role: "user", text: "we post the handover to Team chat on Fridays" }, { role: "assistant", text: "Noted." }];
 const good = JSON.stringify({ add: [{ note: "Task: the weekly handover; post it to Team chat on Friday.", source_user_turns: [0] }], replace: [] });
@@ -476,11 +480,11 @@ function played({ replaceError = null, insertError = null, replaceRow = true } =
 test("a save that lands comes back with its ids, and nothing is logged", async () => {
   const db = played();
   const out = await applyLearned({ add: ["One.", "Two."], replace: [] }, 10, db.store);
-  assert.deepEqual(out, { added: [{ id: "i1", note: "One." }, { id: "i2", note: "Two." }], trouble: null, log: [] });
+  assert.deepEqual(out, { added: [{ id: "i1", note: "One." }, { id: "i2", note: "Two." }], replaced: [], trouble: null, log: [] });
   assert.deepEqual(db.calls, [["insert", ["One.", "Two."]]]);
   // Nothing to do makes no call at all.
   const idle = played();
-  assert.deepEqual(await applyLearned({ add: [], replace: [] }, 10, idle.store), { added: [], trouble: null, log: [] });
+  assert.deepEqual(await applyLearned({ add: [], replace: [] }, 10, idle.store), { added: [], replaced: [], trouble: null, log: [] });
   assert.deepEqual(idle.calls, []);
 });
 
@@ -500,6 +504,7 @@ test("a correction the database refuses leaves the old note alone and is NOT ret
   const out = await applyLearned({ add: [], replace: [{ id: "n1", note: "Fixed." }] }, 10, db.store);
   assert.deepEqual(out.added, []);
   assert.equal(out.trouble, LEARN_TROUBLE);
+  assert.deepEqual(out.replaced, [], "a refused correction removed nothing, so no Forget card is stale");
   assert.deepEqual(out.log, ["a note could not be corrected: not yours to remove"]);
   assert.deepEqual(db.calls, [["replace", "n1", "Fixed."]], "one call, and no insert behind it");
 });
@@ -508,6 +513,7 @@ test("at a full window a correction still lands and makes no room: the addition 
   const db = played();
   const out = await applyLearned({ add: ["New."], replace: [{ id: "n1", note: "Fixed." }] }, MAX_LEARNED, db.store);
   assert.deepEqual(out.added, [{ id: "r1", note: "Fixed." }]);
+  assert.deepEqual(out.replaced, ["n1"], "the id the correction removed is named, so a Forget card for it can be dropped");
   assert.equal(out.trouble, LEARN_FULL_WORDS);
   assert.match(out.log[0], /1 learned note was not kept: Ask's memory holds 200 notes and is full/);
   assert.deepEqual(db.calls, [["replace", "n1", "Fixed."]], "no insert was attempted for a slot that does not exist");
@@ -522,4 +528,46 @@ test("at a full window a correction still lands and makes no room: the addition 
   assert.deepEqual(one.calls, [["insert", ["A."]]]);
   assert.deepEqual(part.added, [{ id: "i1", note: "A." }]);
   assert.equal(part.trouble, LEARN_FULL_WORDS);
+});
+
+test("a method too long for one note is said on the card and in the log, never dropped in silence", async () => {
+  // Codex's live fixture 4: a long confirmed method produced no note, no
+  // trouble and an answer that had promised a save. The parser's count now
+  // reaches the card in fixed words with the limit in them.
+  const db = played();
+  const out = await applyLearned({ add: [], replace: [], tooLong: 1 }, 10, db.store);
+  assert.deepEqual(out.added, []);
+  assert.equal(out.trouble, LEARN_LONG_WORDS);
+  assert.match(LEARN_LONG_WORDS, new RegExp(`${NOTE_CHARS} characters is the most`));
+  assert.deepEqual(out.log, [`1 learned note was over ${NOTE_CHARS} characters and not kept`]);
+  assert.deepEqual(db.calls, [], "nothing to write");
+  // Beside a note that landed, the long one is still said.
+  const both = await applyLearned({ add: ["Kept."], replace: [], tooLong: 2 }, 10, played().store);
+  assert.equal(both.added.length, 1);
+  assert.equal(both.trouble, LEARN_LONG_WORDS);
+  assert.match(both.log[0], /2 learned notes were over/);
+  // A refusal is the rarer and the more important word: it wins the card.
+  const cap = "Ask has kept as much as it can hold from you — forget a note to make room.";
+  const refused = await applyLearned({ add: ["One."], replace: [], tooLong: 1 }, 10, played({ insertError: cap }).store);
+  assert.equal(refused.trouble, cap);
+  assert.equal(refused.log.length, 2);
+  // The whole way through decideLearned: the extractor's over-length note is counted, not kept.
+  const over = JSON.stringify({ add: [{ note: `Task: ${"y".repeat(NOTE_CHARS)}`, source_user_turns: [0] }], replace: [] });
+  const { decided } = decideLearned({ stop_reason: "end_turn", content: [{ type: "text", text: over }] }, [], TURNS);
+  assert.deepEqual(decided, { add: [], replace: [], tooLong: 1 });
+});
+
+test("the function drops a Forget card that points at a note the learning pass has just replaced", () => {
+  // Codex's live fixture 9: the loop proposed forgetting the stale note by
+  // id, then the learning pass replaced that very row, and the card offered
+  // a delete of a row already gone. The response is assembled from the
+  // pass's `replaced` ids; a source seam, paired with the applyLearned
+  // tests above that prove `replaced` is what was actually removed.
+  const src = readFileSync(new URL("../../supabase/functions/ask/index.ts", import.meta.url), "utf8");
+  const tail = src.slice(src.indexOf("const kept = await learn("), src.indexOf("} catch (e) {", src.indexOf("const kept = await learn(")));
+  assert.match(tail, /proposed\?\.kind === "forget_learned" && kept\.replaced\.includes\(String\(proposed\.id\)\)/,
+    "a forget_learned action whose id the pass replaced is stale");
+  assert.match(tail, /\.\.\.\(proposed && !stale \? \{ action: proposed \} : \{\}\)/, "and a stale action is left off the response");
+  assert.match(src, /return \{ added: outcome\.added, replaced: outcome\.replaced, trouble: outcome\.trouble \};/,
+    "the ids come from applyLearned, not from a copy of its bookkeeping");
 });

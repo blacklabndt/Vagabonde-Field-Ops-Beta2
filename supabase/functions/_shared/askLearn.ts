@@ -37,7 +37,12 @@ export const LEARN_MAX_TOKENS = 600;
 export interface Turn { role: "user" | "assistant"; text: string }
 export interface Existing { id: string; note: string }
 export interface LearnBody { model: string; max_tokens: number; system: string; messages: { role: "user"; content: string }[] }
-export interface Learned { add: string[]; replace: { id: string; note: string }[] }
+// `tooLong` counts the notes the extractor proposed over NOTE_CHARS and the
+// parser dropped whole; present only when there were any, so the shape of a
+// pass that kept nothing is unchanged. It exists so the card can SAY a long
+// method was not kept — a lesson that vanishes without a word reads as one
+// that landed.
+export interface Learned { add: string[]; replace: { id: string; note: string }[]; tooLong?: number }
 export interface LearnedRow { id: string; note: string; created_at: string; profiles: { name: string | null; role: string | null } | null }
 
 // The learning call is a PAID call and was the one nobody had measured. The
@@ -123,6 +128,7 @@ export function parseLearned(text: string, existingIds: readonly string[], turns
   if (!parsed || typeof parsed !== "object") return empty;
   const p = parsed as { add?: unknown; replace?: unknown };
   const seen = new Set<string>();
+  let tooLong = 0;
   const evidenced = (v: unknown): boolean => {
     if (!Array.isArray(v) || !v.length) return false;
     let own = false;
@@ -137,7 +143,8 @@ export function parseLearned(text: string, existingIds: readonly string[], turns
     const e = entry as { note?: unknown; source_user_turns?: unknown };
     if (typeof e.note !== "string" || !evidenced(e.source_user_turns)) return null;
     const s = e.note.replace(/\s+/g, " ").trim();
-    if (s.length < MIN_NOTE_CHARS || s.length > NOTE_CHARS) return null;
+    if (s.length > NOTE_CHARS) { tooLong++; return null; }
+    if (s.length < MIN_NOTE_CHARS) return null;
     const key = s.toLowerCase();
     if (seen.has(key)) return null;
     seen.add(key);
@@ -165,7 +172,7 @@ export function parseLearned(text: string, existingIds: readonly string[], turns
       if (note) add.push(note);
     }
   }
-  return { add, replace };
+  return tooLong ? { add, replace, tooLong } : { add, replace };
 }
 
 // What the notes are RANKED against when they will not all fit (learnedLines):
@@ -405,6 +412,10 @@ export function decideLearned(reply: LearnReply, existingIds: readonly string[],
 // error at a time. The real words still reach the office, through the log.
 export const LEARN_TROUBLE = "Something Ask learned could not be kept. The answer above is unaffected.";
 export const LEARN_FULL_WORDS = `Ask's memory is full (${MAX_LEARNED} notes), so something from this conversation was not kept. Forget a note or two to make room. The answer above is unaffected.`;
+// A method too long for one note is dropped whole (parseLearned), and it was
+// dropped in silence: the card showed nothing and the person, who had just
+// been told Ask keeps what the crew tells it, had no way to know it had not.
+export const LEARN_LONG_WORDS = `A method from this conversation was too long to keep as one note (${NOTE_CHARS} characters is the most), so it was not kept. Teach it again in fewer, shorter steps. The answer above is unaffected.`;
 export function learnTrouble(message: string): string {
   return /as much as it can hold/i.test(message) ? message : LEARN_TROUBLE;
 }
@@ -417,7 +428,10 @@ export interface LearnStore {
   replace(id: string, note: string): Promise<{ row: LearnedNote | null; error: string | null }>;
   insert(notes: string[]): Promise<{ rows: LearnedNote[]; error: string | null }>;
 }
-export interface LearnOutcome { added: LearnedNote[]; trouble: string | null; log: string[] }
+// `replaced` is the ids a correction removed: a Forget card the loop proposed
+// for one of them would point at a row that is already gone (ask/index.ts
+// drops it).
+export interface LearnOutcome { added: LearnedNote[]; replaced: string[]; trouble: string | null; log: string[] }
 
 // The writes a decided pass asks for, in order, and what came of them.
 //
@@ -434,6 +448,7 @@ export interface LearnOutcome { added: LearnedNote[]; trouble: string | null; lo
 // and in the log, rather than silently left off.
 export async function applyLearned(decided: Learned, existingCount: number, store: LearnStore): Promise<LearnOutcome> {
   const added: LearnedNote[] = [];
+  const replaced: string[] = [];
   const log: string[] = [];
   let trouble: string | null = null;
   for (const r of decided.replace) {
@@ -443,7 +458,7 @@ export async function applyLearned(decided: Learned, existingCount: number, stor
       log.push(`a note could not be corrected: ${error}`);
       continue;
     }
-    if (row) added.push({ id: row.id, note: row.note });
+    if (row) { replaced.push(r.id); added.push({ id: row.id, note: row.note }); }
   }
   // One copy of the arithmetic (planLearning), run here and tested there.
   const { add: fresh, refused } = planLearning(decided, existingCount);
@@ -462,5 +477,11 @@ export async function applyLearned(decided: Learned, existingCount: number, stor
     }
     added.push(...rows);
   }
-  return { added, trouble, log };
+  // A note the parser dropped for length is said, on the card and in the
+  // log — after a refusal, which is the rarer and the more important word.
+  if (decided.tooLong) {
+    trouble ??= LEARN_LONG_WORDS;
+    log.push(`${decided.tooLong} learned ${decided.tooLong === 1 ? "note was" : "notes were"} over ${NOTE_CHARS} characters and not kept`);
+  }
+  return { added, replaced, trouble, log };
 }
