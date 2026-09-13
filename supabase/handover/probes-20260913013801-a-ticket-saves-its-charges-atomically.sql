@@ -1,5 +1,5 @@
--- Probes for the draft `replace_ticket_lines`. NOT RUN YET — the function is
--- not applied. Every one of them ends in ROLLBACK_ON_PURPOSE: the whole probe
+-- Probes for `replace_ticket_lines` (migration 20260913013801). RUN LIVE on
+-- 13 Sept 2026, all passing; the results are in the migration's own header. Every one of them ends in ROLLBACK_ON_PURPOSE: the whole probe
 -- is one transaction and nothing it makes survives it, fixtures included.
 --
 -- Run order: apply the draft function live, run part 1 (this file's DO
@@ -597,7 +597,7 @@ end $probe$;
 --
 -- Session A:
 --   update public.tickets
---      set status = 'Approved', approved_at = now(), approved_by_name = 'probe'
+--      set status = 'Approved', approved_at = now(), approved_by_email = 'probe@example.test'
 --    where id = 'PROBE-RTL-7';
 --   commit;
 --
@@ -628,8 +628,8 @@ end $probe$;
 -- against a ticket on a job being cleared is the collision.
 --
 -- Fixture, as postgres: a job of its own, with one draft ticket on it.
---   insert into public.jobs (job_number, client_id, status, created_by)
---   values ('PROBE-RTL-8', '<client uuid>', 'Active', '<admin uuid>')
+--   insert into public.jobs (job_number, project, client_id, status, created_by)
+--   values ('PROBE-RTL-8', 'Probe', '<client uuid>', 'Active', '<admin uuid>')
 --   returning id;                                   -- <probe job uuid>
 --   insert into public.tickets (id, job_id, technician_id, work_date, status)
 --   values ('PROBE-RTL-8-T', '<probe job uuid>', '<techA uuid>', current_date, 'Draft');
@@ -785,3 +785,26 @@ end $probe$;
 --   -- and confirm the account is as it was:
 --   --   select role, deactivated_at from public.profiles where id = '<techA uuid>';
 --   --   expect Technician, null
+
+-- ═════════ How part 2 was actually run, 13 Sept 2026 ════════════════════
+-- Two psql sessions is one way to hold a lock; it is not the only one. Part 2
+-- was run through the Management API's query endpoint, where every request is
+-- its own session and its own transaction, so the "hold open" of each
+-- procedure above is a `select pg_sleep(9);` after the call and the second
+-- session is a second request fired 2.5 s later. What that buys is the thing
+-- the sections ask for — a real second backend, really waiting on a row lock —
+-- and the waits were measured: 7.2 to 7.5 s in every one of 6, 7, 8a, 8b, 9a,
+-- 9b and 9c, which is the sleep less the head start, not a race that happened
+-- to be ordered. §6's watcher request confirmed exactly one backend waiting on
+-- Lock inside replace_ticket_lines while it waited.
+--
+-- Two things the transcript is worth keeping for:
+--   * the `set local role` / set_config pair took, and the proof is in the
+--     refusals themselves: the function's own sentences came back, which the
+--     owner would never have met. One accidental call as postgres with no
+--     claims at all (a reset that forgot its preamble) was refused 28000 'You
+--     are not signed in', which is §1.7's answer arriving by accident.
+--   * §8c has no predetermined winner and this run's winner was the SAVE:
+--     Postgres cancelled archive_clear_jobs with 40P01. Outcome II, asserted
+--     in full above. A later run may well cancel the other side; assert the
+--     one that happens, in full, as the section says.

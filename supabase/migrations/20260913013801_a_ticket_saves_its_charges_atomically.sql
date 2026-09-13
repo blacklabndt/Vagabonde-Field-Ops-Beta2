@@ -1,7 +1,48 @@
--- DRAFT — not applied, not filed under migrations. Reviewed by Codex before
--- it goes anywhere near the live project; the timestamp comes from the
--- applier, and the file is written under supabase/migrations/ with that
--- version only once it has been applied. See CLAUDE.md, "Migrations".
+-- APPLIED 13 Sept 2026 01:38:01 UTC, live, by the Management API as postgres.
+-- Probes: supabase/handover/probes-20260913013801-a-ticket-saves-its-charges-atomically.sql
+-- All of them run live against this project on 13 Sept, part 1 in one rolled-back
+-- transaction and part 2 as real concurrent sessions. Results, in full:
+--
+--   part 1 (§1-5b, one transaction)  ended in 'ROLLBACK_ON_PURPOSE all probes
+--     passed' on its first run: authorization (own draft, another technician,
+--     an Admin, a Helper, a deactivated Admin, no JWT at all, anon's missing
+--     grant, can_write_ticket asked directly), protected status (Awaiting
+--     approval deliberately NOT the database's gate; Approved and Invoiced
+--     refused for a technician and for an Admin alike; a ticket that has gone),
+--     the payload's twelve refusals each leaving the three lines and $410 where
+--     they were, the empty array as a legitimate save, round() agreeing with the
+--     trigger at 4.63, atomicity through a trigger made to raise after the
+--     delete (the old charges came back whole), a second ticket untouched, and
+--     the deferred balance constraint made immediate on a priced and on an
+--     emptied ticket. No Coordinator account exists on this project, so §1.4
+--     skipped itself as written.
+--   §6   two sessions on one ticket: B waited 7.25 s on A's row lock (one row in
+--     pg_stat_activity waiting on Lock, never racing), and the ticket ended
+--     holding exactly B ONE and B TWO at 50.00 -- none of A's. Repeated with A
+--     rolling back instead of committing: the same, and no orphan line.
+--   §7   the approval landing while the save waits: B raised 42501 'Ticket
+--     PROBE-RTL-7 has been approved by the client ...' and the approved ticket
+--     still read ORIGINAL 4 x 25 at 100.00. This is the one that proves
+--     authorization is read AFTER the lock.
+--   §8a  archive_clear_jobs waited 7.3 s for the save, then cleared the job: no
+--     ticket, no line, no job left.
+--   §8b  the save waited for the clear and raised P0002 'Ticket PROBE-RTL-8-T no
+--     longer exists ...'. Nothing re-created under a job that had gone.
+--   §8c  the deliberate deadlock resolved as OUTCOME II: Postgres cancelled the
+--     CLEAR with 40P01 ('deadlock detected', reaching the caller as Postgres's
+--     own words, which the app shows as a failed save). Asserted in full: the
+--     job still there (1), both tickets at 0.00 -- A's two writes standing
+--     together -- no lines, no orphans.
+--   §9a  demoted to Coordinator while waiting: 42501 'Your account cannot price
+--     tickets ...', ORIGINAL / 100.00 untouched. §9b  deactivated while waiting
+--     (a seed account): the same refusal, because private.user_role() answers
+--     null and null refuses. §9c  the ticket changed hands while waiting: 42501
+--     'Ticket PROBE-RTL-9 belongs to another technician ...'. The seed account
+--     was read back afterwards as Technician / null, and every PROBE-RTL fixture
+--     is deleted; the orphan-line count across the whole table is 0.
+--
+-- Grants read back: EXECUTE to authenticated (and the owner/service role, as
+-- every other definer RPC on this project), never anon and never public.
 --
 -- Replacing a ticket's billing is one transaction.
 --

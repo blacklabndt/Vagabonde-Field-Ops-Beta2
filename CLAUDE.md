@@ -116,6 +116,18 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   re-point the trigger before anything else — HANDOVER.md's Path B says how. An unshipped
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
+  Replacing a ticket’s charges is applied as
+  `20260913013801_a_ticket_saves_its_charges_atomically.sql`: the definer
+  `replace_ticket_lines(ticket_id, lines jsonb)` does the editor’s DELETE and
+  INSERT in one transaction, locks the parent ticket FOR UPDATE and asks every
+  authorization question AFTER that wait (a role, a deactivation or an approval
+  landing while a save queues must refuse, not be honoured), validates the whole
+  payload before a row is touched, and leaves `tickets.total` to the sync
+  trigger. Its probes are beside it under `supabase/handover/`, part 1 in one
+  rolled-back transaction and part 2 as real concurrent sessions — all run live
+  on 13 Sept and recorded in the migration’s header. The function is LIVE but
+  not yet called: db.js still saves lines with two statements, and adopting the
+  RPC in the editor and the outbox replay is its own review.
   Browser crash reporting is applied as
   `20260912160845_browser_crashes.sql`: `browser_crashes` records the
   account/minute rate limit, and service-only `file_browser_crash` writes

@@ -986,6 +986,15 @@ has been applied live, with the applier's timestamp:
 - `supabase/handover/draft-replace-ticket-lines.sql`
 - `supabase/handover/probes-draft-replace-ticket-lines.sql`
 
+**Applied 13 Sept 2026, 01:38:01 UTC.** Filed as
+`supabase/migrations/20260913013801_a_ticket_saves_its_charges_atomically.sql`
+with the probes beside it as
+`supabase/handover/probes-20260913013801-a-ticket-saves-its-charges-atomically.sql`;
+the draft and its runbook are gone. Part 1 passed on its first run and all of
+part 2 ran as real concurrent sessions â€” Â§8câ€™s deadlock cancelled the CLEAR
+(Outcome II). Results in the migrationâ€™s own header. The RPC is live and not
+yet called from db.js.
+
 `replace_ticket_lines(_ticket_id text, _lines jsonb) returns numeric`,
 plpgsql, SECURITY DEFINER, `search_path = public`, revoked from public and
 anon, granted to `authenticated`. Against the contract:
@@ -1282,7 +1291,7 @@ The full npm test run has not produced a final summary, so no full-suite pass
 is claimed. The separate production-module reproductions above still expose
 the pending-operation races despite those focused tests passing.
 
-## Codex review — latest pending amendments (2026-09-12)
+## Codex review ï¿½ latest pending amendments (2026-09-12)
 
 Cache remains blocked. Independently reproduced against two production offlineCache.js module instances sharing fake-indexeddb:
 
@@ -1297,7 +1306,7 @@ Independent focused verification: 35/35 tests passed across cacheAuthRetire, cac
 
 Billing source review: the revised session-setup preamble and explicit deadlock outcome assertions address the preceding probe-review findings. SQL/probe draft accepted for the already-authorized live validation step, using disposable fixtures and seed accounts. This is source approval, not a claim that the migration or probes have run. Claude retains implementation/application ownership; record actual probe outcomes before integrating the client RPC replacement or claiming billing complete.
 
-## Codex review — pre-mutation authority guard (2026-09-12)
+## Codex review ï¿½ pre-mutation authority guard (2026-09-12)
 
 Cache remains unapproved. The new pre-mutation checks fix the single A-to-B
 announcement case, but the previously requested initially-unleased round trip
@@ -1329,7 +1338,7 @@ No full-suite result independently established in this review. Billing source
 approval for authorized live validation stands; actual probe results remain
 pending. No product edits, database writes, push or deployment performed.
 
-## Codex review — arrival counter and sign-out authority (2026-09-12)
+## Codex review ï¿½ arrival counter and sign-out authority (2026-09-12)
 
 Cache remains unapproved. Independently ran production offlineCache.js module
 instances sharing fake-indexeddb and reproduced two destructive cases:
@@ -1363,7 +1372,7 @@ are not covered by that passing suite. Full-suite completion not independently
 established. Billing SQL/probe source approval stands; live probe results remain
 pending. No database writes, push or deployment performed by this review.
 
-## Codex review — held sign-out authority (2026-09-12)
+## Codex review ï¿½ held sign-out authority (2026-09-12)
 
 Cache remains unapproved. heldAuthority() correctly derives authority from
 this tab's lease, but App.jsx still captures it AFTER awaiting keys() and
@@ -1390,7 +1399,7 @@ Billing source approval for authorized live validation stands; no actual live
 probe results were supplied in this update. No product edits, database writes,
 push or deployment performed by this review.
 
-## Codex review — sign-out entry capture verified (2026-09-12)
+## Codex review ï¿½ sign-out entry capture verified (2026-09-12)
 
 The last blocking cache finding is resolved in the current working tree.
 App.jsx captures heldAuthority synchronously before its first await.
