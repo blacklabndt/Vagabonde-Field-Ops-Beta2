@@ -263,7 +263,7 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
     <div className={`ask-card${closing ? " closing" : ""}`} role="dialog" aria-label="Claudia">
       <div className="ask-card-head">
         <h3>Claudia</h3>
-        <button type="button" className="btn btn-secondary" style={{ padding: "4px 10px" }}
+        <button type="button" className="ask-close"
           onClick={onClose} aria-label="Close">×</button>
       </div>
       <div className="ask-thread" ref={threadEl}>
@@ -404,8 +404,9 @@ export function AskLauncher({ onOpenJob, onAction, context, canSaveFiles }) {
   if (open) return <AskCard onClose={close} onOpenJob={onOpenJob} onAction={onAction} closing={closing} context={context} canSaveFiles={canSaveFiles} />;
   return (
     <button type="button" className="btn btn-primary ask-launcher" disabled={!online}
-      title={online ? "Ask the app a question" : "Claudia needs a connection"} onClick={() => setOpen(true)}>
-      Claudia
+      title={online ? "Ask the app a question" : "Claudia needs a connection"} onClick={() => setOpen(true)}
+      aria-label="Ask Claudia">
+      ?
     </button>
   );
 }
