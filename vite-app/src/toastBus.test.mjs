@@ -11,6 +11,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Toasts } from "./toastBus.js";
+import { readFileSync } from "node:fs";
 
 // Each test collects what the bus emitted, then detaches.
 function collect() {
@@ -150,4 +151,54 @@ test("clearAction takes down an action toast and leaves a plain one alone", () =
   off();
   assert.equal(seen.length, 3, "a plain confirmation is not cleared");
   assert.equal(seen[2].text, plain);
+});
+
+test("a screen clears its own action toast and not another's", () => {
+  const seen = [];
+  const off = Toasts.subscribe(t => seen.push(t));
+  // The chase from Ask puts its Stop button up...
+  Toasts.show(unique(), "ok", true, { label: "Stop", owner: "chase", onClick() {} });
+  // ...and the ticket editor unmounts underneath it.
+  Toasts.clearAction("ticket-editor");
+  assert.equal(seen.length, 1, "the chase's Stop must survive somebody else's unmount");
+  Toasts.clearAction("chase");
+  off();
+  assert.equal(seen.length, 2);
+  assert.equal(seen[1], null, "the owner takes down its own");
+});
+
+test("an unowned action toast is still cleared by anyone", () => {
+  const seen = [];
+  const off = Toasts.subscribe(t => seen.push(t));
+  Toasts.show(unique(), "ok", false, { label: "Undo", onClick() {} });
+  Toasts.clearAction("chase");
+  off();
+  assert.equal(seen[1], null, "a caller that names no owner keeps the old behaviour");
+});
+
+test("each toast carries its own stamp, so the same words twice are two toasts", () => {
+  const seen = [];
+  const off = Toasts.subscribe(t => seen.push(t));
+  const m = unique();
+  const action = { label: "Undo", owner: "ticket-editor", onClick() {} };
+  Toasts.show(m, "ok", false, action);
+  const first = seen[0].at;
+  // Busy-wait a millisecond: the stamp is what the Toast component keys its
+  // countdown on, and two toasts sharing one are one timer for two removals.
+  const spin = Date.now();
+  while (Date.now() === spin) { /* one tick */ }
+  Toasts.show(m, "ok", false, action);
+  off();
+  assert.equal(seen.length, 2);
+  assert.notEqual(seen[1].at, first, "the second removal needs its own clock");
+});
+
+// The stamp is only worth emitting if the drawing end keys its countdown on
+// it, and that half is JSX the node suite cannot mount. Read it back instead.
+test("the Toast re-arms its countdown per toast, not per wording", () => {
+  const common = readFileSync(new URL("./components/common.jsx", import.meta.url), "utf8");
+  assert.match(common, /\}, \[message, duration, tone, at\]\);/,
+    "the timer effect must list `at`, or two identical messages share one clock");
+  const app = readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
+  assert.match(app, /at=\{toast \? toast\.at : 0\}/, "and App must hand the stamp down");
 });

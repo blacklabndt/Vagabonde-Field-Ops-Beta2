@@ -62,10 +62,28 @@ export function buildXlsx(XLSX, sheets) {
   return XLSX.write(wb, { bookType: "xlsx", type: "array" });
 }
 
+async function appAsset(image) {
+  if (image?.asset !== "vagabonde-logo") throw new Error("Unknown app asset.");
+  const { vagabondeLogo } = await import("./askAssetData.js");
+  return { data: vagabondeLogo, width: 960, height: 222 };
+}
+const escapeCaption = text => String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+async function htmlWithImages(file) {
+  const html = stripScripts(file.text);
+  const figures = (await Promise.all((file.images || []).map(async image => {
+    const asset = await appAsset(image);
+    return `<figure><img src="${asset.data}" alt="Vagabonde logo" width="480" style="max-width:100%;height:auto">${image.caption ? `<figcaption>${escapeCaption(image.caption)}</figcaption>` : ""}</figure>`;
+  }))).join("");
+  const out = /<body\b[^>]*>/i.test(html) ? html.replace(/<body\b[^>]*>/i, match => match + figures) : figures + html;
+  if (figures && new TextEncoder().encode(out).length > 200000) throw new Error("Text and embedded images exceed the 200000 byte file budget.");
+  return out;
+}
+
 // A letter-size document: the title, a subtitle, then each section's
 // heading, its text wrapped to the page, and its table through autotable;
 // the cursor carries down the page and over page breaks.
-export function buildPdf(JsPDF, doc) {
+export async function buildPdf(JsPDF, doc) {
   const pdf = new JsPDF({ unit: "pt", format: "letter" });
   const margin = 48;
   const width = pdf.internal.pageSize.getWidth() - margin * 2;
@@ -83,6 +101,15 @@ export function buildPdf(JsPDF, doc) {
   write(doc.title, 18, "bold", 4);
   if (doc.subtitle) { pdf.setTextColor(110); write(doc.subtitle, 11, "normal", 10); pdf.setTextColor(0); } else y += 8;
   for (const s of doc.sections) {
+    if (s.image) {
+      const asset = await appAsset(s.image);
+      const w = Math.min(360, width, (bottom - margin - 40) * asset.width / asset.height);
+      const h = w * asset.height / asset.width;
+      need(h + (s.image.caption ? 24 : 0) + 10);
+      pdf.addImage(asset.data, "PNG", margin, y, w, h, "vagabonde-logo", "FAST");
+      y += h + 6;
+      if (s.image.caption) write(s.image.caption, 9, "normal", 6);
+    }
     if (s.heading) write(s.heading, 13, "bold", 2);
     if (s.text) write(s.text, 10, "normal", 6);
     if (s.table) {
@@ -102,13 +129,15 @@ export function buildPdf(JsPDF, doc) {
 
 // The bytes of one checked file, as a Blob of the kind's type.
 export async function fileBlob(file) {
-  if (file.kind === "html") return new Blob([stripScripts(file.text)], { type: MIME.html });
+  if (file.kind === "html") return new Blob([await htmlWithImages(file)], { type: MIME.html });
   if (file.kind === "css") return new Blob([String(file.text ?? "")], { type: MIME.css });
   if (file.kind === "csv") return new Blob([csvText(file.table)], { type: MIME.csv });
   if (file.kind === "xlsx") return new Blob([buildXlsx(await loadXlsx(), file.sheets)], { type: MIME.xlsx });
   if (file.kind === "pdf") {
-    const out = buildPdf(await loadJsPdf(), file.document);
-    return out instanceof Blob ? out : new Blob([out], { type: MIME.pdf });
+    const out = await buildPdf(await loadJsPdf(), file.document);
+    const blob = out instanceof Blob ? out : new Blob([out], { type: MIME.pdf });
+    if (file.document.sections.some(s => s.image) && blob.size > 200000) throw new Error("The PDF with embedded images exceeds the 200000 byte file budget.");
+    return blob;
   }
   throw new Error(`Nothing builds a "${file.kind}" file.`);
 }

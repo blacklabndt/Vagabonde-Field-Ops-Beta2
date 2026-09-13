@@ -27,6 +27,7 @@ const num = (v: unknown): number => { const n = Number(v); return Number.isFinit
 // A line's cents, the way lineTotal / lineCents do it: whole cents times
 // thousandths of a unit, so the total here is the trigger's.
 const lineCents = (l: CheckLine): number => Math.round(Math.round(num(l.unit_rate) * 100) * Math.round(num(l.quantity) * 1000) / 1000);
+const hundredths = (n: number): number => Math.round(n * 100) / 100;
 
 export function ticketCheck({ ticket, lines, crew, jhaCount, today }: CheckInput): TicketCheck {
   const findings: string[] = [];
@@ -47,9 +48,13 @@ export function ticketCheck({ ticket, lines, crew, jhaCount, today }: CheckInput
   else {
     let any = 0;
     for (const c of crew) {
-      const hours = num(c.straight_hours) + num(c.ot_hours) + num(c.solo_hours) + num(c.solo_ot_hours);
-      any += hours;
-      if (hours > SANE_CREW_HOURS) findings.push(`${c.name}: ${hours} hours on one day — a typo?`);
+      const paid = hundredths(num(c.straight_hours) + num(c.ot_hours));
+      const solo: [number, string][] = [[num(c.solo_hours), "solo"], [num(c.solo_ot_hours), "solo OT"]];
+      any += paid + solo[0][0] + solo[1][0];
+      if (paid > SANE_CREW_HOURS) findings.push(`${c.name}: ${paid} hours on one day — a typo?`);
+      for (const [value, label] of solo) {
+        if (value > SANE_CREW_HOURS) findings.push(`${c.name}: ${value} ${label} hours on one day — a typo?`);
+      }
     }
     if (any <= 0) findings.push("no hours entered for the crew");
   }

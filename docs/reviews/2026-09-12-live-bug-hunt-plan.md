@@ -1,3 +1,5 @@
+> Historical lane allocation, retained from review branch cf44e0d. Current Codex environment, credential availability, and live-data rules are in 2026-09-12-live-bug-hunt-codex.md. Do not rely on the old missing-credentials or disabled-email assumptions below.
+
 # Live bug hunt — environment and plan (12 Sept 2026)
 
 Two agents (Claude, Codex), two subagents each, four lanes, one shared
@@ -88,3 +90,4 @@ membership).
    and agree a severity and a cause before a line is written.
 3. Anything touching RLS is probed live with role simulation first.
 4. `npm --prefix vite-app test` and the build stay green BEFORE the commit.
+

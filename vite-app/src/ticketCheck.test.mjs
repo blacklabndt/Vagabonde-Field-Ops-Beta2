@@ -46,6 +46,9 @@ test("each gap is its own phrase", () => {
   assert.deepEqual(ticketCheck(clean({ crew: [] })).findings, ["no crew on the ticket — your own hours go here"]);
   assert.deepEqual(ticketCheck(clean({ crew: [{ name: "Kyle Keith", straight_hours: 0, ot_hours: 0, solo_hours: 0, solo_ot_hours: 0 }] })).findings, ["no hours entered for the crew"]);
   assert.deepEqual(ticketCheck(clean({ crew: [{ name: "Kyle Keith", straight_hours: 20, ot_hours: 5, solo_hours: 0, solo_ot_hours: 0 }] })).findings, ["Kyle Keith: 25 hours on one day — a typo?"]);
+  assert.deepEqual(ticketCheck(clean({ crew: [{ name: "Kyle Keith", straight_hours: 12, ot_hours: 2, solo_hours: 12, solo_ot_hours: 2 }] })).findings, []);
+  assert.deepEqual(ticketCheck(clean({ crew: [{ name: "Kyle Keith", straight_hours: 8, ot_hours: 0, solo_hours: 26, solo_ot_hours: 0 }] })).findings, ["Kyle Keith: 26 solo hours on one day — a typo?"]);
+  assert.deepEqual(ticketCheck(clean({ crew: [{ name: "Kyle Keith", straight_hours: 20.1, ot_hours: 5.2, solo_hours: 0, solo_ot_hours: 0 }] })).findings, ["Kyle Keith: 25.3 hours on one day — a typo?"]);
   assert.deepEqual(ticketCheck(clean({ jhaCount: 0 })).findings, ["no JHA filed on the job for 2026-09-10"]);
   assert.deepEqual(ticketCheck(clean({ ticket: { ...clean().ticket, work_date: "2026-09-12" } })).findings, ["the work date 2026-09-12 is in the future"]);
 });

@@ -56,8 +56,15 @@ export const Toasts = {
   // pressing it set state on a component that had gone — the button vanished
   // and nothing came back. A plain confirmation is left alone, so "Ticket
   // saved" still gets its moment.
-  clearAction() {
+  // `owner` is the screen that raised it. An Undo belongs to the screen that
+  // offered it, and a chase's Stop belongs to the chase: the editor's unmount
+  // used to take down whatever action toast happened to be up, so leaving the
+  // ticket screen while a chase from Ask was running removed the only Stop
+  // button the crew had. A caller clears its own and nobody else's; an owner
+  // that is not on screen is a no-op.
+  clearAction(owner = null) {
     if (!showing || !showing.action) return;
+    if (owner && showing.action.owner && showing.action.owner !== owner) return;
     showing = null;
     last = { text: "", at: 0 };
     listeners.forEach(fn => { fn(null); });

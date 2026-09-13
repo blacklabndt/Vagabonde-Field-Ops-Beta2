@@ -60,7 +60,7 @@ export interface InvoiceSettings {
 
 export interface InvoiceData {
   ticket: {
-    id: string; work_date: string; status?: string; total: number | string;
+    id: string; work_date: string; status?: string;
     delays?: string | null;
     approved_by_email?: string | null; approved_at?: string | null;
     approved_signature?: string | null;

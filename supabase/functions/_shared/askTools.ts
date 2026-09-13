@@ -37,6 +37,8 @@ export const PRICE_ROLES = ["Admin", "Technician"];
 // What schedule_send may send: scheduledSends.ts's KINDS bar the reminder,
 // which set_reminder proposes on its own; askTools.test.mjs fails on drift.
 export const SEND_KINDS = ["jha", "report", "ticket_approval"];
+const APP_IMAGE_SCHEMA = { type: "object", properties: { asset: { type: "string", enum: ["vagabonde-logo"] }, caption: { type: "string", maxLength: 300 } }, required: ["asset"], additionalProperties: false };
+
 // The kinds make_file builds — askFiles.ts's list, twice because neither
 // may import the other; askTools.test.mjs fails on drift.
 export const FILE_KINDS = ["html", "css", "csv", "xlsx", "pdf"];
@@ -258,20 +260,21 @@ export const ASK_TOOLS: AskTool[] = [
   },
   {
     name: "make_file", tab: "any",
-    description: "Make a file for the person to download or save to the app's Files, from what the tools returned in this conversation. kind html or css: give text, the whole file. csv: give table { columns, rows }. xlsx: give sheets [{ name, columns, rows }], up to ten. pdf: give document { title, subtitle?, sections: [{ heading?, text?, table? }] }. name is the file's name, no path; the extension is added. Up to five files an answer and 2,000 rows a file; never invent rows — use the rows the tools gave, and if you left some out say so. Nothing is written anywhere: the card offers Download and Save to Files. Say in a sentence what the file holds.",
+    description: "Make a file for the person to download or save to the app's Files, from what the tools returned in this conversation. kind html or css: give text, the whole file. csv: give table { columns, rows }. xlsx: give sheets [{ name, columns, rows }], up to ten. pdf: give document { title, subtitle?, sections: [{ heading?, text?, table? }] }. For a bundled logo, use asset vagabonde-logo with an optional caption: HTML takes images [{asset, caption?}] placed at the start of the body; PDF sections take image {asset, caption?}. Images are embedded PNGs with automatic proportional sizing. No URLs, uploads, or generated images. Each image reserves 40000 of the 200000 byte budget. name is the file's name, no path; the extension is added. Up to five files an answer and 2,000 rows a file; never invent rows — use the rows the tools gave, and if you left some out say so. Nothing is written anywhere: the card offers Download and Save to Files. Say in a sentence what the file holds.",
     input_schema: {
       type: "object",
       properties: {
         name: { type: "string" },
         kind: { type: "string", enum: FILE_KINDS },
         text: { type: "string", description: "html or css: the whole file" },
+        images: { type: "array", maxItems: 4, items: APP_IMAGE_SCHEMA, description: "HTML only: bundled images before the body content" },
         table: TABLE_SCHEMA,
         sheets: { type: "array", items: { type: "object", properties: { name: { type: "string" }, ...TABLE_SCHEMA.properties }, required: ["columns", "rows"], additionalProperties: false } },
         document: {
           type: "object",
           properties: {
             title: { type: "string" }, subtitle: { type: "string" },
-            sections: { type: "array", items: { type: "object", properties: { heading: { type: "string" }, text: { type: "string" }, table: TABLE_SCHEMA }, additionalProperties: false } }
+            sections: { type: "array", items: { type: "object", properties: { heading: { type: "string" }, text: { type: "string" }, table: TABLE_SCHEMA, image: APP_IMAGE_SCHEMA }, additionalProperties: false } }
           },
           required: ["title", "sections"], additionalProperties: false
         }

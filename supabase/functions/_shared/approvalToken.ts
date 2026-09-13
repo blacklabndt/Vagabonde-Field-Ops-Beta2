@@ -40,10 +40,9 @@ export async function invoiceFingerprint(d: InvoiceData): Promise<string> {
   const lines = (d.lines || [])
     .map(l => [l.kind, l.label, l.unit || "", String(l.quantity), String(l.unit_rate)].join(FIELD))
     .sort();
-  // The client's GST rate rides in with the charges: an exemption switched
-  // on or off leaves every line untouched and still moves the total the rep
-  // is putting their name to. The raw column value, so no import of the
-  // invoice module's arithmetic is needed here.
-  const gst = String(d.job?.clients?.gst_rate ?? "");
+  // Match the invoice's frozen GST rate, including an exempt zero. Only
+  // legacy tickets without a snapshot follow the client's current rate;
+  // re-rating that client must not invalidate an unchanged frozen invoice.
+  const gst = String(d.ticket.gst_rate ?? d.job?.clients?.gst_rate ?? "");
   return sha256Hex([d.ticket.id, d.ticket.work_date || "", d.ticket.delays || "", gst, ...lines].join(RECORD));
 }

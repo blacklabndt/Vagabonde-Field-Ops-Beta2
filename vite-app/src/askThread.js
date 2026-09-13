@@ -46,9 +46,8 @@ export function dropLearned(index, id) {
 export function dropAction(index) {
   turns = turns.map((t, i) => {
     if (i !== index || !t.action) return t;
-    const kept = { role: t.role, text: t.text };
-    if (t.trace) kept.trace = t.trace;
-    if (t.followUp) kept.followUp = t.followUp;
+    const kept = { ...t };
+    delete kept.action;
     return kept;
   });
 }

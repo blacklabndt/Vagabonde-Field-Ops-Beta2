@@ -51,7 +51,7 @@ test("a workbook is one worksheet per sheet with the columns as the first row", 
   assert.deepEqual(calls, [{ bookType: "xlsx", type: "array" }]);
 });
 
-test("a pdf writes the title, the sections and their tables down the page and over page breaks", () => {
+test("a pdf writes the title, the sections and their tables down the page and over page breaks", async () => {
   const events = [];
   class FakePdf {
     constructor() {
@@ -67,7 +67,7 @@ test("a pdf writes the title, the sections and their tables down the page and ov
     autoTable(o) { events.push(["table", o.head, o.body, Math.round(o.startY)]); this.lastAutoTable = { finalY: o.startY + 30 }; }
     output(kind) { return `blob:${kind}:${events.length}`; }
   }
-  const out = buildPdf(FakePdf, {
+  const out = await buildPdf(FakePdf, {
     title: "S-10113", subtitle: "Summary",
     sections: [
       { heading: "Tickets", table: { columns: ["Ticket", "Total"], rows: [["T-1", 12.5], ["T-2", null]] } },

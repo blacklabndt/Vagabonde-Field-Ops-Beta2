@@ -9,8 +9,9 @@
 //
 // Deliberately takes the client rather than making one. approve-ticket reads
 // with the service role because the person following the link has no account;
-// the other two read as the signed-in user so row-level security still
-// decides what they can see. Same shape either way.
+// mail also reads with the service role. The signed-in renderer reads as the
+// caller, and the tickets SELECT policy's own is_staff() gate is what decides
+// -- no masked relation is needed here, because the select names no money.
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import type { InvoiceData, InvoiceSettings } from "./invoice.ts";
@@ -32,8 +33,15 @@ interface CrewReadRow {
 }
 
 // Everything the invoice prints, and nothing else.
+//
+// tickets.total is deliberately absent. Every figure on the bill is summed
+// from the lines by invoiceTotals -- the stored total is never trusted here,
+// and reading it anyway made this, the most-called read in the app, a money
+// read on the caller's own authority for a number nothing printed. Leaving
+// it out is why a signed-in renderer can go on reading the base table after
+// direct SELECT on tickets.total is revoked.
 const TICKET_INVOICE_SELECT =
-  "id, work_date, total, status, delays, client_contact, approved_at, approved_by_email, approved_signature, approval_sent_to, " +
+  "id, work_date, status, delays, client_contact, approved_at, approved_by_email, approved_signature, approval_sent_to, " +
   "invoice_number, invoiced_at, gst_rate, " +
   "jobs(job_number, project, lsd, afe, area, clients(name, gst_rate), contractors(name)), " +
   "ticket_lines(kind, label, unit, quantity, unit_rate)";

@@ -1,5 +1,5 @@
 import { sbClient, VAPID_PUBLIC_KEY } from "./config.js";
-import { money, todayLocal, localDate, dayMonth, ticketDateStamp, primaryContact, ageInDays, storageKeySafe, STANDARD_RATE_LINES, nonNegative, lineTotal, decimalString, ticketStatusWriteRefusal, gstRateOf, billableNumber, storedNumber } from "./data.js";
+import { money, todayLocal, localDate, dayMonth, ticketDateStamp, primaryContact, ageInDays, storageKeySafe, STANDARD_RATE_LINES, nonNegative, lineTotal, decimalString, ticketStatusWriteRefusal, gstRateOf, billableNumber, storedNumber, seesPrices } from "./data.js";
 import { OfflineCache } from "./offlineCache.js";
 import { Toasts } from "./toastBus.js";
 import { OfflineQueue, isNetworkError } from "./offlineQueue.js";
@@ -54,9 +54,18 @@ export const DEFAULT_SCHEDULE = "__default__";
 // (listActiveJobsForClient). Dropped whenever a job leaves the open set —
 // deleted, or marked complete — so a stale list can't offer a job that a
 // ticket would then fail against forever in the outbox.
-const dropClientJobLists = async () => {
-  const keys = await OfflineCache.keys("jobs.client.").catch(() => []);
-  await Promise.all(keys.map(k => OfflineCache.remove(k)));
+const dropClientJobLists = async (held = OfflineCache.hold()) => {
+  // One lease across the read and the removes: a device that changed hands
+  // between them would otherwise have the new owner's lists swept by the old
+  // owner's edit. See OfflineCache.hold.
+  //
+  // The CALLER'S lease when it has one. deleteJob and setJobComplete await a
+  // round trip before they get here, which is exactly the window a handover
+  // fits into; taking a fresh lease at this point would hand the old owner's
+  // sweep the new owner's store — the whole thing this helper is fenced
+  // against, one call deeper.
+  const keys = await OfflineCache.keys("jobs.client.", held).catch(() => []);
+  await Promise.all(keys.map(k => OfflineCache.remove(k, held)));
 };
 
 // Zero-byte object that makes an otherwise-empty folder exist in Storage.
@@ -246,6 +255,26 @@ const _generation = {};
 // (invalidate) drops the in-flight entry too, so the next caller reads
 // fresh rather than joining a walk that started before the write.
 const _inflight = {};
+// The same question as the generation counter, asked about the DEVICE rather
+// than the table: which account's app is this. These keys are account-blind
+// — "contacts", "profiles", "clients" are the same rows to everybody who may
+// read them, and that is true right up until the tablet changes hands. The
+// IndexedDB fence cannot see this layer at all, so it is told directly: every
+// lease change empties both maps and moves the account on, which retires the
+// walks that are only in flight as well as the rows already settled. A reply
+// that lands after the handover finds an account it no longer matches and is
+// answered to its own caller without being remembered for the next one.
+let _account = 0;
+// Both doors on to this are the same act: the rows in memory stop being this
+// account's. The lease change is the device's answer, the auth change is the
+// session's, and either can arrive without the other — a tab that did not do
+// the signing in hears only the second.
+function forgetRememberedRows() {
+  _account++;
+  for (const k of Object.keys(_cache)) delete _cache[k];
+  for (const k of Object.keys(_inflight)) delete _inflight[k];
+}
+OfflineCache.onLeaseChange(forgetRememberedRows);
 const CACHE_TTL_MS = 30000;
 async function cached(key, fetcher) {
   const hit = _cache[key];
@@ -255,13 +284,14 @@ async function cached(key, fetcher) {
   // not be the thing that repopulates the cache — it fetched the old rows.
   // The generation counter is what tells the two apart.
   const startedAt = _generation[key] || 0;
+  const startedFor = _account;
   // Declared before the async body runs, so a fetcher that threw
   // synchronously could not hit the finally below before `read` exists.
   let read;
   read = (async () => {
     try {
       const value = await fetcher();
-      if ((_generation[key] || 0) === startedAt) _cache[key] = { value, at: Date.now() };
+      if ((_generation[key] || 0) === startedAt && _account === startedFor) _cache[key] = { value, at: Date.now() };
       return value;
     } finally {
       if (_inflight[key] === read) delete _inflight[key];
@@ -330,12 +360,185 @@ const assertSessionAlive = async () => {
   }
 };
 
+// Which account this client is signed in as, as a number that changes when
+// it changes. supabase-js hands every request the token it holds AT THE
+// MOMENT of the request, not the one that was current when the caller
+// started: on a shared tablet a sign-out and a sign-in can land between the
+// two round trips of a check, so an id read at the start proves nothing
+// about the account the answer will be used for. The counter moves only
+// when the signed-in id actually differs from the last one seen, so an
+// hourly TOKEN_REFRESHED — the same person, the same permissions — is not
+// mistaken for a change of hands.
+let authGeneration = 0;
+let lastAuthUserId = null;
+sbClient.auth.onAuthStateChange((_event, session) => {
+  const id = session && session.user ? session.user.id : null;
+  if (id !== lastAuthUserId) {
+    lastAuthUserId = id;
+    authGeneration += 1;
+    // A change of account is a change of what these rows are allowed to be.
+    // The lease announcement covers the tab that DID the signing in; this
+    // covers the one that only heard about it — supabase-js broadcasts a
+    // session across every tab on the origin, so a tab sitting on the board
+    // learns its account changed here and nowhere else, and its remembered
+    // "contacts" and "profiles" are the last account's rows under keys that
+    // name no account at all. Everything settled goes, and the account
+    // counter moves so a walk that is only in flight settles into nothing.
+    //
+    // And memory is only half of it: the DISK still carries the last account's
+    // rows under a marker that still names them, and the new account's claim
+    // is a separate transaction that has not happened yet — it may be slow, it
+    // may be another tab's, it may fail outright. Every fenced read between
+    // the two would be answered, correctly by the marker and wrongly by every
+    // other measure, out of the account that has just been replaced. So the
+    // tab's disk authority is retired here, synchronously, at the one moment
+    // the change is known: it deletes nothing (the owner may sign back in and
+    // find their half-entered tickets) and adopts nothing (a claim is the only
+    // way in), it simply stops this tab reading or writing rows until somebody
+    // claims the device again. A same-account announcement — the hourly
+    // refresh, or the first one after the boot's own claim — is not a change
+    // of hands and leaves the lease where it is.
+    OfflineCache.retireUnless(id);
+    forgetRememberedRows();
+  }
+});
+// Who this client is signed in as right now, and under which generation.
+// getSession is local — no round trip — so asking it a second time at the
+// point the answer is consumed costs nothing.
+const authStamp = async () => {
+  const { data, error } = await sbClient.auth.getSession();
+  if (error) throw error;
+  const id = data && data.session && data.session.user ? data.session.user.id : null;
+  return { id, gen: authGeneration };
+};
+
+// May the account making THIS request see money — and therefore replace a
+// ticket's billing lines? Prices are Admins' and Technicians' (the
+// rate_lines / ticket_lines policies name the role as well as the tab), and
+// this is the client-side half of that rule, asked before a write that
+// would otherwise delete lines the account cannot read.
+//
+// Asked of the role, never inferred from a figure. The guard in
+// updateTicket used to read "nothing came back and the row carries money",
+// and moving the ticket reads onto the `tickets_read` view (20260912205211)
+// — which masks `total` to null for exactly those roles — turned that test
+// into `Number(null || 0) > 0`: false, for every account it existed to stop.
+//
+// Fresh and session-matched: the id comes from this session's own token and
+// the role is read for that id, every time. Nothing is remembered between
+// calls, so there is no way for this to answer with the last account's role
+// on a shared tablet, and a role changed mid-session is seen at the next save.
+//
+// A read that fails is raised, not read as "no price role". A failure is
+// evidence of nothing; answering it by skipping the line replacement would
+// report a save as done while the billing never landed — the silent
+// half-save is worse than a refusal the technician can retry.
+async function currentUserSeesPrices() {
+  // getSession rather than getUser: the id is the one in the token this
+  // request will be made with, read locally, so the check costs one round
+  // trip (the profile) and not two on a link that is already the reason
+  // half this file exists. The profiles read is where the freshness is —
+  // and RLS answers it as that same token, so the two cannot be different
+  // accounts. Same call assertSessionAlive makes, for the same reason.
+  const { id, gen } = await authStamp();
+  if (!id) {
+    throw plainError("You're signed out, so nothing could be saved. Sign in again and retry — everything on screen is still there.");
+  }
+  const { data: me, error: pErr } = await sbClient.from("profiles")
+    .select("id, role").eq("id", id).maybeSingle();
+  if (pErr) throw pErr;
+  // No row is not "no price role" either: a locked account still reads its
+  // own profiles row (20260908063429), so an empty answer here is a read
+  // that went wrong or a session that is not what it claimed to be.
+  if (!me || me.id !== id) {
+    throw plainError("Your account couldn't be checked just now, so nothing was changed on this ticket's charges. Try saving again in a moment.");
+  }
+  // `me.id === id` is NOT proof the answer belongs to the account still
+  // signed in: profiles_select lets any staff account read any profile
+  // (20260908063429 narrowed it to staff, not to self), so a sign-out and
+  // a sign-in by somebody else between getSession and this read returns the
+  // PREVIOUS account's row, matching its own captured id, under the new
+  // account's token. The stamp travels with the answer and is checked
+  // again where it is used.
+  return { sees: seesPrices(me), id, gen };
+}
+
+// The same question, started early and asked later — the startKeyLookup
+// shape, for the same reason: a save that must wait on this answer before
+// it replaces the lines need not wait on it *serially*. Started in front of
+// the metadata UPDATE, it overlaps that round trip and the reads behind a
+// silent refusal, so the common case (a Technician, who passes) pays no
+// wall clock for the check at all.
+//
+// It never rejects. An earlier await in the caller can throw while this is
+// still in flight — a refused UPDATE, a ticket cancelled on another device
+// — and a rejected promise nobody is left to await is an unhandled
+// rejection, which is fatal in some of the runtimes this codebase runs in
+// and noise in the rest. So the failure is carried as a value and re-thrown
+// by whoever awaits it; fail-closed is unchanged, only its timing.
+function startPriceRoleLookup() {
+  return currentUserSeesPrices().then(answer => ({ answer }), error => ({ error }));
+}
+
+// Reads that answer back. `{ error }` is raised here, not swallowed: see
+// currentUserSeesPrices for why a failed read may not pass for "no prices".
+//
+// And the account is checked AGAIN, here, against the stamp the answer was
+// read under — because this is the moment the answer is spent, and the
+// writes it gates are the next statements. A save that began as one
+// technician and is being finished under another's session is refused in
+// both directions: the wrong way round it would skip the billing and report
+// the save as done, and the right way round it would replace lines under an
+// account that may not read them. This single re-read does NOT make the
+// save atomic — the metadata UPDATE above it has already landed — it makes
+// this one decision belong to the account it is made for.
+async function priceRoleAnswer(lookup) {
+  const { answer, error } = await lookup;
+  if (error) throw error;
+  const now = await authStamp();
+  if (!now.id || now.id !== answer.id || now.gen !== answer.gen) {
+    throw plainError("This device signed in as somebody else while the ticket was saving, so its charges were left alone. Sign in as yourself and save it again — everything on screen is still there.");
+  }
+  return answer.sees;
+}
+
 // The same database refusal, translated, for anything that slips past the
 // client-side check (a stale tab, a hand-crafted request).
 const friendlyLineError = e =>
   e && e.code === "22003"
     ? new Error("A figure on this ticket is too large to bill — check the quantities and rates.")
     : e;
+
+// `replace_ticket_lines` raises its OWN sentences — written in the migration,
+// already fit to show — and picks each errcode on purpose. They are refusals,
+// not failures: the lock is taken first and every authorization question is
+// asked after the wait, so a role change, a deactivation or an approval that
+// landed while the save queued arrives here. That has to be marked, because
+// two readers ask `.plain` before anything else: oqFlushOnce, which otherwise
+// reads a refusal met in a dead spot as "offline" and retries it for ever
+// (isNetworkError calls any error offline while navigator.onLine is false),
+// and the editor, which otherwise wraps the words in "press Save again".
+// P0002 is the row itself being gone, which the callers already know how to
+// answer. Anything else — a lost connection, a gateway page, PGRST202 on an
+// environment without the migration — is left exactly as it came, so it is
+// still queued and still retried.
+const RPC_LINE_REFUSALS = new Set(["P0002", "42501", "22023", "28000"]);
+const lineRpcRefusal = e => {
+  const code = e && e.code ? String(e.code) : "";
+  // 22003 is ours when the function raises it and Postgres's own words
+  // ("numeric field overflow", naming the column's precision) when a single
+  // figure overflows the column at the insert. One fixed sentence covers both
+  // rather than reading the schema back to a technician.
+  if (code === "22003") {
+    return plainError("A figure on this ticket is too large to bill — check the quantities and rates.");
+  }
+  // A missing EXECUTE grant is a deployment fault, not a person's — its words
+  // name the function, and humanizeError's fixed sentence is the better answer.
+  const message = String((e && e.message) || "").trim();
+  if (!RPC_LINE_REFUSALS.has(code) || /^permission denied/i.test(message)) return e;
+  return plainError(message || "The ticket's charges could not be saved. Press Save again.",
+    code === "P0002" ? { ticketGone: true } : undefined);
+};
 
 // 23505 is a unique violation; the constraint name tells us which one. Jobs
 // have two unique columns (the id and the number), and only the number is
@@ -416,13 +619,71 @@ function shapeJobTicket(t) {
   return {
     id: t.id, date: dayMonth(localDate(t.work_date)),
     age: ageInDays(t.created_at),
-    amount: Number(t.total), status: t.status, tech: t.profiles ? t.profiles.name : "",
+    amount: t.total == null ? null : Number(t.total), status: t.status, tech: t.profiles ? t.profiles.name : "",
     // Who raised it, so the screen can offer "cancel approval" to the same
     // people the database would let do it: that technician, or an admin.
     techId: t.technician_id
   };
 }
 const JOB_TICKET_COLUMNS = "id, job_id, work_date, status, total, created_at, technician_id, profiles(name)";
+
+// One job's rows of a table, every one of them, walked by key. The ordering
+// is the key's because that is what makes the walk safe; the callers put the
+// list back into the order their screens read it in (newestFirst below).
+const archiveJobRows = (table, columns, jobDbId) => fetchAllKeyset(async after => {
+  let q = sbClient.from(table).select(columns).eq("job_id", jobDbId);
+  if (after != null) q = q.gt("id", after);
+  const { data, error } = await q.order("id").limit(RESPONSE_ROW_CAP);
+  if (error) throw error;
+  return data || [];
+});
+
+// Newest first, the id breaking a tie — the order the unpaged reads these
+// replace came back in. It is not decoration: the zip's entry order, its
+// manifest and Job details.txt are all built in the order these lists
+// arrive, and a build has to come out the same twice. Timestamps arrive as
+// ISO strings in one offset, so they sort as text; a missing one sorts last.
+const newestFirst = (rows, field) => rows.slice().sort((a, b) => {
+  const x = a[field] || "", y = b[field] || "";
+  if (x !== y) return x < y ? 1 : -1;
+  return String(a.id) < String(b.id) ? 1 : -1;
+});
+
+// Every line of one rate card, walked by key.
+//
+// A card is normally sixty-odd lines, and "normally" is not a guarantee: the
+// rate card IS the billing menu, so a read that stops at the response cap
+// takes items off the ticket screen's dropdowns and off the invoice's order
+// without saying so, and the lines it dropped come back as orphans on every
+// saved ticket. Worse in copyDefaultInto, where a truncated `existing` makes
+// every source line past the cap look missing and inserts a second copy of
+// the card — rate_lines has no unique key to refuse it.
+//
+// Keyset and not offset, per the house rule: this is what people are billed
+// from. The walk's order is the key's, which is the only order a keyset walk
+// is safe in; byCardOrder below puts the rows back into the order the screens
+// read them in.
+const allRateLines = (scheduleId, columns = "*") => fetchAllKeyset(async after => {
+  let q = sbClient.from("rate_lines").select(columns).eq("schedule_id", scheduleId);
+  if (after != null) q = q.gt("id", after);
+  const { data, error } = await q.order("id").limit(RESPONSE_ROW_CAP);
+  if (error) throw error;
+  return data || [];
+});
+
+// What `.order("position", { ascending: true, nullsFirst: false }).order("label")`
+// answered: the dragged order first, rows from before the position column
+// (null) at the end, label breaking a tie. The id breaks what label cannot,
+// so two opens of one card read the same way round — the database's own
+// answer for a full tie was whatever it felt like.
+const byCardOrder = rows => rows.slice().sort((a, b) => {
+  const an = a.position == null, bn = b.position == null;
+  if (an !== bn) return an ? 1 : -1;
+  if (!an && Number(a.position) !== Number(b.position)) return Number(a.position) - Number(b.position);
+  const la = a.label || "", lb = b.label || "";
+  if (la !== lb) return la < lb ? -1 : 1;
+  return String(a.id) < String(b.id) ? -1 : 1;
+});
 
 // Everything the archive's job text file says about a ticket, in one row.
 // gst_rate is the rate this ticket was actually billed at, reserved on its
@@ -734,6 +995,38 @@ export const Db = {
     return data.map(shapeJob);
   },
 
+  // ── The archive's own reads of a job's paperwork ─────────────────────
+  // Every row, not the first thousand.
+  //
+  // Job detail's listTicketsForJob / listJhasForJob / listReportsForJob are
+  // one unpaged request each. That is right for a screen — a job with more
+  // than 1,000 tickets is not a list anybody scrolls, and the cached copy is
+  // what makes the job open offline — and wrong for the archive, because the
+  // archive is read twice: once to build the zip and once, live, to check
+  // for drift a moment before the clear deletes the jobs. Both reads
+  // truncate at exactly the same 1,000 rows, so they agree with each other,
+  // the counts and the id lists match, and the clear deletes work that is
+  // not in the zip.
+  //
+  // Keyset rather than OFFSET pages: this is the read a bulk delete is
+  // decided on, and an OFFSET walk can silently skip a row that moves
+  // between pages (paging.js says which shape is for what). A page that
+  // fails throws, which is what both callers turn into a refusal.
+  //
+  // No cache in either direction: nothing here is answered from the device's
+  // remembered copy, and nothing here writes over Job detail's.
+  async listAllTicketsForJob(jobDbId) {
+    return newestFirst(await archiveJobRows("tickets_read", JOB_TICKET_COLUMNS, jobDbId), "created_at").map(shapeJobTicket);
+  },
+
+  async listAllJhasForJob(jobDbId) {
+    return newestFirst(await archiveJobRows("jhas", JHA_COLUMNS, jobDbId), "signed_at").map(shapeJha);
+  },
+
+  async listAllReportsForJob(jobDbId) {
+    return newestFirst(await archiveJobRows("reports", "*", jobDbId), "uploaded_at").map(shapeReport);
+  },
+
   // A whole job's tickets, with everything the archive's text file says about
   // them, in one read rather than one read each.
   //
@@ -745,7 +1038,7 @@ export const Db = {
   async listTicketsForArchive(ticketIds) {
     const out = new Map();
     for (let i = 0; i < ticketIds.length; i += 200) {
-      const { data, error } = await sbClient.from("tickets")
+      const { data, error } = await sbClient.from("tickets_read")
         .select(ARCHIVE_TICKET_COLUMNS)
         .in("id", ticketIds.slice(i, i + 200));
       if (error) throw error;
@@ -791,6 +1084,9 @@ export const Db = {
   // Storage removal is best effort — the rows are gone by then, and an
   // orphaned object in a private bucket is untidy, not a record.
   async archiveClearJobs(jobIds) {
+    // Taken before the delete, not after it: what this sweeps is the cache of
+    // the account that asked for the clear.
+    const held = OfflineCache.hold();
     const { data, error } = await sbClient.rpc("archive_clear_jobs", { p_job_ids: jobIds });
     if (error) throw error;
     const result = data || {};
@@ -807,11 +1103,11 @@ export const Db = {
     // whose screen can no longer be opened to finish or discard it.
     const cleared = new Set((jobIds || []).map(String));
     const wipJob = k => { const m = /^(?:ticket|jha)\.wip\.(.+)$/.exec(k); return m ? m[1] : null; };
-    const keys = await OfflineCache.keys("").catch(() => []);
+    const keys = await OfflineCache.keys("", held).catch(() => []);
     await Promise.all(keys
       .filter(k => k === "jobs.recent" || /^(job|jhas|reports|tickets|jha\.last|jobs\.client)\./.test(k)
         || cleared.has(wipJob(k)))
-      .map(k => OfflineCache.remove(k)));
+      .map(k => OfflineCache.remove(k, held)));
     return {
       jobs: Number(result.jobs || 0), tickets: Number(result.tickets || 0),
       jhas: Number(result.jhas || 0), reports: Number(result.reports || 0), filesLeft
@@ -829,6 +1125,8 @@ export const Db = {
   // the job. Neither one set, and the database refuses if anything is
   // attached — see 20260815000000.
   async deleteJob({ jobId, transferToId = null, discard = false }) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     const { data, error } = await sbClient.rpc("delete_job", {
       p_job_id: jobId,
       p_transfer_to: transferToId,
@@ -869,8 +1167,8 @@ export const Db = {
     if (transferToId) {
       gone.push("jhas." + transferToId, "reports." + transferToId, "tickets." + transferToId, "jha.last." + transferToId);
     }
-    await Promise.all(gone.map(k => OfflineCache.remove(k)));
-    await dropClientJobLists();
+    await Promise.all(gone.map(k => OfflineCache.remove(k, held)));
+    await dropClientJobLists(held);
     return { ...(data || {}), filesLeft };
   },
 
@@ -964,6 +1262,8 @@ export const Db = {
   // served whatever was asked for, and `fromCache` tells Home to say so
   // rather than pretending the filter was applied.
   async searchJobs({ page = 0, pageSize = 10, status = "All", search = "", searchField = "any" } = {}) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     const shape = data => {
       const rows = (data || []).map(j => ({
         dbId: j.id, id: j.job_number, project: j.project,
@@ -986,10 +1286,10 @@ export const Db = {
       const result = shape(data);
       OfflineCache.markLive();
       if (isBoardDefault) {
-        OfflineCache.put("jobs.recent", result);
+        OfflineCache.put("jobs.recent", result, held);
         // Each job on its own key too, so opening one offline works even
         // though Job detail fetches it by id rather than off the list.
-        result.rows.forEach(j => { OfflineCache.put("job." + j.dbId, j); });
+        result.rows.forEach(j => { OfflineCache.put("job." + j.dbId, j, held); });
         // And the contents of each — deliberately not awaited, so the board
         // paints on the first response rather than the fourth.
         this.prefetchJobDetails(result.rows.map(j => j.dbId));
@@ -997,7 +1297,7 @@ export const Db = {
       return result;
     } catch (e) {
       if (!isNetworkError(e)) throw e;
-      const hit = await OfflineCache.read("jobs.recent");
+      const hit = await OfflineCache.read("jobs.recent", held);
       if (!hit) throw e;
       OfflineCache.noteServingCached(hit.at);
       return { ...hit.value, fromCache: true, cachedAt: hit.at };
@@ -1013,6 +1313,8 @@ export const Db = {
   // Best effort and non-blocking: it runs after the board has already
   // rendered, and a failure means the old behaviour, not a broken board.
   async prefetchJobDetails(jobIds) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     const ids = (jobIds || []).filter(Boolean);
     if (!ids.length) return;
     if (Date.now() - _lastDetailPrefetch < DETAIL_PREFETCH_GAP_MS) return;
@@ -1036,7 +1338,7 @@ export const Db = {
       const [jhas, reports, tickets] = await Promise.all([
         all("jhas", JHA_COLUMNS, "signed_at"),
         all("reports", "*", "uploaded_at"),
-        all("tickets", JOB_TICKET_COLUMNS, "created_at")
+        all("tickets_read", JOB_TICKET_COLUMNS, "created_at")
       ]);
 
       // Written per job, including the empty ones. An absent key and an empty
@@ -1048,7 +1350,7 @@ export const Db = {
           const bucket = byJob.get(row.job_id);
           if (bucket) bucket.push(shape(row));
         });
-        byJob.forEach((value, id) => { OfflineCache.put(prefix + id, value); });
+        byJob.forEach((value, id) => { OfflineCache.put(prefix + id, value, held); });
       };
       spread("jhas.", jhas, shapeJha);
       spread("reports.", reports, shapeReport);
@@ -1085,6 +1387,8 @@ export const Db = {
   // edits. Only an admin can close or reopen one (the button is admin-only, and
   // this is checked again here rather than trusted from the screen).
   async setJobComplete(jobDbId, complete) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     const { data: auth } = await sbClient.auth.getUser();
     // A dead session used to surface as "cannot read property id of null",
     // which reads like an app bug rather than "you've been signed out".
@@ -1096,21 +1400,21 @@ export const Db = {
     const { error } = await sbClient.from("jobs")
       .update({ status: complete ? "Complete" : "Active" }).eq("id", jobDbId);
     if (error) throw error;
-    await dropClientJobLists();
+    await dropClientJobLists(held);
     // The remembered board page still calls this job Active, and offline
     // that pill is read as the job's status — a ticket started on it sat in
     // the outbox until the replay was refused. Patched in place rather than
     // dropped: dropping the page would leave a truck with no board at all.
     const status = complete ? "Complete" : "Active";
-    const board = await OfflineCache.read("jobs.recent").catch(() => null);
+    const board = await OfflineCache.read("jobs.recent", held).catch(() => null);
     if (board && board.value && Array.isArray(board.value.rows)) {
-      OfflineCache.put("jobs.recent", { ...board.value, rows: board.value.rows.map(r => r.dbId === jobDbId ? { ...r, status } : r) });
+      OfflineCache.put("jobs.recent", { ...board.value, rows: board.value.rows.map(r => r.dbId === jobDbId ? { ...r, status } : r) }, held);
     }
     // The job's own key too — that is what Db.getJob serves out of range,
     // and App.openJob reads it behind every board tap for the client's GST
     // rate, so an unpatched copy put "Active" back over the board's.
-    const one = await OfflineCache.read("job." + jobDbId).catch(() => null);
-    if (one && one.value) OfflineCache.put("job." + jobDbId, { ...one.value, status });
+    const one = await OfflineCache.read("job." + jobDbId, held).catch(() => null);
+    if (one && one.value) OfflineCache.put("job." + jobDbId, { ...one.value, status }, held);
   },
 
   // Anything that adds to a job goes through here first. A job someone marked
@@ -1314,6 +1618,8 @@ export const Db = {
   // the new id — would die on the job number's unique index for ever, taking
   // the day's JHA and ticket with it.
   async queueNewJob({ id: givenId, jobNumber, project, clientId, clientName, lsd, afe, createdBy, createdByName, clientRep, contractorName, contractorRep }) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     const id = givenId || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
 
     const contractors = await this.listContractors().catch(() => []);
@@ -1336,10 +1642,10 @@ export const Db = {
     // Make it a real job as far as this device is concerned: on the board,
     // openable, and with empty history rather than absent history — an
     // absent key reads as "couldn't load", an empty one as "none on file yet".
-    OfflineCache.put("job." + id, job);
-    OfflineCache.put("jhas." + id, []);
-    OfflineCache.put("reports." + id, []);
-    OfflineCache.put("tickets." + id, []);
+    OfflineCache.put("job." + id, job, held);
+    OfflineCache.put("jhas." + id, [], held);
+    OfflineCache.put("reports." + id, [], held);
+    OfflineCache.put("tickets." + id, [], held);
     // The two rep columns as well, which the record reads from a key of their
     // own. Not a stand-in: createJob never sets client_contact_id or
     // contractor_contact_id, so the organisations' primaries genuinely are
@@ -1347,13 +1653,13 @@ export const Db = {
     // what the row will say when it syncs. Without it, getJobRecord's read
     // fails out of range and the job comes back repsUnknown — Create ticket
     // and Edit greyed out on a job the crew raised in the field minutes ago.
-    OfflineCache.put("job.reps." + id, { client_contact_id: null, contractor_contact_id: null });
-    const board = await OfflineCache.read("jobs.recent").catch(() => null);
+    OfflineCache.put("job.reps." + id, { client_contact_id: null, contractor_contact_id: null }, held);
+    const board = await OfflineCache.read("jobs.recent", held).catch(() => null);
     const rows = board && board.value && board.value.rows ? board.value.rows : [];
     OfflineCache.put("jobs.recent", {
       rows: [job, ...rows.filter(r => r.dbId !== id)],
       total: (board && board.value ? board.value.total : 0) + 1
-    });
+    }, held);
     // And the client's open-jobs list, which is the New ticket dialog's only
     // source out of range: without this the crew can raise a job in the field
     // and then not be able to bill against it until the queue drains.
@@ -1364,9 +1670,9 @@ export const Db = {
     // retried createJob comes back here with the id it already minted.
     if (clientId) {
       const listKey = "jobs.client." + clientId;
-      const list = await OfflineCache.read(listKey).catch(() => null);
+      const list = await OfflineCache.read(listKey, held).catch(() => null);
       if (list && Array.isArray(list.value)) {
-        OfflineCache.put(listKey, [job, ...list.value.filter(r => r.dbId !== id)]);
+        OfflineCache.put(listKey, [job, ...list.value.filter(r => r.dbId !== id)], held);
       }
     }
 
@@ -2345,6 +2651,8 @@ export const Db = {
   // and created if it's new — same behaviour as the New job dialog, so typing
   // a contractor here doesn't silently do nothing.
   async updateJobRecord(job, record) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     await this.assertJobOpen(job.dbId);
     let contractorId = job.contractorId ?? null;
     const name = (record.contractor || "").trim();
@@ -2387,7 +2695,7 @@ export const Db = {
     // the next time the panel opens out of range it would show them as
     // though they were the edit that just landed. Removed rather than
     // rewritten: the next read in range fills it again.
-    await OfflineCache.remove("job.reps." + job.dbId);
+    await OfflineCache.remove("job.reps." + job.dbId, held);
     return contractorId;
   },
 
@@ -2541,8 +2849,7 @@ export const Db = {
     //
     // Written as an upsert on (ticket_id, profile_id), then a delete of
     // whoever is no longer on the crew. It used to be delete-then-insert with
-    // the old rows held back, the shape updateTicket still keeps for the
-    // billing lines. Two devices saving one draft in the same instant
+    // the old rows held back. Two devices saving one draft in the same instant
     // interleaved as A-delete, B-delete, A-insert, B-insert, and B's insert
     // collided on the unique key: the technician read the raw constraint name
     // and B's hours were dropped. An upsert cannot collide, so the race is a
@@ -2709,7 +3016,7 @@ export const Db = {
   async listTicketsForJob(jobDbId) {
     return OfflineCache.readThrough("tickets." + jobDbId, async () => {
     const { data, error } = await sbClient
-      .from("tickets").select(JOB_TICKET_COLUMNS)
+      .from("tickets_read").select(JOB_TICKET_COLUMNS)
       .eq("job_id", jobDbId).order("created_at", { ascending: false });
     if (error) throw error;
     return data.map(shapeJobTicket);
@@ -2989,7 +3296,7 @@ export const Db = {
     // to surface.
     const data = await fetchAllPages(async (page, size) => {
       const { data: rows, error, count } = await sbClient
-        .from("tickets")
+        .from("tickets_read")
         .select("id, work_date, status, total, created_at, jobs(job_number, project, clients(name))",
           page === 0 ? { count: "exact" } : {})
         .eq("technician_id", technicianId)
@@ -3002,7 +3309,7 @@ export const Db = {
     return data.map(t => ({
       id: t.id, date: dayMonth(localDate(t.work_date)),
       age: ageInDays(t.created_at),
-      amount: Number(t.total), status: t.status,
+      amount: t.total == null ? null : Number(t.total), status: t.status,
       job: t.jobs ? t.jobs.job_number : "", project: t.jobs ? t.jobs.project : "",
       client: t.jobs && t.jobs.clients ? t.jobs.clients.name : ""
     }));
@@ -3014,6 +3321,8 @@ export const Db = {
   // save time — same function either way, so the preview can't disagree with
   // what actually gets written.
   async nextTicketNumber(initials, workDate) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     const prefix = initials + "-" + ticketDateStamp(localDate(workDate)) + "-";
     try {
       const { data, error } = await sbClient.rpc("next_ticket_number", {
@@ -3022,7 +3331,7 @@ export const Db = {
       if (error) throw error;
       // Remember where the sequence had got to, so the offline path below can
       // carry on from the same place instead of guessing.
-      OfflineCache.put("ticketno." + prefix, data);
+      OfflineCache.put("ticketno." + prefix, data, held);
       return data;
     } catch (e) {
       if (!isNetworkError(e)) throw e;
@@ -3036,7 +3345,7 @@ export const Db = {
       // sharing initials, raises one while this is out of range — and no
       // client-side count can know that. So the number is provisional, the
       // screen says so, and the database mints the real one on replay.
-      const hit = await OfflineCache.read("ticketno." + prefix).catch(() => null);
+      const hit = await OfflineCache.read("ticketno." + prefix, held).catch(() => null);
       const lastKnown = hit ? parseInt(String(hit.value).slice(prefix.length), 10) : NaN;
       const base = Number.isNaN(lastKnown) ? 1 : lastKnown;
 
@@ -3073,7 +3382,7 @@ export const Db = {
     // The key lookup and the open check touch different tables and neither
     // needs the other's answer, so they go out together; they are awaited
     // in the old order so the job's refusal still wins over the key's.
-    const keyLookup = startKeyLookup("tickets", "id, total", clientKey);
+    const keyLookup = startKeyLookup("tickets_read", "id, total", clientKey);
     // The first mint goes out beside them too: next_ticket_number is a pure
     // read (max + 1 over the tickets and the burned numbers, nothing
     // reserved), so a mint the open check then refuses burns nothing. It is
@@ -3125,7 +3434,7 @@ export const Db = {
       // somebody took it between the mint and the insert — mint again.
       // Anything else is a real failure.
       if (error.code === "23505" && clientKey && /client_key/.test(error.message || "")) {
-        const { data: already, error: keyErr } = await sbClient.from("tickets").select("id, total").eq("client_key", clientKey).maybeSingle();
+        const { data: already, error: keyErr } = await sbClient.from("tickets_read").select("id, total").eq("client_key", clientKey).maybeSingle();
         if (keyErr) throw keyErr;
         if (already) return { id: already.id, total: Number(already.total), existing: true };
       }
@@ -3157,6 +3466,8 @@ export const Db = {
   // Approved and invoiced tickets are never cancellable — by then it is the
   // client's document, and a correction is a new ticket.
   async deleteTicket(ticketId) {
+    // The lease this device was on when the work started: see OfflineCache.hold.
+    const held = OfflineCache.hold();
     // A reopened draft's recovery copy is keyed by the ticket id
     // (ticketMobile's wipKey). Left behind, a cancelled ticket went on
     // appearing in Open tickets' "half-entered on this device" strip,
@@ -3166,8 +3477,8 @@ export const Db = {
     // ticket that no longer exists would be read on a number a later ticket
     // may reuse.
     const forgetTicketWip = async id => {
-      try { await OfflineCache.remove("ticket.wip." + id); } catch (_) { /* the copy is a convenience */ }
-      try { await OfflineCache.remove("ticket.overwrote." + id); } catch (_) { /* likewise */ }
+      try { await OfflineCache.remove("ticket.wip." + id, held); } catch (_) { /* the copy is a convenience */ }
+      try { await OfflineCache.remove("ticket.overwrote." + id, held); } catch (_) { /* likewise */ }
     };
     const { data: row, error: rErr } = await sbClient.from("tickets").select("status").eq("id", ticketId).maybeSingle();
     if (rErr) throw rErr;
@@ -3244,7 +3555,7 @@ export const Db = {
 
   // One ticket with its lines, for reopening a draft in the billing screen.
   async getTicket(ticketId) {
-    const { data, error } = await sbClient.from("tickets")
+    const { data, error } = await sbClient.from("tickets_read")
       .select("id, job_id, technician_id, work_date, status, total, gst_rate, delays, client_contact, contractor_contact, ticket_lines(kind, label, unit, quantity, unit_rate)")
       .eq("id", ticketId).single();
     if (error) throw error;
@@ -3273,7 +3584,11 @@ export const Db = {
     // round trip, strictly after this one, in front of every save and every
     // queued replay. A job the embed cannot show (unsynced, or invisible)
     // falls through to assertJobOpen so the wording of that case is its own.
-    const { data: row, error: rErr } = await sbClient.from("tickets").select("status, job_id, total, jobs(status, job_number)").eq("id", ticketId).maybeSingle();
+    // `total` is deliberately not read here any more. It was read for the
+    // line guard below, which now asks the account's role instead — and a
+    // masked figure sitting in a variable is the thing that guard was
+    // wrongly built on once already.
+    const { data: row, error: rErr } = await sbClient.from("tickets_read").select("status, job_id, jobs(status, job_number)").eq("id", ticketId).maybeSingle();
     if (rErr) throw rErr;
     // Cancelled on another device while this editor was open. Say so —
     // the screen's generic wrapper ("press Save again") would be a lie
@@ -3302,6 +3617,13 @@ export const Db = {
     lines = lines.map(cleanLine);
     const total = totalOf(lines);
     assertBillable(total);
+    // Whether this account may replace the billing at all, asked now and
+    // awaited below, where the answer is actually needed: it overlaps the
+    // UPDATE that follows instead of standing in front of it. Started after
+    // every refusal above, so a save that is not allowed to land still fails
+    // on its own words and reads no profile; the sink inside the starter is
+    // what makes an early throw from here on safe.
+    const priceRole = startPriceRoleLookup();
     // No total in the patch. The old lines are still in place at this point,
     // so writing the new sum here would leave the row disagreeing with them
     // until the replacement below lands — which is the window the constraint
@@ -3321,7 +3643,7 @@ export const Db = {
     if (clientContact !== undefined) patch.client_contact = clientContact;
     if (contractorContact !== undefined) patch.contractor_contact = contractorContact;
     // Ask for the row back: an update no policy allows reports success
-    // having changed nothing (same trap as the delete below), which here
+    // having changed nothing, which here
     // would mean quietly not-saving another technician's ticket — or, with
     // the line replacement next, half-saving it and surfacing raw RLS
     // errors. Refuse in plain words before any of that starts.
@@ -3346,53 +3668,30 @@ export const Db = {
       throw plainError(`Ticket ${ticketId} belongs to another technician — your account can't change it. Ask them, or the office, to make the edit.`);
     }
 
-    // Replacing the lines is delete-then-insert, and the gap between the two
-    // is where a dropped connection or a refused insert used to destroy a
-    // ticket's existing billing — found in beta testing, when an overflow on
-    // the insert left the ticket empty at $0. The old lines are held here
-    // and put back if the replacement fails; the edit fails, the money
-    // doesn't vanish.
-    // line_order comes back with them, and orders them: it is the column the
-    // invoice prints by, and PostgREST hands rows over in heap order unless
-    // asked otherwise. Read unordered and put back on a sequence default, the
-    // restored ticket would keep every line and every dollar but lose the
-    // card's order — welds and charges interleaved on the client's bill,
-    // which is not the ticket the technician saved.
-    const { data: oldLines, error: oErr } = await sbClient
-      .from("ticket_lines").select("kind, label, unit, quantity, unit_rate, line_order")
-      .eq("ticket_id", ticketId).order("line_order");
-    if (oErr) throw oErr;
-    // Nothing read from a ticket that carries money means the lines are
-    // there and this account can't see them (prices are Admins' and
-    // Technicians'; the policy hides the rows rather than refusing the
-    // read). Replacing what can't be seen would be deleting it — the
-    // database refuses the delete to those roles too, but the editor should
-    // not even try: the hours, reps and delays are saved, the billing is
-    // left exactly as it was.
-    if (!(oldLines && oldLines.length) && Number(row.total || 0) > 0) {
-      return { id: ticketId, total: Number(row.total) };
-    }
+    // Everything above here is this account's to write — the status, the
+    // reps, the delays — and the crew's hours are saved by the caller after
+    // this returns. The billing is not: a role without prices can neither
+    // read a ticket's lines nor write them, so the replacement below is not
+    // attempted at all and the lines are left exactly as they were.
+    //
+    // The answer is the account's role, read live by the lookup started
+    // above; a profile read that fails throws out of here rather than
+    // passing for "no prices", because that would look like a save that
+    // worked. `total` comes back null and not a number: this account was
+    // never shown one, and Number(null) is 0 — a figure that reads as a
+    // ticket worth nothing.
+    //
+    // Awaited here and nowhere earlier: this is the first line that needs
+    // it, and it stays in front of the billing RPC below.
+    if (!(await priceRoleAnswer(priceRole))) return { id: ticketId, total: null };
 
-    const { error: dErr } = await sbClient.from("ticket_lines").delete().eq("ticket_id", ticketId);
-    if (dErr) throw dErr;
-    if (lines.length) {
-      const { error: lErr } = await sbClient.from("ticket_lines").insert(
-        lines.map(l => ({ ticket_id: ticketId, ...l }))
-      );
-      if (lErr) {
-        if (oldLines && oldLines.length) {
-          // The spread carries each line's own line_order back with it —
-          // supplying the column is allowed (it is an ordinary insertable
-          // column whose default merely calls the sequence), so the restored
-          // lines land in the order they were saved in rather than in
-          // whatever order they were read out.
-          await sbClient.from("ticket_lines")
-            .insert(oldLines.map(l => ({ ticket_id: ticketId, ...l })))
-            .then(() => {}, () => {});
-        }
-        throw friendlyLineError(lErr);
-      }
-    }
+    // The database replaces all lines in one transaction, including an empty
+    // array. A lost connection cannot leave the old billing deleted halfway
+    // through a save, and replay can safely submit the whole array again.
+    const { data: savedTotal, error: lineError } = await sbClient.rpc("replace_ticket_lines", {
+      _ticket_id: ticketId, _lines: lines
+    });
+    if (lineError) throw lineRpcRefusal(lineError);
     // The row now holds what this save wrote, so that is what the next queued
     // save is measured against. Without this the base would still be the copy
     // the editor was opened with, and a technician who saved once online and
@@ -3400,7 +3699,7 @@ export const Db = {
     // `undefined` delays means the caller wasn't touching them, so the
     // remembered note stays as it was.
     rememberTicketPart(ticketId, delays === undefined ? { lines } : { lines, delays: delays || null });
-    return { id: ticketId, total };
+    return { id: ticketId, total: Number(savedTotal) };
   },
 
   // ── Rates (read-only lookup for the ticket screen) ──────────────────
@@ -3483,10 +3782,7 @@ export const Db = {
       return null;
     }
 
-    const { data: lines, error: lErr } = await sbClient
-      .from("rate_lines").select("*").eq("schedule_id", schedule.id)
-      .order("position", { ascending: true, nullsFirst: false }).order("label");
-    if (lErr) throw lErr;
+    const lines = byCardOrder(await allRateLines(schedule.id));
 
     // The card's rows, expanded the way a ticket bills them: a size row is
     // three per-weld items (film, CR, DR), a method is one, and the expense
@@ -3546,12 +3842,9 @@ export const Db = {
       if (cErr) throw cErr;
       schedule = created;
     }
-    let { data: lines, error: lErr } = await sbClient.from("rate_lines").select("*")
-      .eq("schedule_id", schedule.id)
-      // The dragged order first; label keeps rows stable for anything from
-      // before the position column, which sorts to the end as null.
-      .order("position", { ascending: true, nullsFirst: false }).order("label");
-    if (lErr) throw lErr;
+    // The dragged order first; label keeps rows stable for anything from
+    // before the position column, which sorts to the end as null.
+    let lines = byCardOrder(await allRateLines(schedule.id));
 
     // The standard card is laid out once, when a schedule is empty — which
     // in practice means it was just created. This used to top up whatever
@@ -3685,15 +3978,15 @@ export const Db = {
         : "This is the default schedule — there is nothing to copy into it.");
     }
 
-    const [{ data: source, error: srcErr }, { data: existing, error: mineErr }] = await Promise.all([
-      sbClient.from("rate_lines").select("*").eq("schedule_id", sourceId),
-      sbClient.from("rate_lines").select("id, kind, label, rate, position").eq("schedule_id", scheduleId)
+    // A read that failed — or a page of one — is not a card with nothing on
+    // it. Dropped, an empty or short `existing` makes every source line look
+    // missing and the copy inserts a second copy of the whole card:
+    // rate_lines has no unique key to stop it. allRateLines throws on both,
+    // so neither can arrive here as an absence.
+    const [source, existing] = await Promise.all([
+      allRateLines(sourceId),
+      allRateLines(scheduleId, "id, kind, label, rate, position")
     ]);
-    // A read that failed is not a card with nothing on it. Dropped, an empty
-    // `existing` makes every source line look missing and the copy inserts a
-    // second copy of the whole card — rate_lines has no unique key to stop it.
-    if (srcErr) throw srcErr;
-    if (mineErr) throw mineErr;
     if (!source || !source.length) {
       throw new Error(fromScheduleId
         ? "That client's rate card has nothing on it yet, so there is nothing to copy."

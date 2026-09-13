@@ -116,6 +116,30 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   re-point the trigger before anything else — HANDOVER.md's Path B says how. An unshipped
   DB fix waits as a draft under `supabase/handover/` (probes beside it) —
   a draft, not history, until it is applied and filed under migrations.
+  Replacing a ticket’s charges is applied as
+  `20260913013801_a_ticket_saves_its_charges_atomically.sql`: the definer
+  `replace_ticket_lines(ticket_id, lines jsonb)` does the editor’s DELETE and
+  INSERT in one transaction, locks the parent ticket FOR UPDATE and asks every
+  authorization question AFTER that wait (a role, a deactivation or an approval
+  landing while a save queues must refuse, not be honoured), validates the whole
+  payload before a row is touched, and leaves `tickets.total` to the sync
+  trigger. Its probes are beside it under `supabase/handover/`, part 1 in one
+  rolled-back transaction and part 2 as real concurrent sessions — all run live
+  on 13 Sept and recorded in the migration’s header. `Db.updateTicket` — the editor's save and the
+  outbox replay both — now calls it instead of deleting and re-inserting the
+  lines from the browser, and takes the total the function returns; the
+  hold-and-restore of the old lines is gone with the gap it covered.
+  `ticketLineSave.test.mjs` reads the method back and fails on a
+  `ticket_lines` write from the client. Its four refusals are marked as
+  refusals: `lineRpcRefusal` in db.js turns the errcodes the function raises
+  (`P0002` the row gone, `42501` role or state, `22023` the payload, `28000`
+  signed out) into `plainError` — `P0002` with `ticketGone` — because
+  oqFlushOnce and the editor both ask `.plain` first, and an unmarked refusal
+  met in a dead spot reads as "offline" and is retried for ever. A lost
+  connection, a gateway page and PGRST202 stay as they came; a missing EXECUTE
+  grant does too (its words name the function); and 22003 gets one fixed
+  sentence, since Postgres's own names the column's precision. `createTicket` still writes a new
+  ticket's lines directly: an insert has no old billing to lose.
   Browser crash reporting is applied as
   `20260912160845_browser_crashes.sql`: `browser_crashes` records the
   account/minute rate limit, and service-only `file_browser_crash` writes
@@ -1470,6 +1494,25 @@ session has set `app.confirm_total_wipe = 'yes'`.
   totals and the browser's figures are whatever that role could see. Same
   reason the tracker's money buttons ("Chase all unsigned") sit behind
   `seesPrices` — one tap would otherwise mail every client a $0.00 approval.
+- A ticket's money is read through a view. `tickets_read` (definer,
+  security_barrier, its own explicit `is_staff()` predicate mirroring the
+  tickets SELECT policy) masks `total` to null for anything but Admin and
+  Technician, and `search_tickets`, `ticket_tracker_stats` and
+  `ticket_aging()` are built over it (20260912205211). Since
+  20260912210854 the base table carries NO table-level SELECT grant for
+  `authenticated` and no `total` column grant: a signed-in account reads
+  the named metadata columns only, and `approval_token`,
+  `approval_expires_at` and `approved_ip` are off that list on purpose —
+  the token is a stored credential, the IP is a client rep's, and only the
+  service role (approve-ticket, mailApproval, the backups) reads them. So a
+  NEW COLUMN on tickets is invisible to the app until it is added to BOTH
+  the grant list in that migration and to `tickets_read`, and a
+  `select("*")` on tickets from the client is now a 42501. Row scope
+  changing in the tickets SELECT policy must change the view's predicate in
+  the same commit. The deployed-API probe
+  `supabase/handover/probes-ticket-money-select-api.mjs` is what proves
+  PostgREST still resolves the reverse `ticket_lines` embed through the
+  view (getTicket and the archive both depend on it); it reads only.
 - tickets has a column-level UPDATE grant: signed-in accounts write
   status, client_contact, contractor_contact, delays and chased_at, nothing
   else. The approval plumbing (approval_token/sent_at/expires_at/sent_to/

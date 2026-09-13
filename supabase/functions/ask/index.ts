@@ -562,7 +562,7 @@ Deno.serve(async (req) => {
       return { row, job: { id: row.jobs.id, job_number: row.jobs.job_number }, to };
     };
     const ticketForSend = async (ticketId: string) => {
-      const { data, error } = await asUser.from("tickets")
+      const { data, error } = await asUser.from("tickets_read")
         .select("id, status, total, technician_id, client_contact, jobs(id, job_number, client_id, client_contact_id)")
         .eq("id", ticketId.trim().toUpperCase()).maybeSingle();
       if (error) throw new Error(error.message);
@@ -641,7 +641,7 @@ Deno.serve(async (req) => {
         }));
       } else if (name === "list_tickets") {
         const job = await jobNumbered(String(input.job_number ?? ""), false);
-        const { data, error, count } = await asUser.from("tickets")
+        const { data, error, count } = await asUser.from("tickets_read")
           .select("id, work_date, status, total, technician_id, approval_sent_at, approval_sent_to, client_contact, profiles(name)", { count: "exact" })
           .eq("job_id", job.id).order("created_at", { ascending: false }).limit(50);
         if (error) throw new Error(error.message);
