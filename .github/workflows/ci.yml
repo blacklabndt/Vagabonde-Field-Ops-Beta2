@@ -25,7 +25,7 @@ jobs:
       # 24.x is what the app is developed against. There is no .nvmrc or
       # engines field to read it from; if one is ever added, point this at
       # it instead of carrying the number in two places.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
