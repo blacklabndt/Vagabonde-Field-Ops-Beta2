@@ -703,7 +703,7 @@ export function App() {
       // range is not a reason to throw away a half-entered ticket without
       // asking, and the next sign-in empties the store anyway if it is
       // somebody else (OfflineCache.claimFor).
-      try { await OfflineCache.remove(IDENTITY_KEY); } catch (e) { console.error("Couldn't forget this device's remembered identity:", e); }
+      try { await OfflineCache.forgetIdentity(); } catch (e) { console.error("Couldn't forget this device's remembered identity:", e); }
       // The stored session too: this branch is reached for any answer that
       // is not a network failure, a 5xx from the token endpoint included, and
       // auth-js only removes the session itself when the server said "no
@@ -772,6 +772,17 @@ export function App() {
     // Set by writeIdentity below when this device would not empty itself for
     // the account being restored. See there for why it travels as a flag.
     let claimFailed = null;
+    // Whose this device was BEFORE the server was asked anything. The
+    // retired-account wipe far below runs with no lease — nothing has been
+    // claimed at that point — so this reading, taken now and checked again
+    // inside the clearing transaction, is the whole of its authority. A slow
+    // answer would otherwise empty a store that another tab claimed and
+    // filled while it was in flight. Unreadable is not nobody: a marker that
+    // could not be read means the wipe is not attempted at all.
+    let markerAtBoot = null;
+    let markerRead = false;
+    try { markerAtBoot = await OfflineCache.authority(); markerRead = true; }
+    catch (e) { console.error("Couldn't read who this device's stored data belongs to:", e); }
     try {
       const { user, offline, reason, signedOut, identityUnreadable } = await restoreSession({
           getSession: () => sbClient.auth.getSession(),
@@ -783,7 +794,7 @@ export function App() {
           // session — see forgetStoredSession. An account with nothing
           // behind it must not be left one to refresh from.
           signOut: async () => {
-            if (Recovery.pending()) return;
+            if (Recovery.hinted()) return;
             const { error } = await sbClient.auth.signOut();
             if (error) forgetStoredSession();
           },
@@ -791,9 +802,9 @@ export function App() {
           // and this is where the promise is kept: a remembered identity
           // older than that is not an identity, it is a lost tablet's last
           // user. Every successful online restore writes it afresh.
-          readIdentity: () => OfflineCache.read(IDENTITY_KEY).then(hit => {
+          readIdentity: () => OfflineCache.readIdentity().then(hit => {
             if (!hit) return null;
-            if (Date.now() - (hit.at || 0) > IDENTITY_TTL_MS) { OfflineCache.remove(IDENTITY_KEY).catch(() => {}); return null; }
+            if (Date.now() - (hit.at || 0) > IDENTITY_TTL_MS) { OfflineCache.forgetIdentity().catch(() => {}); return null; }
             return hit.value;
           }),
           // The same claim the sign-in screen makes, for the same reason:
@@ -829,9 +840,27 @@ export function App() {
       // The identity goes too, so the next offline start doesn't come back as
       // this person on a store that was never theirs.
       if (claimFailed) {
-        try { const { error } = await sbClient.auth.signOut(); if (error) forgetStoredSession(); }
-        catch { forgetStoredSession(); }
-        try { await OfflineCache.remove(IDENTITY_KEY); } catch { /* nothing more to try */ }
+        // …unless a reset may be in play, which is the same exception the
+        // signOut above and the signedOut wipe below already make, and for
+        // a stronger reason: this branch does not merely fail to clear, it
+        // ENDS the session — and the session a recovery landing holds is
+        // the only thing a new password can be set with. Killing it here
+        // leaves the person on a dead link with no way back, having done
+        // nothing wrong; the cache clear that failed is what pushed them
+        // there. So the destructive half is skipped while the hint stands.
+        //
+        // Nothing is opened on the strength of that: currentUser stays
+        // unset, so no screen reads this device's store as this person,
+        // and the identity is NOT written (writeIdentity already returned
+        // without writing it). The set-password screen is all that renders,
+        // and its onDone calls bootSession() again — which is where the
+        // claim is retried, honestly, with the hint spent by then, so a
+        // device that still cannot clear itself gets the full refusal.
+        if (!Recovery.hinted()) {
+          try { const { error } = await sbClient.auth.signOut(); if (error) forgetStoredSession(); }
+          catch { forgetStoredSession(); }
+          try { await OfflineCache.forgetIdentity(); } catch { /* nothing more to try */ }
+        }
         setCurrentUser(null);
         setBootError("This device couldn't clear the previous person's data — try again.");
         setCheckingSession(false);
@@ -844,6 +873,16 @@ export function App() {
       if (offline) {
         console.warn("Starting without a connection (" + reason + ")" + (user ? " — signed in from this device's last session." : "."));
         if (user) {
+          // The offline restore never reaches writeIdentity — there was no
+          // successful online read to write — so this is where the tab takes
+          // the lease it needs to read a single remembered row. `adopt` and
+          // not `claimFor`: a boot with no signal is the last moment to empty
+          // a store on the strength of a twelve-hour-old identity, so a
+          // device whose marker names somebody else is left whole and simply
+          // not adopted, and every fenced read refuses for the rest of the
+          // session. An error here is the same: nothing bound, nothing lost.
+          try { await OfflineCache.adopt(user.id); }
+          catch (e) { console.error("Couldn't read who this device's stored data belongs to:", e); }
           OfflineCache.noteServingCached(Date.now());
           restoredOffline.current = true;
         } else {
@@ -867,8 +906,27 @@ export function App() {
         // The server answered, and this account has nothing behind it any
         // more — deactivated, or stripped of every tab. Nobody is coming
         // back for this, so everything goes, drafts included.
-        try { await OfflineCache.remove(IDENTITY_KEY); } catch { /* the clear below tries again */ }
-        try { await OfflineCache.clear(); } catch (e) { console.error("Couldn't clear the offline cache after the account was locked:", e); }
+        //
+        // Unless a reset may be in play: the sign-out above was suppressed
+        // for it, so this is not an account being retired — it is a recovery
+        // session whose profile could not be read, and the wipe would take
+        // the half-entered tickets of the person now typing a new password.
+        // The hint is enough to hold off on, because a wipe not done costs
+        // nothing and a forged one therefore buys nobody anything.
+        if (!Recovery.hinted()) {
+          try { await OfflineCache.forgetIdentity(); } catch { /* the clear below tries again */ }
+          // Fenced on the marker read at the top of this boot: if the device
+          // has changed hands since — another tab signed somebody in while
+          // the profile read was in flight — the store is theirs now and the
+          // retired account's wipe is not ours to run over it. Nothing is
+          // emptied either if that marker could not be read.
+          if (markerRead) {
+            try { await OfflineCache.clear({ expect: markerAtBoot }); }
+            catch (e) { console.error("Couldn't clear the offline cache after the account was locked:", e); }
+          } else {
+            console.error("The offline cache was left alone after the account was locked: this device's owner couldn't be read.");
+          }
+        }
       } else if (!user) {
         // A session that simply ended — expired, or signed out on another
         // device. The identity goes, or it outlives the server's "no session"
@@ -878,7 +936,7 @@ export function App() {
         // half-entered ticket for a lapsed token is the thing sign-out asks
         // permission for. Whoever signs in next settles it — a different
         // account empties the store at the door (OfflineCache.claimFor).
-        try { await OfflineCache.remove(IDENTITY_KEY); } catch (e) { console.error("Couldn't forget this device's remembered identity:", e); }
+        try { await OfflineCache.forgetIdentity(); } catch (e) { console.error("Couldn't forget this device's remembered identity:", e); }
       }
       if (user) {
         setCurrentUser(user);
@@ -1131,7 +1189,10 @@ export function App() {
   // The same set Open tickets shows: drafts still to be sent to the client.
   const openMyTicketsCount = myTickets.filter(t => t.status === "Draft").length;
 
-  if (checkingSession) {
+  // The recovery screen outranks the boot spinner: the boot is skipped only
+  // when the event had already fired at mount, so one landing while it is in
+  // flight would otherwise sit behind "Signing you in…".
+  if (checkingSession && !recovering) {
     return (
       <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
         <Loading label="Signing you in…" style={{ width: "min(280px, 80vw)" }} />
@@ -1181,6 +1242,17 @@ export function App() {
   // the next person to pick one up should not be able to page through the
   // last crew's jobs and rates without signing in.
   const signOut = async () => {
+    // Captured at ENTRY, before the first await. Everything below this line
+    // takes real time — the draft scan reads the whole store, the push
+    // cleanup goes to the network — and a shared tablet can change hands
+    // across it. Asked afterwards, this reads whoever has the device NOW:
+    // the wipe would then run on the arriving person's authority and delete
+    // their work. It comes from the LEASE this tab holds, never from a
+    // reading of the disk, which can only say who the store belongs to and
+    // never "not yours"; holding no lease is holding no authority, and the
+    // wipe is not attempted at all. It is re-checked inside the clearing
+    // transaction, so an arrival during the wipe itself keeps the store.
+    const authAtSignOut = OfflineCache.heldAuthority();
     // Signing out wipes this device's cache, and the recovery copies of a
     // half-entered ticket or assessment live in it; the outbox survives but
     // is this person's alone, so it won't send until they sign in again.
@@ -1212,6 +1284,12 @@ export function App() {
     // without a password. On a shared tablet that is exactly the handover
     // this whole function exists to make safe, so the session is removed by
     // hand when the sign-out says it failed.
+    // Captured BEFORE the session goes. The sign-out announcement retires
+    // this tab's lease the instant supabase-js broadcasts it, and a clear
+    // holding no lease empties nothing — so the authority for this wipe is
+    // taken here, at the moment it is still unambiguously this person's
+    // device, and re-checked inside the clearing transaction. Anybody
+    // arriving in between owns the store instead, and keeps it.
     const { error: signOutErr } = await sbClient.auth.signOut();
     if (signOutErr) {
       console.warn("Sign-out couldn't reach the server; removing the stored session locally:", signOutErr.message || signOutErr);
@@ -1220,13 +1298,14 @@ export function App() {
     // The remembered identity goes first, on its own: it is the one record
     // that lets the next person open this tablet as the last one with no
     // signal, so it must not wait on — or be lost behind — the bulk clear.
-    try { await OfflineCache.remove(IDENTITY_KEY); } catch { /* the clear below tries again */ }
+    try { await OfflineCache.forgetIdentity(); } catch { /* the clear below tries again */ }
     // Signing out always completes — nobody gets trapped in a session because
     // a cache would not empty. But a wipe that failed is not a wipe, and the
     // person holding the tablet is the only one who can act on it, so it is
     // said out loud rather than swallowed.
     try {
-      await OfflineCache.clear();
+      if (authAtSignOut) await OfflineCache.clear({ expect: authAtSignOut });
+      else console.warn("This tab holds no claim on the device's cached data, so the sign-out left it alone.");
     } catch (e) {
       Toasts.show(e.message || "Couldn't clear this device's cached data.", "error");
       console.error("Sign-out could not clear the offline cache:", e);
@@ -1431,7 +1510,7 @@ export function App() {
   // number. Not awaited by the card: the done sentence says where to look.
   const runChaseFromAsk = async due => {
     const stop = { now: false };
-    const progress = (done, total) => Toasts.show(`Chasing… ${done} of ${total}`, "ok", true, { label: "Stop", onClick: () => { stop.now = true; } });
+    const progress = (done, total) => Toasts.show(`Chasing… ${done} of ${total}`, "ok", true, { label: "Stop", owner: "chase", onClick: () => { stop.now = true; } });
     progress(0, due.length);
     Toasts.mute();
     let out;
@@ -1444,12 +1523,12 @@ export function App() {
       }, { concurrency: CHASE_WORKERS, minInterval: CHASE_INTERVAL_MS, shouldStop: () => stop.now, onProgress: progress });
     } catch (e) {
       Toasts.unmute();
-      Toasts.clearAction();
+      Toasts.clearAction("chase");
       Toasts.show(`The chase stopped: ${e.message || "try again from the tracker."}`, "error", true);
       return;
     }
     Toasts.unmute();
-    Toasts.clearAction();
+    Toasts.clearAction("chase");
     const parts = [`Chased ${out.sent.length} of ${due.length}`];
     if (out.stopped && out.remaining) parts.push(`stopped — ${out.remaining} not attempted`);
     if (out.failed.length) {
@@ -1912,8 +1991,8 @@ export function App() {
           canSaveFiles={tabList(currentUser.tabs).includes("files")}
           context={{
             screen,
-            jobNumber: activeJob ? activeJob.id : null,
-            ticketId: typeof activeTicket === "string" ? activeTicket : null,
+            jobNumber: CONTEXT_TABS.includes(screen) && activeJob ? activeJob.id : null,
+            ticketId: screen === "ticket" && typeof activeTicket === "string" ? activeTicket : null,
             help: (helpFor(screen) || { body: [] }).body
           }} />
       )}
@@ -1931,6 +2010,7 @@ export function App() {
       )}
       {updateReady && !updateDeferred && <UpdateBanner onLater={() => setUpdateDeferred(true)} />}
       <Toast message={toast && toast.text} tone={toast && toast.tone} action={toast && toast.action}
+        at={toast ? toast.at : 0}
         duration={toast && toast.action ? 6000 : undefined} onDone={() => setToast(null)} />
     </div>
   );

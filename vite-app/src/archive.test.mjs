@@ -207,9 +207,9 @@ test("a file left out of the download is caught, and so is one that isn't from t
 
 const fakeDb = (over = {}) => ({
   getJobRecord: async () => ({ clientRep: "T. Beaudry" }),
-  listJhasForJob: async () => [],
-  listReportsForJob: async () => [],
-  listTicketsForJob: async () => [{ id: "KK-0818-26-01" }],
+  listAllJhasForJob: async () => [],
+  listAllReportsForJob: async () => [],
+  listAllTicketsForJob: async () => [{ id: "KK-0818-26-01" }],
   listTicketsForArchive: async ids => new Map(ids.map(id => [id, { id, workDate: "2026-08-18", status: "Approved", total: 1234.5, lines: [] }])),
   listCrewForTickets: async ids => new Map(ids.map(id => [id, []])),
   renderTicketInvoice: async () => "<html>invoice</html>",
@@ -233,6 +233,9 @@ test("a read the network could not answer is a gap in the archive, not an empty 
   // This device remembers this job's tickets from before. Outside the
   // archive that copy is the right answer and the cache serves it...
   await OfflineCache.clear();
+  // Somebody signs in: nothing is read or written from this store without a
+  // lease on it (see cacheLease.test.mjs).
+  await OfflineCache.claimFor("tech-a");
   await OfflineCache.put("tickets.1", [{ id: "KK-0818-26-01" }]);
   assert.deepEqual(await OfflineCache.readThrough("tickets.1", failedFetch), [{ id: "KK-0818-26-01" }],
     "the cache really would have answered this");
@@ -241,7 +244,7 @@ test("a read the network could not answer is a gap in the archive, not an empty 
   // ...but inside the build it must not be, or the zip would verify, the
   // README would call itself complete, and the clear would delete a ticket
   // that is nowhere in it.
-  const { blob, summary } = await build(fakeDb({ listTicketsForJob: () => OfflineCache.readThrough("tickets.1", failedFetch) }));
+  const { blob, summary } = await build(fakeDb({ listAllTicketsForJob: () => OfflineCache.readThrough("tickets.1", failedFetch) }));
   assert.equal(summary.tickets, 0);
   assert.equal(summary.missing.length, 1);
   assert.match(summary.missing[0], /^S-1004: .*Failed to fetch/);
@@ -251,7 +254,7 @@ test("a read the network could not answer is a gap in the archive, not an empty 
 test("anything served from this device's memory during a build is flagged too", async () => {
   // The second lock: some other read flipping the banner mid-build means the
   // job in hand is not to be trusted either, whatever it returned.
-  const db = fakeDb({ listJhasForJob: async () => { OfflineCache.noteServingCached(Date.now()); return []; } });
+  const db = fakeDb({ listAllJhasForJob: async () => { OfflineCache.noteServingCached(Date.now()); return []; } });
   try {
     const { summary } = await build(db);
     assert.equal(summary.missing.length, 1);
@@ -274,7 +277,7 @@ test("a ticket read that fails is a gap, not the end of the build", async () => 
       if (ids[0] === "S-1004-T") throw new Error("Failed to fetch");
       return new Map(ids.map(id => [id, { id, status: "Approved", total: 10, lines: [] }]));
     },
-    listTicketsForJob: async dbId => [{ id: `S-100${dbId === 1 ? 4 : 5}-T` }]
+    listAllTicketsForJob: async dbId => [{ id: `S-100${dbId === 1 ? 4 : 5}-T` }]
   });
   const { summary } = await buildArchive({ jobs, mode: "year", from: "2026-01-01", to: "2026-12-31", db });
   // The second job was still read, and the first job's failure is on record.
@@ -303,7 +306,7 @@ test("an invoice that would not render is a named gap, and the ticket is still a
 
 test("a report PDF that would not download is a named gap too", async () => {
   const { blob, summary } = await build(fakeDb({
-    listReportsForJob: async () => [{ file: "RT report.pdf", pdfKey: "reports/rt.pdf" }],
+    listAllReportsForJob: async () => [{ file: "RT report.pdf", pdfKey: "reports/rt.pdf" }],
     downloadObject: async () => { throw new Error("storage said no"); }
   }));
   assert.equal(summary.reports, 0, "nothing was retrieved, so nothing is counted");
@@ -315,8 +318,8 @@ test("a report PDF that would not download is a named gap too", async () => {
 
 test("the build records what each job held, for the clear to check against", async () => {
   const db = fakeDb({
-    listJhasForJob: async () => [{ workDate: "2026-08-18", pdfKey: "" }],
-    listReportsForJob: async () => []
+    listAllJhasForJob: async () => [{ workDate: "2026-08-18", pdfKey: "" }],
+    listAllReportsForJob: async () => []
   });
   const { summary } = await build(db);
   const held = summary.jobCounts["1"];

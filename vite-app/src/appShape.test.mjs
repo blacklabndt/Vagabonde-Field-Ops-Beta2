@@ -18,7 +18,11 @@ test("clearSessionState is declared above the recheck effect that captures it", 
 test("every early return in App comes after the last hook call", () => {
   // Hooks below an early return run on some renders and not others, which
   // React refuses with "Rendered more hooks than during the previous render".
-  const firstReturn = src.search(/\n  if \(checkingSession\)/);
+  // The condition is not pinned, only the guard: the boot spinner now stands
+  // aside for a password-reset landing (`checkingSession && !recovering`), and
+  // a later reason may join it. What must not move is that this is the FIRST
+  // early return and that no hook sits below it.
+  const firstReturn = src.search(/\n  if \(checkingSession\b/);
   assert.ok(firstReturn > 0, "the checkingSession early return should exist");
   const body = src.slice(firstReturn);
   // Any `useSomething(`, not a list: App calls useModalPanel, which a named

@@ -239,7 +239,11 @@ export function ArchiveDialog({ mode, currentUser, onClose, onCleared }) {
     const problems = await mapLimit(activeJobs, RECHECK_CONCURRENCY, async j => {
       try {
         const [tickets, jhas, reports] = await Promise.all([
-          Db.listTicketsForJob(j.dbId), Db.listJhasForJob(j.dbId), Db.listReportsForJob(j.dbId)
+          // The same three paged reads the build used — the whole point of
+          // the comparison is that both sides can see past the 1,000-row
+          // response cap. Job detail's unpaged reads truncate identically
+          // on both sides, which makes a drifted job look unchanged.
+          Db.listAllTicketsForJob(j.dbId), Db.listAllJhasForJob(j.dbId), Db.listAllReportsForJob(j.dbId)
         ]);
         const drift = archiveDrift(j, counts[String(j.dbId)], { tickets: tickets.length, jhas: jhas.length, reports: reports.length, ids: archiveIds(tickets, jhas, reports) });
         return drift ? `${drift} Nothing has been removed.` : "";

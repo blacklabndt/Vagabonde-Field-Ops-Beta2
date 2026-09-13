@@ -59,7 +59,44 @@ test("a network failure never signs the user out", async () => {
     // signOut in `base` throws if called, which is the assertion
   }));
   assert.equal(r.user.name, "K. Keith");
-  assert.equal(r.reason, "profile-unreachable");
+  assert.equal(r.reason, "profile-unreadable");
+  assert.ok(!r.signedOut);
+});
+
+test("a server error is a failed read too, and never signs the user out", async () => {
+  // The one that cost a tablet its morning: Supabase answers 502 through
+  // Cloudflare on a device with perfect signal, so isNetworkError says no,
+  // the old guard let it through as "this account has no profile", and
+  // App.jsx answered signedOut by clearing the cache — every WIP ticket and
+  // assessment with it. Any error is an unread profile, full stop.
+  for (const error of [
+    { code: "500", message: "Internal Server Error" },
+    { code: "PGRST301", message: "JWT expired" },
+    { message: "<html><title>502 Bad Gateway</title></html>" }
+  ]) {
+    const r = await restoreSession(base({
+      fetchProfile: async () => ({ data: null, error }),
+      readIdentity: async () => CACHED
+      // signOut in `base` throws if called, which is the assertion
+    }));
+    assert.equal(r.user.name, "K. Keith", error.message);
+    assert.equal(r.reason, "profile-unreadable");
+    assert.ok(!r.signedOut);
+  }
+});
+
+test("a remembered identity is not restored for a different account", async () => {
+  // The session says u2; the device remembers u1. That is the last person's
+  // identity, and handing it over would put their name and tabs on somebody
+  // else's session. Sign-in, not a handover — and still no sign-out, because
+  // nothing was read about u2 either way.
+  const r = await restoreSession(base({
+    getSession: async () => ({ data: { session: { user: { id: "u2", email: "b@example.ca" } } } }),
+    fetchProfile: async () => ({ data: null, error: { code: "500", message: "Internal Server Error" } }),
+    readIdentity: async () => CACHED
+  }));
+  assert.equal(r.user, null);
+  assert.equal(r.offline, true);
   assert.ok(!r.signedOut);
 });
 

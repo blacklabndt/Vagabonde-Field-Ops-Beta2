@@ -37,12 +37,16 @@ async function withUnreadable(key, fn) {
 
 // readThrough deliberately does not await the write it starts — a read must
 // not wait on disk. So poll for the outcome instead of sleeping.
+// The deadline is performance.now() and never Date.now(), because `at()` below
+// holds Date.now still — so a wait inside one that never came true polled for
+// ever instead of failing, and one hung test file took the whole suite's
+// summary with it.
 async function eventually(fn, what = "the expected state", ms = 2000) {
-  const until = Date.now() + ms;
+  const until = performance.now() + ms;
   for (;;) {
     const v = await fn();
     if (v) return v;
-    if (Date.now() > until) throw new Error(`Timed out waiting for ${what}`);
+    if (performance.now() > until) throw new Error(`Timed out waiting for ${what}`);
     await new Promise(r => setTimeout(r, 5));
   }
 }
@@ -58,9 +62,48 @@ async function at(ts, fn) {
 
 const failedFetch = () => { throw new TypeError("Failed to fetch"); };
 
+// Writing straight to IndexedDB, behind the module's back. Since the lease
+// went in, nothing reads or writes a row without one — which is the point —
+// so a store left by an OLDER build, or by another tab, can only be set up
+// from outside. Every "this is the state a real tablet is in" fixture below
+// uses these; the module's own put/read are for what the app does.
+async function rawDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("nde-offline-cache", 1);
+    req.onupgradeneeded = () => { req.result.createObjectStore("reads", { keyPath: "key" }); };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function rawWrite(run) {
+  const db = await rawDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("reads", "readwrite");
+    run(tx.objectStore("reads"));
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+// An empty store with no marker at all: a device from before any of this.
+const rawWipe = () => rawWrite(store => store.clear());
+const rawPut = (key, value) => rawWrite(store => store.put({ key, value, at: Date.now() }));
+const rawRead = async key => {
+  const db = await rawDb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction("reads", "readonly").objectStore("reads").get(key);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+};
+
 beforeEach(async () => {
   nav.onLine = true;
-  await OfflineCache.clear();
+  // A fresh device, then somebody signs in. Every fenced read and write needs
+  // a lease, and in the app one is always held by the time a screen reads a
+  // row — the boot claims or adopts before anything else happens.
+  await rawWipe();
+  await OfflineCache.claimFor("tech-a");
 });
 
 test("a read that answers is the answer, and it is remembered", async () => {
@@ -246,6 +289,9 @@ test("signing out empties the cache — and the guard that skips writes with it"
   // The same fetch, unchanged, must reach disk again: the skip-unchanged guard
   // used to survive the clear, so the next session's offline copy was silently
   // never written.
+  // Signing back in is what binds the next lease; nothing is written between
+  // the sign-out and it.
+  await OfflineCache.claimFor("tech-a");
   await OfflineCache.readThrough("rates.default", async () => rates);
   const hit = await eventually(() => OfflineCache.read("rates.default"), "the rebuilt offline copy");
   assert.deepEqual(hit.value, rates);
@@ -270,8 +316,9 @@ test("an unclaimed device whose remembered identity is this person keeps its cac
   // records owners starts up: an identity from the last sign-in, and no owner
   // beside it. Treating that as a stranger's device would empty the store of
   // the person doing the signing in, half-entered ticket and all.
-  await OfflineCache.put(IDENTITY_KEY, { id: "tech-a", name: "Kyle Keith" });
-  await OfflineCache.put("ticket.wip.J-77", { weldLines: [{ key: "rt_film:2in", qty: 14 }] });
+  await rawWipe();
+  await rawPut(IDENTITY_KEY, { id: "tech-a", name: "Kyle Keith" });
+  await rawPut("ticket.wip.J-77", { weldLines: [{ key: "rt_film:2in", qty: 14 }] });
   assert.equal(await OfflineCache.owner(), null);
 
   assert.equal(await OfflineCache.claimFor("tech-a"), false, "adopting what is already theirs is not a handover");
@@ -279,9 +326,9 @@ test("an unclaimed device whose remembered identity is this person keeps its cac
   assert.equal(await OfflineCache.owner(), "tech-a", "and the device is claimed from now on");
 
   // Somebody else arriving at the same unclaimed device is still a handover.
-  await OfflineCache.clear();
-  await OfflineCache.put(IDENTITY_KEY, { id: "tech-a", name: "Kyle Keith" });
-  await OfflineCache.put("ticket.wip.J-77", { weldLines: [] });
+  await rawWipe();
+  await rawPut(IDENTITY_KEY, { id: "tech-a", name: "Kyle Keith" });
+  await rawPut("ticket.wip.J-77", { weldLines: [] });
   assert.equal(await OfflineCache.claimFor("tech-b"), true);
   assert.equal(await OfflineCache.read("ticket.wip.J-77"), null, "the last crew's hours are not the new signer's to see");
 });
@@ -296,12 +343,14 @@ test("a clear that fails leaves the device the last owner's, and says so out lou
   await OfflineCache.claimFor("tech-a");
   await OfflineCache.put("ticket.wip.J-77", { weldLines: [{ key: "rt_film:2in", qty: 14 }] });
 
-  const realClear = OfflineCache.clear;
-  OfflineCache.clear = async () => { throw new Error("the store would not empty"); };
+  // The clear is now inside the claim's own transaction, so this is what a
+  // store that will not empty looks like from in there.
+  const realClear = IDBObjectStore.prototype.clear;
+  IDBObjectStore.prototype.clear = () => { throw new Error("the store would not empty"); };
   try {
     await assert.rejects(() => OfflineCache.claimFor("tech-b"), /would not empty/);
   } finally {
-    OfflineCache.clear = realClear;
+    IDBObjectStore.prototype.clear = realClear;
   }
 
   assert.equal(await OfflineCache.owner(), "tech-a", "still A's device, so the next try clears again");
@@ -326,21 +375,22 @@ test("an unreadable owner record refuses the claim and clears nothing", async ()
   // The remembered-identity probe is the other half of the same answer: it is
   // the whole of the "unclaimed, but already theirs" case, so an unreadable
   // one must not fall through to the clear either.
-  await OfflineCache.clear();
-  await OfflineCache.put(IDENTITY_KEY, { id: "tech-a", name: "Kyle Keith" });
-  await OfflineCache.put("ticket.wip.J-77", { weldLines: [] });
+  await rawWipe();
+  await rawPut(IDENTITY_KEY, { id: "tech-a", name: "Kyle Keith" });
+  await rawPut("ticket.wip.J-77", { weldLines: [] });
 
   await withUnreadable(IDENTITY_KEY, async () => {
     await assert.rejects(() => OfflineCache.claimFor("tech-a"), /would not read/);
   });
-  assert.ok(await OfflineCache.read("ticket.wip.J-77"), "nothing was emptied on a read nobody could make");
+  assert.ok(await rawRead("ticket.wip.J-77"), "nothing was emptied on a read nobody could make");
   assert.equal(await OfflineCache.owner(), null, "and the device is still unclaimed");
 });
 
 test("a device nobody has claimed is emptied on the next sign-in", async () => {
   // Either a store written before owners were recorded, or one whose owner
   // was cleared with it. Unknown provenance is not "mine".
-  await OfflineCache.put("job.J-9", { id: "J-9" });
+  await rawWipe();
+  await rawPut("job.J-9", { id: "J-9" });
   assert.equal(await OfflineCache.owner(), null);
 
   assert.equal(await OfflineCache.claimFor("tech-a"), true);

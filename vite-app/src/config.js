@@ -47,10 +47,16 @@ function fetchWithCeiling(input, init = {}) {
   const ceiling = FUNCTIONS.test(url) ? FUNCTION_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
   const timer = setTimeout(() => controller.abort(), ceiling);
 
-  // Respect a caller's own signal as well as ours.
+  // Respect a caller's own signal as well as ours — and let go of it when the
+  // request settles. `{ once: true }` removes the listener when it FIRES, not
+  // when the fetch finishes, so a caller that reuses one long-lived controller
+  // (a screen-lifetime signal over a session's worth of reads) accumulated a
+  // listener per request on a signal that never aborts, and every one of them
+  // held that request's controller.
+  const relay = () => controller.abort();
   if (init.signal) {
     if (init.signal.aborted) controller.abort();
-    else init.signal.addEventListener("abort", () => controller.abort(), { once: true });
+    else init.signal.addEventListener("abort", relay, { once: true });
   }
 
   return fetch(input, { ...init, signal: controller.signal })
@@ -60,7 +66,10 @@ function fetchWithCeiling(input, init = {}) {
       if (err && err.name === "AbortError") throw new TypeError("Failed to fetch — the request timed out.");
       throw err;
     })
-    .finally(() => clearTimeout(timer));
+    .finally(() => {
+      clearTimeout(timer);
+      if (init.signal) init.signal.removeEventListener("abort", relay);
+    });
 }
 
 // Where supabase-js keeps the signed-in session. It derives this key from the

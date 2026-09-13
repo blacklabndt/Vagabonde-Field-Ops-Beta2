@@ -572,7 +572,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
   // state, and the toast outlives the screen — a save navigates away and it
   // followed onto the job page, where the button did nothing and said so by
   // vanishing. It goes with the screen.
-  useEffect(() => () => Toasts.clearAction(), []);
+  useEffect(() => () => Toasts.clearAction("ticket-editor"), []);
 
   const discardRecovered = () => {
     OfflineCache.remove(wipKey);
@@ -758,6 +758,9 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
   const setOtherQty = (key, qty) => { clearSaveError(); setOtherLines(p => p.map(l => l.key === key ? { ...l, qty: Math.max(0, qty) } : l)); };
   const removeWeld = key => { clearSaveError(); setWeldLines(p => p.filter(l => l.key !== key)); };
   const removeOther = key => { clearSaveError(); setOtherLines(p => p.filter(l => l.key !== key)); };
+  // Every Undo this screen raises is signed with it, so the unmount below
+  // takes down its own and never a chase's Stop button.
+  const TOAST_OWNER = "ticket-editor";
   // By position: an off-card line has no catalog key to be known by. Dropping
   // one takes real money off the ticket, so it offers an Undo that puts the
   // line back exactly where it was, rate and quantity intact.
@@ -766,7 +769,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
     const removed = orphanLines[i];
     setOrphanLines(p => p.filter((_, j) => j !== i));
     if (removed) Toasts.show(`Removed ${removed.label}`, "ok", false, {
-      label: "Undo",
+      label: "Undo", owner: TOAST_OWNER,
       onClick: () => setOrphanLines(p => { const next = [...p]; next.splice(Math.min(i, next.length), 0, removed); return next; })
     });
   };
@@ -777,7 +780,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
     const idx = crew.findIndex(x => x.profileId === c.profileId);
     setCrew(p => p.filter(x => x.profileId !== c.profileId));
     Toasts.show(`Removed ${c.name}`, "ok", false, {
-      label: "Undo",
+      label: "Undo", owner: TOAST_OWNER,
       onClick: () => setCrew(p => p.some(x => x.profileId === c.profileId)
         ? p
         : (() => { const next = [...p]; next.splice(Math.min(idx, next.length), 0, c); return next; })())
@@ -863,7 +866,7 @@ export function TicketMobileScreen({ job, jobRecord, currentUser, onSaved, ticke
     // Past this point the lines and crew have been read into a payload — a
     // queued save keeps this screen up, and an Undo pressed after it would
     // change the form without changing what is going to be sent.
-    Toasts.clearAction();
+    Toasts.clearAction(TOAST_OWNER);
     setSaving(true);
     setSavingSend(!!sendForApproval);
     setSaveError("");
