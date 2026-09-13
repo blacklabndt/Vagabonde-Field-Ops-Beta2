@@ -33,11 +33,14 @@ export const MAX_NAME = 80;
 export type Cell = string | number | null;
 export interface Table { columns: string[]; rows: Cell[][] }
 export interface Sheet extends Table { name: string }
-export interface Section { heading?: string; text?: string; table?: Table }
+// Reserve more than the bundled PNG data URI plus figure markup per occurrence.
+export const ASSET_BUDGET = 40_000;
+export interface AppImage { asset: "vagabonde-logo"; caption?: string }
+export interface Section { heading?: string; text?: string; table?: Table; image?: AppImage }
 export interface Doc { title: string; subtitle?: string; sections: Section[] }
 export interface AskFile {
   name: string; kind: FileKind;
-  text?: string; table?: Table; sheets?: Sheet[]; document?: Doc;
+  text?: string; table?: Table; sheets?: Sheet[]; document?: Doc; images?: AppImage[];
 }
 
 export function isFileKind(v: unknown): v is FileKind {
@@ -80,16 +83,31 @@ function checkTable(raw: unknown, where: string, rowsSoFar: number): Table {
   return { columns, rows };
 }
 
+function checkImage(raw: unknown): AppImage {
+  const r = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  if (r.asset !== "vagabonde-logo") throw refuse("Unknown app asset. Use vagabonde-logo; URLs and storage paths are not supported.");
+  const caption = str(r.caption)?.trim();
+  if (r.caption != null && (typeof r.caption !== "string" || (caption?.length ?? 0) > 300)) throw refuse("An image caption must be text of at most 300 characters.");
+  return { asset: "vagabonde-logo", ...(caption ? { caption } : {}) };
+}
+
 // The tool's input, checked and shaped, or a refusal in words.
 export function checkFile(raw: unknown): AskFile {
   const r = (raw && typeof raw === "object") ? raw as Record<string, unknown> : {};
   if (!isFileKind(r.kind)) throw refuse(`kind must be one of ${FILE_KINDS.join(", ")}.`);
   const kind = r.kind;
   const name = safeName(r.name, kind);
+  if (r.images != null && kind !== "html") throw refuse("Top-level images are for HTML only; PDF images belong in sections.");
   if (kind === "html" || kind === "css") {
     const text = str(r.text);
     if (!text || !text.trim()) throw refuse(`A ${kind} file needs text — the file's whole content.`);
     if (text.length > MAX_TEXT_CHARS) throw refuse(`The text is ${text.length} characters; the most is ${MAX_TEXT_CHARS}.`);
+    if (kind === "html" && r.images != null) {
+      if (!Array.isArray(r.images) || r.images.length > 4) throw refuse("HTML images must be a list of at most four app assets.");
+      const images = r.images.map(checkImage);
+      if (new TextEncoder().encode(text).length + images.length * ASSET_BUDGET > MAX_TEXT_CHARS) throw refuse("Text and embedded images exceed the 200000 byte file budget.");
+      return { name, kind, text, images };
+    }
     return { name, kind, text };
   }
   if (kind === "csv") {
@@ -120,10 +138,11 @@ export function checkFile(raw: unknown): AskFile {
   let rowsSoFar = 0;
   let chars = title.length;
   const sections = d.sections.map((s, i) => {
-    const o = (s && typeof s === "object") ? s as { heading?: unknown; text?: unknown; table?: unknown } : {};
+    const o = (s && typeof s === "object") ? s as { heading?: unknown; text?: unknown; table?: unknown; image?: unknown } : {};
     const section: Section = {};
     const heading = str(o.heading)?.trim();
     const text = str(o.text)?.trim();
+    if (o.image != null) { section.image = checkImage(o.image); chars += ASSET_BUDGET; }
     if (heading) section.heading = heading;
     if (text) section.text = text;
     chars += (heading?.length ?? 0) + (text?.length ?? 0);
@@ -131,7 +150,7 @@ export function checkFile(raw: unknown): AskFile {
       section.table = checkTable(o.table, `Section ${i + 1}'s table`, rowsSoFar);
       rowsSoFar += section.table.rows.length;
     }
-    if (!section.heading && !section.text && !section.table) throw refuse(`Section ${i + 1} is empty — give it a heading, text or a table.`);
+    if (!section.heading && !section.text && !section.table && !section.image) throw refuse(`Section ${i + 1} is empty — give it a heading, text or a table.`);
     return section;
   });
   if (chars > MAX_TEXT_CHARS) throw refuse(`The document's text is ${chars} characters; the most is ${MAX_TEXT_CHARS}.`);
@@ -143,12 +162,12 @@ export function checkFile(raw: unknown): AskFile {
 
 // A rough size, for the tool's reply and the card, before the bytes exist.
 export function fileChars(file: AskFile): number {
-  if (file.text) return file.text.length;
+  if (file.text) return file.text.length + (file.images?.length ?? 0) * ASSET_BUDGET;
   const tableChars = (t: Table) => t.columns.join(",").length + t.rows.reduce((n, r) => n + r.map(c => String(c ?? "")).join(",").length + 2, 0);
   if (file.table) return tableChars(file.table);
   if (file.sheets) return file.sheets.reduce((n, s) => n + tableChars(s), 0);
   if (file.document) {
-    return file.document.title.length + file.document.sections.reduce((n, s) => n + (s.heading?.length ?? 0) + (s.text?.length ?? 0) + (s.table ? tableChars(s.table) : 0), 0);
+    return file.document.title.length + file.document.sections.reduce((n, s) => n + (s.image ? ASSET_BUDGET : 0) + (s.heading?.length ?? 0) + (s.text?.length ?? 0) + (s.table ? tableChars(s.table) : 0), 0);
   }
   return 0;
 }
