@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { askTurns, pushTurn, threadForSend, forgetAskThread, dropAction, dropLearned, isConfirmAction, confirmLabel, formLabel, jobLinks, mergeDictation, foldTranscripts, ASK_KEEP } from "./askThread.js";
+import { learnTrouble, LEARN_TROUBLE } from "../../supabase/functions/_shared/askLearn.ts";
 
 test("follow-up references survive sending and dropping a proposal, then disappear on sign-out", () => {
   forgetAskThread();
@@ -74,20 +75,24 @@ test("the words for a refused note never carry the database's own", () => {
   // for whoever runs the database. The cap's sentence is ours and is meant
   // to be read, so it passes; everything else is one fixed sentence, and the
   // real words go to function_errors where the office reads them.
+  //
+  // The wording now lives in askLearn.ts (learnTrouble), where it is run
+  // rather than read; the write paths and their log lines are exercised in
+  // askLearn.test.mjs through applyLearned. What is checked here is the
+  // seam in the function: the log lines it makes itself, and that every
+  // line the orchestrator hands back is written to the office.
+  const cap = "Ask has kept as much as it can hold from you — forget a note to make room.";
+  assert.equal(learnTrouble(cap), cap, "the cap's own sentence is recognised");
+  const raw = 'new row violates row-level security policy for table "ask_learned"';
+  assert.equal(learnTrouble(raw), LEARN_TROUBLE, "and anything else becomes the fixed one");
+  assert.doesNotMatch(learnTrouble(raw), /ask_learned|policy/, "the database's words never reach the browser");
   const src = readFileSync(new URL("../../supabase/functions/ask/index.ts", import.meta.url), "utf8");
-  const fn = src.slice(src.indexOf("function learnTrouble("), src.indexOf("function learnTrouble(") + 220);
-  assert.match(fn, /as much as it can hold/, "the cap's own sentence is recognised");
-  assert.match(fn, /LEARN_TROUBLE/, "and anything else becomes the fixed one");
-  assert.doesNotMatch(fn, /\$\{message\}/, "the database's words are never interpolated for the browser");
-  // And they are not merely dropped: every failure path logs what happened.
-  // Named, not counted — a count fails when a new path is added, which says
-  // nothing about whether the new path logs.
-  const learn = src.slice(src.indexOf("async function learn("), src.indexOf("const LEARN_TROUBLE"));
-  assert.match(learn, /logError\("ask", `a note could not be corrected: \$\{error\.message\}`/);
-  assert.match(learn, /logError\("ask", `a note could not be kept: \$\{error\.message\}`/);
+  const learn = src.slice(src.indexOf("async function learn("), src.indexOf("\n}", src.indexOf("return { added: outcome.added")));
   assert.match(learn, /logError\("ask", `the learning call was \$\{chars\} characters/);
-  // Every trouble the card is given comes with a log beside it.
-  assert.equal((learn.match(/trouble/g) ?? []).length >= (learn.match(/logError/g) ?? []).length, true);
+  assert.match(learn, /logError\("ask", `the learning call was refused with/);
+  assert.match(learn, /logError\("ask", `the learning reply was cut off/);
+  assert.match(learn, /for \(const line of outcome\.log\) await logError\("ask", line/);
+  assert.doesNotMatch(learn, /learnTrouble: .*error\.message|trouble: error\.message/, "no raw message is ever handed to the card");
 });
 
 test("only a refusal we wrote carries its own words out; everything else is masked", () => {
