@@ -40,7 +40,7 @@ import { isKind, localToUtc, checkRunAt, whenWords, labelFor, scheduleWords, can
 import { askLoop, systemPrompt, windowTurns, API_URL, API_VERSION } from "../_shared/askLoop.ts";
 import { followUpLines } from "../_shared/askContext.ts";
 import { createInvestigation } from "../_shared/askInvestigation.ts";
-import { learnBody, parseLearned, roomFor, learnedLines, forgetWords, LEARN_MODEL, MAX_LEARN_REQUEST_CHARS, MAX_LEARNED, type LearnedRow } from "../_shared/askLearn.ts";
+import { learnBody, parseLearned, planLearning, learnedLines, learningQuery, forgetWords, LEARN_MODEL, MAX_LEARN_REQUEST_CHARS, MAX_LEARNED, type LearnedRow } from "../_shared/askLearn.ts";
 import {
   LEASE_STALE_SECONDS, usageTokens, cacheUsage, reserveFor, billedNothing,
   requestDeadline, readUntil, callTimeout, timeToLearn,
@@ -1153,7 +1153,9 @@ Deno.serve(async (req) => {
       // close the block it sits in. That is a cost, not a boundary — the
       // boundary is that nothing here can act. Tools run as the caller under
       // RLS and every write waits for the person's confirm on the card.
-      [learnedLines(learnedRows, crypto.randomUUID().slice(0, 8), windowTurns(thread).filter(t => t.role === "user").at(-1)?.text ?? ""),
+      // Ranked against the newest question and a little of what the person
+      // asked before it, so "do that again" finds the task named earlier.
+      [learnedLines(learnedRows, crypto.randomUUID().slice(0, 8), learningQuery(windowTurns(thread))),
         followUpLines(thread, tools.map(t => t.name))].filter(Boolean).join("\n\n"));
     // Then it learns: one small call over the conversation's own text (never
     // a tool result) and the notes it has, and the rows it decides on are
@@ -1251,7 +1253,13 @@ async function learn(asUser: SupabaseClient, thread: unknown, answer: string, ex
   }
   const reply = (await res.json()) as { content?: { type: string; text?: string }[] };
   const text = (reply.content ?? []).filter(b => b.type === "text").map(b => b.text ?? "").join("\n");
-  const decided = parseLearned(text, existing.map(e => e.id));
+  // Evidence is checked against the very array the extractor was shown.
+  const decided = parseLearned(text, existing.map(e => e.id), turns);
+  // What of it may actually be written, measured against the rows on file.
+  // The arithmetic is in askLearn.ts, where the node suite can run it: a
+  // replace makes no room (it is one row out and one row in), and a replace
+  // that fails makes none either.
+  const plan = planLearning(decided, existing.length);
   const added: { id: string; note: string }[] = [];
   let trouble: string | null = null;
 
@@ -1263,7 +1271,7 @@ async function learn(asUser: SupabaseClient, thread: unknown, answer: string, ex
   // (the note has gone, or it is not this caller's to remove) leaves the old
   // note exactly where it was, which is the right answer to "replace a thing
   // you may not touch" and is why it is not retried as an add.
-  for (const r of decided.replace) {
+  for (const r of plan.replace) {
     const { data, error } = await asUser.rpc("replace_learned", { _old: r.id, _note: r.note });
     if (error) {
       trouble ??= learnTrouble(error.message);
@@ -1277,8 +1285,14 @@ async function learn(asUser: SupabaseClient, thread: unknown, answer: string, ex
     if (row) added.push({ id: row.id, note: row.note });
   }
 
-  const room = roomFor(existing.length - decided.replace.length, decided.add.length);
-  const fresh = decided.add.slice(0, room);
+  // What the cap turned away is SAID — on the card and in the log. A note
+  // the extractor decided on and the person never sees is the one shape a
+  // receipt must not take silently.
+  const fresh = plan.add;
+  if (plan.refused) {
+    trouble ??= LEARN_FULL_WORDS;
+    await logError("ask", `${plan.refused} learned ${plan.refused === 1 ? "note was" : "notes were"} not kept: Ask's memory holds ${MAX_LEARNED} notes and is full`, { user: userId });
+  }
   if (fresh.length) {
     // The insert's answer is READ. It was discarded, so a note the database
     // refused — the per-author cap is the one that will actually fire — was
@@ -1306,6 +1320,7 @@ async function learn(asUser: SupabaseClient, thread: unknown, answer: string, ex
 // error at a time. The real words still reach the office, through
 // function_errors, where the digest and Home's strip read them.
 const LEARN_TROUBLE = "Something Ask learned could not be kept. The answer above is unaffected.";
+const LEARN_FULL_WORDS = `Ask's memory is full (${MAX_LEARNED} notes), so something from this conversation was not kept. Forget a note or two to make room. The answer above is unaffected.`;
 
 function learnTrouble(message: string): string {
   return /as much as it can hold/i.test(message) ? message : LEARN_TROUBLE;

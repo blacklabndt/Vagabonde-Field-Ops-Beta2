@@ -281,12 +281,12 @@ export const ASK_TOOLS: AskTool[] = [
   },
   {
     name: "list_learned", tab: "board",
-    description: "What Ask has learned from the crew about how the app works — kept on its own after conversations: id, the note, who said it and their role, when. Use it when asked what Ask remembers or has learned.",
+    description: "What Ask has learned from the crew — facts about how the app works and task methods (notes beginning 'Task:') the crew taught it — kept on its own after conversations, shared by the whole crew: id, the note, who said it and their role, when. Use it when asked what Ask remembers, has learned or knows how to do.",
     input_schema: { type: "object", properties: {}, additionalProperties: false }
   },
   {
     name: "forget_learned", tab: "board",
-    description: "Propose forgetting one learned note by the id list_learned gave: the card asks the person to confirm. Only the person who said it, or an Admin, can forget it; nothing changes until they confirm.",
+    description: "Propose forgetting one learned note — an app fact or a Task: method — by the id list_learned gave: the card asks the person to confirm. Only the person who said it, or an Admin, can forget it; nothing changes until they confirm.",
     input_schema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false }
   },
   {
