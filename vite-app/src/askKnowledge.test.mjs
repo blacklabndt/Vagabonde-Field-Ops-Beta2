@@ -51,3 +51,14 @@ test("the where line names the screen, the job and the ticket, and wraps the hel
   // Help without a known screen has nowhere to belong and is not quoted.
   assert.doesNotMatch(whereLines(cleanContext({ jobNumber: "S-1", help: ["x"] })), /<help/);
 });
+
+test("the knowledge says what Ask can help with beyond records, what it cannot reach, and that its memory is the crew's", () => {
+  // Kyle's ask: help with tasks outside the app too, and learn them. The
+  // sentence the prompt states as fact has to say so — and say the two
+  // honest limits beside it: no browsing, and one memory everybody shares.
+  assert.match(APP_KNOWLEDGE, /helps with general tasks outside the app's records/);
+  assert.match(APP_KNOWLEDGE, /cannot browse or reach any other app/);
+  assert.match(APP_KNOWLEDGE, /task methods the crew teaches it/);
+  assert.match(APP_KNOWLEDGE, /one memory the whole crew shares/);
+  assert.match(APP_KNOWLEDGE, /× to forget it/);
+});

@@ -315,6 +315,29 @@ test("the system prompt names the person, the day in Grande Prairie and the rule
   assert.ok(full.indexOf("KNOWLEDGE HERE") < full.indexOf("Where the person is: job S-1."));
   assert.match(s, /Learning:/);
   assert.match(s, /Files: make_file/);
+  // Three sources, told apart: a record is a tool question and nothing else;
+  // how the app works is the knowledge and the notes; a general task may be
+  // helped with from general knowledge. The old blanket "tools and nothing
+  // else" would have sent "how do I lay out this spreadsheet" to the office.
+  assert.doesNotMatch(s, /Answer from the tools you are given and from nothing else/);
+  assert.match(s, /A RECORD .* comes from the tools you are given and from nothing else/);
+  assert.match(s, /never invent one/);
+  assert.match(s, /GENERAL TASK/);
+  assert.match(s, /General tasks: when a missing detail would change the answer, ask/);
+  // And no pretending: Ask has no browser and no other app.
+  assert.match(s, /Never claim to have looked anything up outside this app, to have browsed/);
+  assert.match(s, /unverified/);
+  // A learned method composes what exists and adds no authority.
+  assert.match(s, /never adds a tool, a permission, or a way around the card's confirm/);
+  // Learning covers task methods; a save is never promised before it lands;
+  // an Admin's word is about the app, not about everything.
+  assert.match(s, /short task methods/);
+  assert.match(s, /never promise that something will be remembered/);
+  assert.match(s, /attribution, not expertise/);
+  assert.match(s, /this message wins/);
+  // Money and drafting rules are untouched by any of it.
+  assert.match(s, /a null total means this person may not see money/);
+  assert.match(s, /A send tool sends nothing/);
   // The crew's notes are NOT in the system message. It is the owner's words
   // and nothing a colleague can type: a note reaches the model in the
   // conversation, where tool results and a client's own text already live.

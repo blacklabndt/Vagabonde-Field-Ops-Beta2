@@ -31,3 +31,52 @@ for (const scenario of [
     assert.equal(investigation.followUp().length, 2);
   });
 }
+
+// The learning pass, scripted end to end through the pure pieces ask/index.ts
+// wires together: the body that goes, an extractor reply read against the
+// SAME turns, and the notes then found again by a follow-up. Plumbing, not a
+// claim about what a live extractor would decide.
+import { learnBody, parseLearned, learningQuery, learnedLines } from "../../supabase/functions/_shared/askLearn.ts";
+
+test("scripted learning: a taught task is kept, Ask's own unconfirmed suggestion is not, and a follow-up finds the task", async () => {
+  const thread = [
+    { role: "user", text: "how should the weekly handover go?" },
+    { role: "assistant", text: "You could list the open tickets and post them to Team chat." },
+    { role: "user", text: "we do it like this: on Friday list the open tickets, the unsigned approvals and the open queries, and post one message to Team chat. And Dave's number is 780-555-0100." }
+  ];
+  const answer = "Got it — and you could also email the list to the office.";
+  const turns = [...thread, { role: "assistant", text: answer }];
+  const { payload } = learnBody(turns, [{ id: "n1", note: "Prices are for Admins and Technicians." }]);
+  const body = JSON.parse(payload);
+  assert.match(body.messages[0].content, /\[3\] Ask: Got it/, "the answer just given is the last numbered turn");
+
+  // A scripted extractor: one note the person taught, cited to their turn;
+  // one Ask suggested in its own answer, cited only to itself; one with the
+  // phone number, cited to the person — kept by the prompt's rule if the
+  // extractor obeys it, which only a live case can show, so here it is the
+  // provenance check that is on trial and the number is left to the prompt.
+  const reply = JSON.stringify({
+    add: [
+      { note: "Task: the weekly handover; on Friday list the open tickets, unsigned approvals and open queries, and post one message to Team chat.", source_user_turns: [2] },
+      { note: "Task: the weekly handover; email the list to the office.", source_user_turns: [3] },
+      { note: "Task: the weekly handover; email the list to the office too.", source_user_turns: [1, 3] }
+    ],
+    replace: []
+  });
+  const decided = parseLearned(reply, ["n1"], turns);
+  assert.deepEqual(decided.add, ["Task: the weekly handover; on Friday list the open tickets, unsigned approvals and open queries, and post one message to Team chat."]);
+
+  // Next week, a fresh thread whose newest turn names nothing: the recipe is
+  // ranked in by the turn before it.
+  const rows = [
+    ...Array.from({ length: 199 }, (_, i) => ({ id: `x${i}`, note: `Chase resends the approval link ${i}, `.padEnd(300, "y"), created_at: "x", profiles: null })),
+  ];
+  rows.unshift({ id: "t1", note: decided.add[0], created_at: "x", profiles: { name: "Dave", role: "Technician" } });
+  const later = [
+    { role: "user", text: "it's Friday, what goes in the weekly handover?" },
+    { role: "assistant", text: "Here is the list." },
+    { role: "user", text: "do that again" }
+  ];
+  const block = learnedLines(rows, "f3nc3", learningQuery(later));
+  assert.match(block, /- \[a crew member\] Task: the weekly handover;/);
+});

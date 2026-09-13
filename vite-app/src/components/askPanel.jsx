@@ -309,14 +309,17 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
                   })}
                 </div>
               )}
-              {/* What this answer taught Ask about the app — kept on its own,
-                  shown so it is never a secret, with an × that forgets it on
-                  the spot: the person's own note, their own act. */}
+              {/* What this answer taught Ask — an app fact or a "Task:"
+                  method — kept on its own into the memory the WHOLE CREW
+                  shares, which is why the line says so: shown as the exact
+                  text persisted, never a secret, with an × that forgets it on
+                  the spot. The note is rendered as plain text; nothing in it
+                  is markup. */}
               {t.learned && t.learned.length > 0 && (
                 <div className="ask-learned">
                   {t.learned.map(n => (
                     <div key={n.id} className="ask-learned-note">
-                      <span>Learned: {n.note}</span>
+                      <span>Learned for the crew: {n.note}</span>
                       <button type="button" className="ask-learned-x" title="Forget this" aria-label={`Forget: ${n.note}`}
                         onClick={async () => {
                           setError("");

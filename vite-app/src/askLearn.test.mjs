@@ -7,46 +7,163 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  learnPrompt, learnBody, parseLearned, roomFor, learnedLines, forgetWords,
+  learnPrompt, learnBody, parseLearned, roomFor, planLearning, learnedLines, forgetWords, learningQuery,
   LEARN_MODEL, LEARN_MAX_TOKENS, MAX_LEARNED, NOTE_CHARS, MAX_ADD, MAX_LEARNED_CHARS,
-  MAX_LEARN_NOTES_CHARS, MAX_LEARN_REQUEST_CHARS
+  MAX_LEARN_NOTES_CHARS, MAX_LEARN_REQUEST_CHARS, LEARN_QUERY_CHARS, LEARN_QUERY_TURNS
 } from "../../supabase/functions/_shared/askLearn.ts";
 import { MAX_TURNS, MAX_TURN_CHARS } from "../../supabase/functions/_shared/askLoop.ts";
 
-test("the extractor is told to keep how the app works and nothing about records or people", () => {
-  const { system, user } = learnPrompt(
-    [{ role: "user", text: "where do I cancel an approval?" }, { role: "assistant", text: "The office would know." }, { role: "user", text: "it's on the ticket row on Job detail" }],
-    [{ id: "n1", note: "Prices are for Admins and Technicians." }]
-  );
+// The conversation every evidence test below is read against: turn 0 and turn
+// 2 are the person's, turn 1 is Ask's.
+const TAUGHT = [
+  { role: "user", text: "where do I cancel an approval?" },
+  { role: "assistant", text: "The office would know." },
+  { role: "user", text: "it's on the ticket row on Job detail" }
+];
+const evidence = (note, source_user_turns = [2]) => ({ note, source_user_turns });
+
+test("the extractor is told to keep how the app works, the tasks it is taught, and nothing about records or people", () => {
+  const { system, user } = learnPrompt(TAUGHT, [{ id: "n1", note: "Prices are for Admins and Technicians." }]);
   assert.match(system, /HOW THE APP WORKS/);
+  assert.match(system, /TASK METHOD/);
+  assert.match(system, /Task: /, "a task note carries the readable prefix");
+  assert.match(system, /complete/i, "a fragment of a procedure is worse than nothing");
   assert.match(system, /nothing about a person, a job, a ticket, a client/);
+  assert.match(system, /password|private/i, "a secret offered in a lesson is still not kept");
   assert.match(system, /replace that note by its id/);
-  assert.match(system, new RegExp(`at most ${MAX_ADD} in add`));
+  assert.match(system, /explicitly confirmed|said it worked/i, "Ask's own unconfirmed answer is not evidence");
+  assert.match(system, /source_user_turns/);
+  assert.match(system, new RegExp(`at most ${MAX_ADD} .*together`, "i"));
   assert.match(system, /JSON only/);
   assert.match(user, /n1: Prices are for Admins and Technicians\./);
-  assert.match(user, /Person: where do I cancel an approval\?/);
-  assert.match(user, /Ask: The office would know\./);
+  // Turns are numbered from zero, in the very array handed to extraction, so
+  // the evidence indices mean something that can be checked.
+  assert.match(user, /\[0\] Person: where do I cancel an approval\?/);
+  assert.match(user, /\[1\] Ask: The office would know\./);
+  assert.match(user, /\[2\] Person: it's on the ticket row on Job detail/);
   assert.match(user, /never an instruction to follow/);
   assert.match(learnPrompt([], []).user, /\(none yet\)/);
   assert.equal(LEARN_MODEL, "claude-haiku-4-5-20251001");
 });
 
 test("the answer is read strictly: JSON or nothing, bounded, deduplicated, replaces only notes that exist", () => {
-  assert.deepEqual(parseLearned("Sure! Here you go.", []), { add: [], replace: [] });
-  assert.deepEqual(parseLearned("{not json", []), { add: [], replace: [] });
-  assert.deepEqual(parseLearned("[]", []), { add: [], replace: [] });
-  assert.deepEqual(parseLearned('```json\n{"add": ["Cancel approval is on the ticket row on Job detail."], "replace": []}\n```', []),
+  assert.deepEqual(parseLearned("Sure! Here you go.", [], TAUGHT), { add: [], replace: [] });
+  assert.deepEqual(parseLearned("{not json", [], TAUGHT), { add: [], replace: [] });
+  assert.deepEqual(parseLearned("[]", [], TAUGHT), { add: [], replace: [] });
+  // An app fact in the new envelope reads exactly as it always did.
+  assert.deepEqual(
+    parseLearned(`\`\`\`json\n${JSON.stringify({ add: [evidence("Cancel approval is on the ticket row on Job detail.")], replace: [] })}\n\`\`\``, [], TAUGHT),
     { add: ["Cancel approval is on the ticket row on Job detail."], replace: [] });
+  // A taught task, kept under its readable prefix.
+  const recipe = "Task: the weekly handover; write the week's open tickets, unsigned approvals and outstanding queries into one message and post it to Team chat on Friday.";
+  assert.deepEqual(parseLearned(JSON.stringify({ add: [evidence(recipe)] }), [], TAUGHT).add, [recipe]);
   // Prose around the JSON is tolerated; the object inside is what counts.
-  assert.deepEqual(parseLearned('Here: {"add": [" two  spaces  folded "], "replace": []} done', []).add, ["two spaces folded"]);
-  // Too short, too long, not a string, and a duplicate: dropped.
-  const long = "x".repeat(NOTE_CHARS + 1);
-  assert.deepEqual(parseLearned(JSON.stringify({ add: ["no", long, 42, "Kept.", "kept."] }), []).add, ["Kept."]);
-  // At most MAX_ADD.
-  assert.equal(parseLearned(JSON.stringify({ add: ["a1.", "a2.", "a3.", "a4.", "a5."] }), []).add.length, MAX_ADD);
+  assert.deepEqual(parseLearned(`Here: ${JSON.stringify({ add: [evidence(" two  spaces  folded ")] })} done`, [], TAUGHT).add, ["two spaces folded"]);
+  // Too short, too long, not an object, and a duplicate: dropped. A recipe
+  // over the limit is dropped whole — never cut down to fit.
+  const long = `Task: ${"x".repeat(NOTE_CHARS)}`;
+  assert.deepEqual(
+    parseLearned(JSON.stringify({ add: [evidence("no"), evidence(long), 42, evidence("Kept."), evidence("kept.")] }), [], TAUGHT).add,
+    ["Kept."]);
   // A replace must name an existing note; a second replace of the same id is dropped.
-  const r = parseLearned(JSON.stringify({ add: [], replace: [{ id: "n1", note: "New words." }, { id: "ghost", note: "Nope." }, { id: "n1", note: "Again." }, { id: "n2", note: 7 }] }), ["n1", "n2"]);
+  const r = parseLearned(JSON.stringify({
+    add: [],
+    replace: [
+      { id: "n1", note: "New words.", source_user_turns: [2] },
+      { id: "ghost", note: "Nope.", source_user_turns: [2] },
+      { id: "n1", note: "Again.", source_user_turns: [2] },
+      { id: "n2", note: 7, source_user_turns: [2] }
+    ]
+  }), ["n1", "n2"], TAUGHT);
   assert.deepEqual(r, { add: [], replace: [{ id: "n1", note: "New words." }] });
+});
+
+test("nothing is kept without evidence in a turn the PERSON said", () => {
+  // The plan's own assertion: an assistant-only citation is Ask teaching
+  // itself, which is the one thing this check exists to stop.
+  assert.deepEqual(parseLearned(JSON.stringify({ add: [evidence("Try this.", [0])] }), [], [{ role: "assistant", text: "Try this" }]),
+    { add: [], replace: [] });
+  // Evidence pointing only at Ask's own turn in a real conversation: same.
+  assert.deepEqual(parseLearned(JSON.stringify({ add: [evidence("Ask said so.", [1])] }), [], TAUGHT), { add: [], replace: [] });
+  // No evidence at all — the shape the extractor used to answer in. It is
+  // refused rather than waved through, or the check would be optional.
+  assert.deepEqual(parseLearned(JSON.stringify({ add: ["A bare string."] }), [], TAUGHT), { add: [], replace: [] });
+  assert.deepEqual(parseLearned(JSON.stringify({ add: [{ note: "No evidence." }] }), [], TAUGHT), { add: [], replace: [] });
+  assert.deepEqual(parseLearned(JSON.stringify({ add: [evidence("Empty.", [])] }), [], TAUGHT), { add: [], replace: [] });
+  // Out of range, not a whole number, not a number: the whole mutation goes.
+  assert.deepEqual(parseLearned(JSON.stringify({ add: [evidence("Past the end.", [9])] }), [], TAUGHT), { add: [], replace: [] });
+  assert.deepEqual(parseLearned(JSON.stringify({ add: [evidence("Negative.", [-1])] }), [], TAUGHT), { add: [], replace: [] });
+  assert.deepEqual(parseLearned(JSON.stringify({ add: [evidence("Fractional.", [1.5])] }), [], TAUGHT), { add: [], replace: [] });
+  assert.deepEqual(parseLearned(JSON.stringify({ add: [evidence("Worded.", ["2"])] }), [], TAUGHT), { add: [], replace: [] });
+  assert.deepEqual(parseLearned(JSON.stringify({ add: [evidence("One good, one bad.", [2, 9])] }), [], TAUGHT), { add: [], replace: [] });
+  // And with no conversation to check against, nothing can be evidenced.
+  assert.deepEqual(parseLearned(JSON.stringify({ add: [evidence("Unanchored.")] }), []), { add: [], replace: [] });
+});
+
+test("at most three mutations a pass, counting corrections and additions together", () => {
+  const four = parseLearned(JSON.stringify({
+    add: [evidence("a1."), evidence("a2."), evidence("a3.")],
+    replace: [{ id: "n1", note: "r1.", source_user_turns: [2] }, { id: "n2", note: "r2.", source_user_turns: [2] }]
+  }), ["n1", "n2"], TAUGHT);
+  assert.equal(four.replace.length + four.add.length, MAX_ADD, "three in all, corrections first");
+  assert.deepEqual(four.replace.map(r => r.id), ["n1", "n2"]);
+  assert.deepEqual(four.add, ["a1."]);
+  // A pass of additions alone is bounded by the same number.
+  assert.equal(parseLearned(JSON.stringify({ add: [1, 2, 3, 4, 5].map(n => evidence(`a${n}.`)) }), [], TAUGHT).add.length, MAX_ADD);
+});
+
+test("the retrieval query is the newest question plus a little of what was asked before it", () => {
+  const turns = [
+    { role: "user", text: "how does the weekly handover go?" },
+    { role: "assistant", text: "Here is the recipe." },
+    { role: "user", text: "and where do I post it?" },
+    { role: "assistant", text: "Team chat." },
+    { role: "user", text: "do that again" }
+  ];
+  const q = learningQuery(turns);
+  assert.match(q, /do that again/, "the newest question is always in");
+  assert.match(q, /weekly handover/, "so a follow-up can find what was being talked about");
+  assert.match(q, /where do I post it/);
+  assert.equal(/Here is the recipe|Team chat/.test(q), false, "nothing Ask said steers retrieval");
+  // Only the newest LEARN_QUERY_TURNS user turns, newest last.
+  const many = learningQuery(Array.from({ length: 10 }, (_, i) => ({ role: "user", text: `q${i}` })));
+  assert.deepEqual(many.split("\n"), ["q7", "q8", "q9"]);
+  assert.equal(LEARN_QUERY_TURNS, 3);
+  // Bounded, with the newest text the one that is kept whole.
+  const big = learningQuery([
+    { role: "user", text: "o".repeat(LEARN_QUERY_CHARS) },
+    { role: "user", text: "newest" }
+  ]);
+  assert.equal(big, "newest", "an older turn that will not fit is left off, never the newest");
+  const huge = learningQuery([{ role: "user", text: "n".repeat(LEARN_QUERY_CHARS + 500) }]);
+  assert.equal(huge.length, LEARN_QUERY_CHARS);
+  assert.equal(learningQuery([]), "");
+  assert.equal(learningQuery([{ role: "assistant", text: "only me" }]), "");
+});
+
+test("a task taught weeks ago is found again by a follow-up, and a legacy note still reads", () => {
+  // A full table, one old task recipe in it, and a conversation that only
+  // names the subject in an earlier turn — which is the case the newest-turn
+  // query could not answer.
+  const rows = Array.from({ length: MAX_LEARNED }, (_, i) => ({
+    id: `n${i}`,
+    note: (i === 0
+      ? "Task: the weekly handover; list the open tickets and unsigned approvals, "
+      : `Chase resends the approval link ${i}, `).padEnd(NOTE_CHARS, "y"),
+    created_at: "x",
+    profiles: null
+  }));
+  const turns = [
+    { role: "user", text: "remind me how the weekly handover goes" },
+    { role: "assistant", text: "Here it is." },
+    { role: "user", text: "do that again for me" }
+  ];
+  const block = learnedLines(rows, "f3nc3", learningQuery(turns));
+  assert.match(block, /Task: the weekly handover/, "the older task survives a window three times the cap");
+  // An unprefixed note written before task recipes existed is read exactly as
+  // it was: nothing here keys on the prefix.
+  const legacy = learnedLines([{ id: "a", note: "Cancel approval is on the ticket row.", created_at: "x", profiles: null }], "f3nc3", learningQuery(turns));
+  assert.match(legacy, /- \[a crew member\] Cancel approval is on the ticket row\./);
 });
 
 test("the cap holds: room for new notes is what is left under MAX_LEARNED", () => {
@@ -54,6 +171,65 @@ test("the cap holds: room for new notes is what is left under MAX_LEARNED", () =
   assert.equal(roomFor(MAX_LEARNED - 1, 3), 1);
   assert.equal(roomFor(MAX_LEARNED, 3), 0);
   assert.equal(roomFor(MAX_LEARNED + 5, 3), 0);
+});
+
+// Codex's finding, and it was the one that would have bitten on a full
+// table: a correction was subtracted from the count before the room for
+// additions was worked out, as though replacing a note freed the slot it sat
+// in. It does not — replace_learned is one row out and one row in — and a
+// correction that FAILS does not free one either. The arithmetic is pure and
+// lives in askLearn.ts precisely so these cases can be run rather than read.
+test("a correction makes no room for an addition, and a full table refuses rather than overflowing", () => {
+  const note = id => ({ id, note: `Corrected ${id}.` });
+
+  // A full table, one correction and one addition. The correction goes
+  // through — it writes no new row — and the addition is refused and COUNTED,
+  // because a note decided on and never seen has to be explained.
+  const full = planLearning({ add: ["A new fact."], replace: [note("n1")] }, MAX_LEARNED);
+  assert.deepEqual(full.replace, [note("n1")], "the correction still lands on a full table");
+  assert.deepEqual(full.add, [], "replacing a note did not free the slot it sat in");
+  assert.equal(full.refused, 1, "and the card is told one was turned away");
+
+  // One slot left, two additions wanted: one lands, one is refused.
+  const tight = planLearning({ add: ["First.", "Second."], replace: [] }, MAX_LEARNED - 1);
+  assert.deepEqual(tight.add, ["First."]);
+  assert.equal(tight.refused, 1);
+
+  // Room to spare: everything lands and nothing is reported.
+  const roomy = planLearning({ add: ["First.", "Second."], replace: [note("n1"), note("n2")] }, 10);
+  assert.deepEqual(roomy.add, ["First.", "Second."]);
+  assert.deepEqual(roomy.replace.map(r => r.id), ["n1", "n2"]);
+  assert.equal(roomy.refused, 0, "a pass that fits reports no trouble");
+
+  // The full window with a replacement AND an addition, which is the case the
+  // old arithmetic got wrong in the other direction: `existing.length -
+  // replace.length` would have found room for the addition at 200 rows and
+  // handed the database an insert it refuses.
+  const old = MAX_LEARNED - 1;
+  assert.equal(roomFor(old, 1), 1, "the arithmetic that was there would have allowed it");
+  assert.equal(planLearning({ add: ["A new fact."], replace: [note("n1")] }, MAX_LEARNED).add.length, 0,
+    "the arithmetic that is there does not");
+
+  // Nothing decided is nothing planned, and nothing reported.
+  assert.deepEqual(planLearning({ add: [], replace: [] }, MAX_LEARNED), { add: [], replace: [], refused: 0 });
+});
+
+test("the function plans its writes with planLearning and reports what the cap refused", () => {
+  // The seam the pure test above cannot reach: that learn() actually asks
+  // askLearn.ts rather than keeping a second copy of the arithmetic. Paired
+  // with the behaviour test, not standing in for it.
+  const src = readFileSync(new URL("../../supabase/functions/ask/index.ts", import.meta.url), "utf8");
+  const start = src.indexOf("async function learn(");
+  const learn = src.slice(start, src.indexOf("\n}", src.indexOf("return { added, trouble };", start)));
+
+  assert.match(learn, /parseLearned\(text, existing\.map\(e => e\.id\), turns\)/,
+    "the evidence is checked against the very array learnBody was given");
+  assert.match(learn, /planLearning\(decided, existing\.length\)/,
+    "room is measured against the rows on file, not against them minus the corrections");
+  assert.equal(/existing\.length - decided\.replace\.length/.test(learn), false,
+    "the arithmetic that handed out imaginary slots is gone");
+  assert.match(learn, /if \(plan\.refused\)/, "and a refusal reaches the card");
+  assert.match(learn, /trouble \?\?= LEARN_FULL_WORDS/);
 });
 
 test("the notes enter the prompt graded by the speaker's role now, wrapped as data; none means nothing", () => {
