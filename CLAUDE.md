@@ -125,9 +125,13 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   payload before a row is touched, and leaves `tickets.total` to the sync
   trigger. Its probes are beside it under `supabase/handover/`, part 1 in one
   rolled-back transaction and part 2 as real concurrent sessions — all run live
-  on 13 Sept and recorded in the migration’s header. The function is LIVE but
-  not yet called: db.js still saves lines with two statements, and adopting the
-  RPC in the editor and the outbox replay is its own review.
+  on 13 Sept and recorded in the migration’s header. `Db.updateTicket` — the editor's save and the
+  outbox replay both — now calls it instead of deleting and re-inserting the
+  lines from the browser, and takes the total the function returns; the
+  hold-and-restore of the old lines is gone with the gap it covered.
+  `ticketLineSave.test.mjs` reads the method back and fails on a
+  `ticket_lines` write from the client. `createTicket` still writes a new
+  ticket's lines directly: an insert has no old billing to lose.
   Browser crash reporting is applied as
   `20260912160845_browser_crashes.sql`: `browser_crashes` records the
   account/minute rate limit, and service-only `file_browser_crash` writes

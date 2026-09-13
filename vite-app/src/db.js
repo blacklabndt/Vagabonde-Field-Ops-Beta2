@@ -2818,8 +2818,7 @@ export const Db = {
     //
     // Written as an upsert on (ticket_id, profile_id), then a delete of
     // whoever is no longer on the crew. It used to be delete-then-insert with
-    // the old rows held back, the shape updateTicket still keeps for the
-    // billing lines. Two devices saving one draft in the same instant
+    // the old rows held back. Two devices saving one draft in the same instant
     // interleaved as A-delete, B-delete, A-insert, B-insert, and B's insert
     // collided on the unique key: the technician read the raw constraint name
     // and B's hours were dropped. An upsert cannot collide, so the race is a
@@ -3613,7 +3612,7 @@ export const Db = {
     if (clientContact !== undefined) patch.client_contact = clientContact;
     if (contractorContact !== undefined) patch.contractor_contact = contractorContact;
     // Ask for the row back: an update no policy allows reports success
-    // having changed nothing (same trap as the delete below), which here
+    // having changed nothing, which here
     // would mean quietly not-saving another technician's ticket — or, with
     // the line replacement next, half-saving it and surfacing raw RLS
     // errors. Refuse in plain words before any of that starts.
@@ -3652,47 +3651,16 @@ export const Db = {
     // ticket worth nothing.
     //
     // Awaited here and nowhere earlier: this is the first line that needs
-    // it, and it stays in front of the read of the old lines below, which
-    // is the read a role without prices comes back empty from.
+    // it, and it stays in front of the billing RPC below.
     if (!(await priceRoleAnswer(priceRole))) return { id: ticketId, total: null };
 
-    // Replacing the lines is delete-then-insert, and the gap between the two
-    // is where a dropped connection or a refused insert used to destroy a
-    // ticket's existing billing — found in beta testing, when an overflow on
-    // the insert left the ticket empty at $0. The old lines are held here
-    // and put back if the replacement fails; the edit fails, the money
-    // doesn't vanish.
-    // line_order comes back with them, and orders them: it is the column the
-    // invoice prints by, and PostgREST hands rows over in heap order unless
-    // asked otherwise. Read unordered and put back on a sequence default, the
-    // restored ticket would keep every line and every dollar but lose the
-    // card's order — welds and charges interleaved on the client's bill,
-    // which is not the ticket the technician saved.
-    const { data: oldLines, error: oErr } = await sbClient
-      .from("ticket_lines").select("kind, label, unit, quantity, unit_rate, line_order")
-      .eq("ticket_id", ticketId).order("line_order");
-    if (oErr) throw oErr;
-
-    const { error: dErr } = await sbClient.from("ticket_lines").delete().eq("ticket_id", ticketId);
-    if (dErr) throw dErr;
-    if (lines.length) {
-      const { error: lErr } = await sbClient.from("ticket_lines").insert(
-        lines.map(l => ({ ticket_id: ticketId, ...l }))
-      );
-      if (lErr) {
-        if (oldLines && oldLines.length) {
-          // The spread carries each line's own line_order back with it —
-          // supplying the column is allowed (it is an ordinary insertable
-          // column whose default merely calls the sequence), so the restored
-          // lines land in the order they were saved in rather than in
-          // whatever order they were read out.
-          await sbClient.from("ticket_lines")
-            .insert(oldLines.map(l => ({ ticket_id: ticketId, ...l })))
-            .then(() => {}, () => {});
-        }
-        throw friendlyLineError(lErr);
-      }
-    }
+    // The database replaces all lines in one transaction, including an empty
+    // array. A lost connection cannot leave the old billing deleted halfway
+    // through a save, and replay can safely submit the whole array again.
+    const { data: savedTotal, error: lineError } = await sbClient.rpc("replace_ticket_lines", {
+      _ticket_id: ticketId, _lines: lines
+    });
+    if (lineError) throw friendlyLineError(lineError);
     // The row now holds what this save wrote, so that is what the next queued
     // save is measured against. Without this the base would still be the copy
     // the editor was opened with, and a technician who saved once online and
@@ -3700,7 +3668,7 @@ export const Db = {
     // `undefined` delays means the caller wasn't touching them, so the
     // remembered note stays as it was.
     rememberTicketPart(ticketId, delays === undefined ? { lines } : { lines, delays: delays || null });
-    return { id: ticketId, total };
+    return { id: ticketId, total: Number(savedTotal) };
   },
 
   // ── Rates (read-only lookup for the ticket screen) ──────────────────
