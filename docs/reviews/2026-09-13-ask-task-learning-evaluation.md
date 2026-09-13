@@ -79,3 +79,25 @@ saved notes, retrieval, trace, usage and latency:
   the extractor read it correctly.
 - Sensitive-detail exclusion is prompt-enforced; there is no regex scrub.
 - One note ≤ 300 characters; long procedures are a later increment.
+
+## Codex review round 1 — fixes (same day)
+
+1. **Trust wording** — `learnedLines()` preamble now says attribution is not expertise,
+   an Admin's note is reliable about the app and nothing more, no note certifies a
+   technical or safety procedure, and covers `Task:` methods; matches `systemPrompt()`.
+   Test updated (`askLearn.test.mjs`).
+2. **Persistence orchestration is the tested code** — `applyLearned(decided, count, store)`
+   in `askLearn.ts` is what `learn()` in `ask/index.ts` calls, with the two RLS writes
+   (`replace_learned` RPC, insert) injected. Behavioural tests against a played
+   database: save lands; insert refused (raw message masked, cap sentence passes,
+   log carries the real words); refused correction leaves the old note and is never
+   retried as an add; full window: correction lands, addition refused and reported;
+   failed correction makes no room; one-slot-left keeps one of two. Capacity arithmetic
+   is the single `planLearning()`; `learn()` keeps no copy (a source-seam test guards
+   the call sites, paired with the behaviour tests).
+3. **Cut-off extraction learns nothing** — `decideLearned(reply, ids, turns)` refuses any
+   reply whose `stop_reason` is not `end_turn` before parsing; `learn()` logs it and
+   reports `learnTrouble`. Regression: a `max_tokens` reply whose text holds a complete
+   valid JSON object writes nothing.
+
+`npm --prefix vite-app test`: 924 pass, 0 fail. Build green.

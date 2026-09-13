@@ -40,7 +40,7 @@ import { isKind, localToUtc, checkRunAt, whenWords, labelFor, scheduleWords, can
 import { askLoop, systemPrompt, windowTurns, API_URL, API_VERSION } from "../_shared/askLoop.ts";
 import { followUpLines } from "../_shared/askContext.ts";
 import { createInvestigation } from "../_shared/askInvestigation.ts";
-import { learnBody, parseLearned, planLearning, learnedLines, learningQuery, forgetWords, LEARN_MODEL, MAX_LEARN_REQUEST_CHARS, MAX_LEARNED, type LearnedRow } from "../_shared/askLearn.ts";
+import { learnBody, decideLearned, applyLearned, learnedLines, learningQuery, forgetWords, LEARN_MODEL, MAX_LEARN_REQUEST_CHARS, MAX_LEARNED, type LearnedRow, type LearnReply, type LearnedNote } from "../_shared/askLearn.ts";
 import {
   LEASE_STALE_SECONDS, usageTokens, cacheUsage, reserveFor, billedNothing,
   requestDeadline, readUntil, callTimeout, timeToLearn,
@@ -1251,79 +1251,34 @@ async function learn(asUser: SupabaseClient, thread: unknown, answer: string, ex
     await logError("ask", `the learning call was refused with ${res.status}`, { user: userId });
     return { added: [], trouble: LEARN_TROUBLE_WORDS };
   }
-  const reply = (await res.json()) as { content?: { type: string; text?: string }[] };
-  const text = (reply.content ?? []).filter(b => b.type === "text").map(b => b.text ?? "").join("\n");
-  // Evidence is checked against the very array the extractor was shown.
-  const decided = parseLearned(text, existing.map(e => e.id), turns);
-  // What of it may actually be written, measured against the rows on file.
-  // The arithmetic is in askLearn.ts, where the node suite can run it: a
-  // replace makes no room (it is one row out and one row in), and a replace
-  // that fails makes none either.
-  const plan = planLearning(decided, existing.length);
-  const added: { id: string; note: string }[] = [];
-  let trouble: string | null = null;
-
-  // A correction is ONE act: replace_learned removes the old row and writes
-  // the new one in a single transaction, under the caller's own policies. It
-  // was a delete and then an insert in two round trips, and a delete that
-  // landed with an insert that then did not took the original with it — the
-  // person asked for a correction and lost what they had. A refusal here
-  // (the note has gone, or it is not this caller's to remove) leaves the old
-  // note exactly where it was, which is the right answer to "replace a thing
-  // you may not touch" and is why it is not retried as an add.
-  for (const r of plan.replace) {
-    const { data, error } = await asUser.rpc("replace_learned", { _old: r.id, _note: r.note });
-    if (error) {
-      trouble ??= learnTrouble(error.message);
-      // The card gets a sentence a person can read; the office gets what
-      // actually happened. Losing the real words to spare the browser them
-      // would only move the blindness, not remove it.
-      await logError("ask", `a note could not be corrected: ${error.message}`, { user: userId, note: r.id });
-      continue;
+  // What the reply means is decided in askLearn.ts, where the suite can
+  // reach it: a reply the provider cut off learns nothing, whatever JSON its
+  // text happens to hold, and every mutation is checked against the very
+  // turns the extractor was shown.
+  const reply = (await res.json()) as LearnReply;
+  const { decided, cutOff } = decideLearned(reply, existing.map(e => e.id), turns);
+  if (cutOff) {
+    await logError("ask", `the learning reply was cut off (stop_reason ${String(reply?.stop_reason)}) and nothing was kept from it`, { user: userId });
+    return { added: [], trouble: LEARN_TROUBLE_WORDS };
+  }
+  // The writes, as the caller under RLS, through the same orchestrator the
+  // suite runs against a played database (applyLearned): a correction is one
+  // transaction (replace_learned) and is never retried as an add; room for
+  // additions is planned on the count as it stands (planLearning); a refusal
+  // reaches the card in fixed words and the office in the real ones.
+  const outcome = await applyLearned(decided, existing.length, {
+    replace: async (id, note) => {
+      const { data, error } = await asUser.rpc("replace_learned", { _old: id, _note: note });
+      return { row: (data as LearnedNote | null) ?? null, error: error?.message ?? null };
+    },
+    insert: async notes => {
+      const { data, error } = await asUser.from("ask_learned")
+        .insert(notes.map(note => ({ note, said_by: userId }))).select("id, note");
+      return { rows: (data ?? []) as LearnedNote[], error: error?.message ?? null };
     }
-    const row = data as { id: string; note: string } | null;
-    if (row) added.push({ id: row.id, note: row.note });
-  }
-
-  // What the cap turned away is SAID — on the card and in the log. A note
-  // the extractor decided on and the person never sees is the one shape a
-  // receipt must not take silently.
-  const fresh = plan.add;
-  if (plan.refused) {
-    trouble ??= LEARN_FULL_WORDS;
-    await logError("ask", `${plan.refused} learned ${plan.refused === 1 ? "note was" : "notes were"} not kept: Ask's memory holds ${MAX_LEARNED} notes and is full`, { user: userId });
-  }
-  if (fresh.length) {
-    // The insert's answer is READ. It was discarded, so a note the database
-    // refused — the per-author cap is the one that will actually fire — was
-    // indistinguishable from one that landed: the card said nothing and the
-    // note was not there. The answer is never failed for it; the card is
-    // told instead.
-    const { data, error } = await asUser.from("ask_learned")
-      .insert(fresh.map(note => ({ note, said_by: userId }))).select("id, note");
-    if (error) {
-      trouble ??= learnTrouble(error.message);
-      await logError("ask", `a note could not be kept: ${error.message}`, { user: userId });
-    }
-    added.push(...((data ?? []) as { id: string; note: string }[]));
-  }
-  return { added, trouble };
-}
-
-// What the card says when a note could not be kept.
-//
-// The cap's sentence is OURS — written in the migration, meant to be read by
-// whoever pressed the button, and the one refusal a person can actually do
-// something about — so it passes through. Everything else becomes a fixed
-// sentence: a raw database message is written for whoever runs the database,
-// names columns and constraints, and is the shape that leaks a schema one
-// error at a time. The real words still reach the office, through
-// function_errors, where the digest and Home's strip read them.
-const LEARN_TROUBLE = "Something Ask learned could not be kept. The answer above is unaffected.";
-const LEARN_FULL_WORDS = `Ask's memory is full (${MAX_LEARNED} notes), so something from this conversation was not kept. Forget a note or two to make room. The answer above is unaffected.`;
-
-function learnTrouble(message: string): string {
-  return /as much as it can hold/i.test(message) ? message : LEARN_TROUBLE;
+  });
+  for (const line of outcome.log) await logError("ask", line, { user: userId });
+  return { added: outcome.added, trouble: outcome.trouble };
 }
 
 // Best-effort, never masks the real error (admin-digest's shape).
