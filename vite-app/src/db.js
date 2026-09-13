@@ -509,6 +509,37 @@ const friendlyLineError = e =>
     ? new Error("A figure on this ticket is too large to bill — check the quantities and rates.")
     : e;
 
+// `replace_ticket_lines` raises its OWN sentences — written in the migration,
+// already fit to show — and picks each errcode on purpose. They are refusals,
+// not failures: the lock is taken first and every authorization question is
+// asked after the wait, so a role change, a deactivation or an approval that
+// landed while the save queued arrives here. That has to be marked, because
+// two readers ask `.plain` before anything else: oqFlushOnce, which otherwise
+// reads a refusal met in a dead spot as "offline" and retries it for ever
+// (isNetworkError calls any error offline while navigator.onLine is false),
+// and the editor, which otherwise wraps the words in "press Save again".
+// P0002 is the row itself being gone, which the callers already know how to
+// answer. Anything else — a lost connection, a gateway page, PGRST202 on an
+// environment without the migration — is left exactly as it came, so it is
+// still queued and still retried.
+const RPC_LINE_REFUSALS = new Set(["P0002", "42501", "22023", "28000"]);
+const lineRpcRefusal = e => {
+  const code = e && e.code ? String(e.code) : "";
+  // 22003 is ours when the function raises it and Postgres's own words
+  // ("numeric field overflow", naming the column's precision) when a single
+  // figure overflows the column at the insert. One fixed sentence covers both
+  // rather than reading the schema back to a technician.
+  if (code === "22003") {
+    return plainError("A figure on this ticket is too large to bill — check the quantities and rates.");
+  }
+  // A missing EXECUTE grant is a deployment fault, not a person's — its words
+  // name the function, and humanizeError's fixed sentence is the better answer.
+  const message = String((e && e.message) || "").trim();
+  if (!RPC_LINE_REFUSALS.has(code) || /^permission denied/i.test(message)) return e;
+  return plainError(message || "The ticket's charges could not be saved. Press Save again.",
+    code === "P0002" ? { ticketGone: true } : undefined);
+};
+
 // 23505 is a unique violation; the constraint name tells us which one. Jobs
 // have two unique columns (the id and the number), and only the number is
 // something a person chose.
@@ -3660,7 +3691,7 @@ export const Db = {
     const { data: savedTotal, error: lineError } = await sbClient.rpc("replace_ticket_lines", {
       _ticket_id: ticketId, _lines: lines
     });
-    if (lineError) throw friendlyLineError(lineError);
+    if (lineError) throw lineRpcRefusal(lineError);
     // The row now holds what this save wrote, so that is what the next queued
     // save is measured against. Without this the base would still be the copy
     // the editor was opened with, and a technician who saved once online and

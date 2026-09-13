@@ -130,7 +130,15 @@ Cloudflare Worker `solitary-snowflake-ee22` (assets + the `/approve` and
   lines from the browser, and takes the total the function returns; the
   hold-and-restore of the old lines is gone with the gap it covered.
   `ticketLineSave.test.mjs` reads the method back and fails on a
-  `ticket_lines` write from the client. `createTicket` still writes a new
+  `ticket_lines` write from the client. Its four refusals are marked as
+  refusals: `lineRpcRefusal` in db.js turns the errcodes the function raises
+  (`P0002` the row gone, `42501` role or state, `22023` the payload, `28000`
+  signed out) into `plainError` — `P0002` with `ticketGone` — because
+  oqFlushOnce and the editor both ask `.plain` first, and an unmarked refusal
+  met in a dead spot reads as "offline" and is retried for ever. A lost
+  connection, a gateway page and PGRST202 stay as they came; a missing EXECUTE
+  grant does too (its words name the function); and 22003 gets one fixed
+  sentence, since Postgres's own names the column's precision. `createTicket` still writes a new
   ticket's lines directly: an insert has no old billing to lose.
   Browser crash reporting is applied as
   `20260912160845_browser_crashes.sql`: `browser_crashes` records the
