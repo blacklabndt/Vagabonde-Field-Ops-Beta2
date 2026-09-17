@@ -10,7 +10,7 @@ import {
   ATTACH_ROOT, MAX_ATTACHMENTS, ATTACH_KEEP_DAYS,
   attachMonth, attachPath, isAttachPath, expiredAttachMonths,
   imageFilesFrom, attachLabel, hashName, readAttachment,
-  attachRunner, canSend, clearSent, keepName, keepTag, hashOfPath
+  attachRunner, canSend, clearSent, keepName, keepTag, hashOfPath, verifyKept
 } from "./askAttach.js";
 import {
   isAttachPath as isAttachPathTs,
@@ -258,7 +258,34 @@ test("a name with no hash under it proves nothing", () => {
   // hash is in the name it sent.
   const src = readFileSync(new URL("./components/askPanel.jsx", import.meta.url), "utf8");
   assert.match(src, /const tag = keepTag\(hashOfPath\(a\.path\)\)/);
-  assert.match(src, /if \(tag && \/already in this folder\/i\.test/);
+  assert.match(src, /if \(tag && e\.taken\)/);
+  // And a taken name is only ever "kept" once the bytes under it agree.
+  assert.match(src, /verifyKept\(\{ hash: tag, read: \(\) => Db\.downloadObject\("shared", e\.path\) \}\)/);
+  assert.match(src, /verdict === "same"/);
+});
+
+test("a taken Keep name is checked against the bytes under it", async () => {
+  const mine = new Uint8Array([1, 2, 3, 4, 5]);
+  const hash = await hashName(mine);
+
+  // The same photo under that name: the copy really is there.
+  assert.equal(await verifyKept({ hash, read: async () => mine }), "same");
+
+  // Somebody else's bytes under a name carrying this photo's hash — which
+  // Files allows, no collision required. It must NOT read as kept.
+  assert.equal(await verifyKept({ hash, read: async () => new Uint8Array([9, 9, 9]) }), "different");
+
+  // A read that failed proves nothing either way.
+  assert.equal(await verifyKept({ hash, read: async () => { throw new Error("offline"); } }), "unknown");
+  assert.equal(await verifyKept({ hash, read: async () => new Uint8Array() }), "unknown");
+  // And a name with no hash in it was never evidence to begin with.
+  assert.equal(await verifyKept({ hash: "", read: async () => mine }), "unknown");
+});
+
+test("the duplicate a Keep meets carries the key it sits under", () => {
+  const src = readFileSync(new URL("./db.js", import.meta.url), "utf8");
+  assert.match(src, /taken\.taken = true;/);
+  assert.match(src, /taken\.path = path;/);
 });
 
 test("the hash a Keep name uses is read off the attachment's own key", () => {

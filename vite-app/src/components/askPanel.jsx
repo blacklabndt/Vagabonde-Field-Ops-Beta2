@@ -3,7 +3,7 @@ import { Db } from "../db.js";
 import { Btn } from "./common.jsx";
 import { askTurns, pushTurn, threadForSend, dropAction, dropLearned, isConfirmAction, confirmLabel, formLabel, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
 import { downloadFile, fileToUpload } from "../askFiles.js";
-import { imageFilesFrom, readAttachment, attachLabel, attachRunner, canSend, clearSent, keepName, keepTag, hashOfPath } from "../askAttach.js";
+import { imageFilesFrom, readAttachment, attachLabel, attachRunner, canSend, clearSent, keepName, keepTag, hashOfPath, verifyKept } from "../askAttach.js";
 
 // Ask: a square launcher at the bottom right of every screen (it says
 // "Claudia", per Kyle) and the card it opens. Not a dialog — no backdrop, the
@@ -370,12 +370,21 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
       attachedRef.current = next;
       setAttached(next);
     } catch (e) {
-      if (tag && /already in this folder/i.test(e.message || "")) {
-        // Same bytes, same name: the copy is there, so the chip may say so.
-        const next = attachedRef.current.map(x => (x.id === a.id ? { ...x, kept: true } : x));
-        attachedRef.current = next;
-        setAttached(next);
-        setError(`“${a.label}” is already kept in Files › Ask.`);
+      if (tag && e.taken) {
+        // A taken name is not a kept photo. Files takes any bytes under any
+        // name, so what is under it is read back and digested before the chip
+        // is allowed to say it is saved.
+        const verdict = await verifyKept({ hash: tag, read: () => Db.downloadObject("shared", e.path) });
+        if (verdict === "same") {
+          const next = attachedRef.current.map(x => (x.id === a.id ? { ...x, kept: true } : x));
+          attachedRef.current = next;
+          setAttached(next);
+          setError(`“${a.label}” is already kept in Files › Ask.`);
+        } else if (verdict === "different") {
+          setError(`A different file is already called “${keepName(a.label, a.type, tag)}” in Files › Ask — rename this one, or remove that file first.`);
+        } else {
+          setError(`That name is taken in Files › Ask and the file there couldn't be checked — “${a.label}” is not kept. Try again.`);
+        }
       } else setError(e.message || "Couldn't keep that photo.");
     } finally { setKeeping(0); }
   };

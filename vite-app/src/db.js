@@ -2780,7 +2780,15 @@ export const Db = {
     const { error } = await sbClient.storage
       .from("shared").upload(path, file, { upsert: false });
     if (error) {
-      if (/exists/i.test(error.message)) throw new Error(`“${file.name}” is already in this folder.`);
+      if (/exists/i.test(error.message)) {
+        // The key the duplicate sits under, marked, so a caller that means to
+        // check WHAT is under that name can read it back instead of trusting
+        // the name. Storage takes any bytes under any name.
+        const taken = new Error(`“${file.name}” is already in this folder.`);
+        taken.taken = true;
+        taken.path = path;
+        throw taken;
+      }
       throw error;
     }
     return path;

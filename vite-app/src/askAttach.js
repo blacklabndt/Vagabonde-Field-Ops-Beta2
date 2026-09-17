@@ -143,6 +143,23 @@ export function keepTag(hash) {
   return /^[0-9a-f]{12,64}$/.test(String(hash || "")) ? String(hash) : "";
 }
 
+// A name is not evidence. The Files screen lets anybody upload any bytes
+// under any name, hash tag and all, so a refusal over a taken name says
+// only that the name is taken. This reads what is actually under it and
+// digests it: "same" is the only answer that lets a chip say it is kept.
+// "different" means somebody else's photo holds that name; "unknown" means
+// the read failed, or there was no hash to check against — and both of
+// those leave the chip unkept, because an unverified copy is not a copy.
+export async function verifyKept({ hash, read }) {
+  if (!keepTag(hash)) return "unknown";
+  let bytes;
+  try { bytes = await read(); } catch { return "unknown"; }
+  if (!bytes || !bytes.length) return "unknown";
+  let mine;
+  try { mine = await hashName(bytes); } catch { return "unknown"; }
+  return mine === hash ? "same" : "different";
+}
+
 // The hash a Keep name carries, read back off the attachment's own key —
 // the key is `.../<hash>.png`, so nothing has to be re-digested.
 export function hashOfPath(path) {
