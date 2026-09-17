@@ -32,6 +32,28 @@ import { mailReport, REPORT_MAIL_SELECT, type ReportMailRow } from "../_shared/m
 import { mailApproval } from "../_shared/mailApproval.ts";
 import { fireGate, isKind, resultPushWords, sentUnrecorded, failureUnrecorded, STUCK_MS, STUCK_WORDS, NO_DEVICE_WORDS, NO_DEVICE_TOOK_IT, type Person } from "../_shared/scheduledSends.ts";
 import { sendPush, type PushSub } from "../_shared/webPush.ts";
+import { futureJwtRetrying } from "../_shared/jwtRetry.ts";
+
+// Every database request this tick makes goes through the clock retry.
+//
+// Nobody is signed in at 03:55; a PGRST303 here is a tick that did nothing
+// and said 500, and the next one is five minutes away. It sits at the fetch
+// boundary of the client and nowhere else, which means it covers the reads,
+// the claim and the status writes — and cannot touch the send itself, since
+// mail and push do not go through this client. A refused request never
+// reached a transaction, so asking again cannot send anything twice.
+const adminClient = () => createClient(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  { global: { fetch: futureJwtRetrying((input, init) => fetch(input, init)) } }
+);
+
+// A database error with the stage it came from and the code PostgREST gave
+// it. `new Error(err.message)` alone is what made "JWT issued at future"
+// eight identical rows in function_errors with nothing to say which request
+// met it.
+const dbFail = (stage: string, error: { message: string; code?: string }) =>
+  new Error(`${stage}: ${error.message}${error.code ? ` [${error.code}]` : ""}`);
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -49,10 +71,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const admin = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-    );
+    const admin = adminClient();
     const { data: expected, error: secretErr } = await admin.rpc("internal_secret");
     if (secretErr) throw secretErr;
     // Constant time, never `===`: a compare that stops at the first byte
@@ -68,7 +87,7 @@ Deno.serve(async (req) => {
       .update({ status: "failed", error: STUCK_WORDS })
       .eq("status", "sending").lt("fired_at", new Date(now - STUCK_MS).toISOString())
       .select("id, label, job_id");
-    if (stuckErr) throw new Error(stuckErr.message);
+    if (stuckErr) throw dbFail("the stale sweep", stuckErr);
     for (const s of (stuckRows ?? []) as { id: string; label: string; job_id: string | null }[]) {
       await logError("scheduled-sends", `${s.label}: ${STUCK_WORDS}`, { id: s.id, job_id: s.job_id });
     }
@@ -78,7 +97,7 @@ Deno.serve(async (req) => {
       .select("id, kind, record_id, job_id, label, to_list, message, run_at, set_by, status, fired_at, jobs(job_number)")
       .eq("status", "queued").lte("run_at", new Date(now).toISOString())
       .order("run_at").limit(BATCH);
-    if (dueErr) throw new Error(dueErr.message);
+    if (dueErr) throw dbFail("the due read", dueErr);
 
     let fired = 0;
     let failed = 0;
@@ -98,7 +117,7 @@ Deno.serve(async (req) => {
       const { data: claimed, error: cErr } = await admin.from("scheduled_sends")
         .update({ status: "sending", fired_at: new Date().toISOString() })
         .eq("id", row.id).eq("status", "queued").select("id");
-      if (cErr) throw new Error(cErr.message);
+      if (cErr) throw dbFail("the claim", cErr);
       if (!claimed || !claimed.length) continue;
       try {
         await fire(admin, row, settingsOnce);
@@ -162,7 +181,7 @@ async function fire(admin: SupabaseClient, row: Row, settingsOnce: () => Promise
   if (!isKind(row.kind)) throw new Error(`Nothing sends a "${row.kind}".`);
   const { data: p, error: pErr } = await admin.from("profiles")
     .select("id, role, tab_access, deactivated_at").eq("id", row.set_by).maybeSingle();
-  if (pErr) throw new Error(pErr.message);
+  if (pErr) throw dbFail("the scheduler read", pErr);
   const person = p as Person | null;
   if (!person) throw new Error("The account that scheduled this send no longer exists.");
 
@@ -233,7 +252,7 @@ async function devicesOf(admin: SupabaseClient, profileId: string): Promise<Push
 
 async function logError(functionName: string, message: string, context: Record<string, unknown> = {}) {
   try {
-    const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const admin = adminClient();
     await admin.from("function_errors").insert({ function_name: functionName, message, context });
   } catch { /* logging is best-effort; never let it mask the real error */ }
 }

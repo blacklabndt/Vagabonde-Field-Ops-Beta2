@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { futureJwtRetrying } from "./jwtRetry.js";
 
 // Public project URL + publishable key. Both are meant to be exposed in a
 // client app — access control is enforced by Postgres row-level security
@@ -72,6 +73,20 @@ function fetchWithCeiling(input, init = {}) {
     });
 }
 
+
+// The database's clock, not ours.
+//
+// PostgREST refuses a token whose `iat` is ahead of the clock it serves
+// from a cache, with 401 PGRST303 "JWT issued at future" — the first read
+// made in the moment after a token is minted (a sign-in, an overnight
+// refresh) can meet it, and the same token a quarter second later cannot.
+// Nothing here is wrong and nothing here can be set right, so that one
+// answer is asked again instead of being passed on as a 401: unhandled, it
+// reached the outbox as `lastError: "JWT issued at future"` and parked a
+// day's work behind a badge. The retry wraps the ceiling rather than the
+// other way round, so every attempt gets its own fresh timeout.
+const sbFetch = futureJwtRetrying(fetchWithCeiling);
+
 // Where supabase-js keeps the signed-in session. It derives this key from the
 // project ref on its own; naming it here and handing it back is the only way
 // the two cannot drift, and forgetStoredSession below has to be able to reach
@@ -80,7 +95,7 @@ export const AUTH_STORAGE_KEY = `sb-${new URL(SUPABASE_URL).hostname.split(".")[
 
 export const sbClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { storageKey: AUTH_STORAGE_KEY },
-  global: { fetch: fetchWithCeiling }
+  global: { fetch: sbFetch }
 });
 
 // Signing out is not always a sign-out.
