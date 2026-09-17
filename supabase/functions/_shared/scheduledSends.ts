@@ -69,6 +69,41 @@ export const sentUnrecorded = (label: string, why: string): string =>
 export const failureUnrecorded = (label: string, why: string, writeWhy: string): string =>
   `${label} was not sent: ${why}. The row could not be marked failed either: ${writeWhy}.`;
 
+// A database failure with the code PostgREST gave it. `new Error(err.message)`
+// alone is what made "JWT issued at future" eight identical rows in
+// function_errors with nothing to say which request met it. The code is
+// dropped when the message already carries it — a staged error passing back
+// through here at the tick's outer catch reads as two failures otherwise.
+export function dbWhy(error: { message?: string; code?: string | null } | null | undefined): string {
+  const message = error?.message ?? String(error ?? "unknown");
+  const code = error?.code;
+  return code && !message.includes(`[${code}]`) ? `${message} [${code}]` : message;
+}
+
+// The row's final status, written with one second chance and NEVER thrown:
+// a throw from the success path would be caught by the branch that marks a
+// row failed, which would be the one lie the tick must not tell — the email
+// has already gone. Answers null when the row was written, and the reason it
+// was not otherwise, code and all. The write and the wait are handed in, so
+// this holds no imports and the tests drive the real thing.
+export async function markStatus(
+  update: (patch: Record<string, string>) => Promise<{ error?: { message?: string; code?: string | null } | null }>,
+  patch: Record<string, string>,
+  wait: (ms: number) => Promise<unknown> = ms => new Promise(r => setTimeout(r, ms))
+): Promise<string | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const { error } = await update(patch);
+      if (!error) return null;
+      if (attempt) return dbWhy(error);
+    } catch (e) {
+      if (attempt) return dbWhy(e as Error);
+    }
+    await wait(1_000);
+  }
+  return "the row could not be written";
+}
+
 export interface Person { id: string; role: string; tab_access: string[] | null; deactivated_at: string | null }
 export interface ReportToSend { id: string; pdf_key: string | null; filename?: string | null }
 export interface SendWords { summary: string; done: string }

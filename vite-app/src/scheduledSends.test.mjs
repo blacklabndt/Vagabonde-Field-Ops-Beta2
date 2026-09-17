@@ -7,11 +7,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
 import {
   localToUtc, checkRunAt, whenWords, fireGate, isStuck, labelFor, scheduleWords, cancelWords, isKind,
   rescheduleWords, resultPushWords, splitList, reminderText, reminderWords, REMINDER_MAX, NO_DEVICE_WORDS,
-  sentUnrecorded, failureUnrecorded,
+  sentUnrecorded, failureUnrecorded, markStatus, dbWhy,
   STUCK_MS, MAX_AHEAD_MS, MAX_PAST_MS, KINDS
 } from "../../supabase/functions/_shared/scheduledSends.ts";
 
@@ -233,58 +232,51 @@ test("a reminder's text is one line of a few to three hundred characters, and it
 // ── Round 5, F1: the record's write is not the send ──────────────────────
 // The email has gone by the time the row is marked. A write that fails
 // changes nothing about that, so the tick may not call the send failed —
-// and may never answer "sent, nothing to see". markStatus is lifted out of
-// the function itself, with its sleep handed in so the test is instant.
+// and may never answer "sent, nothing to see". markStatus is the shared
+// module's own now (the tick hands it the wrapped client's write); the wait
+// is handed in, so the test is instant.
 const tick = readFileSync(new URL("../../supabase/functions/scheduled-sends/index.ts", import.meta.url), "utf8");
-const markStart = tick.indexOf("async function markStatus(");
-const markEnd = tick.indexOf("\n}", markStart) + 2;
-// dbWhy goes in with it: markStatus reports a refused write through it, so
-// a copy of the reason-reader here would be the drift this lifts out to avoid.
-const whyStart = tick.indexOf("const dbWhy = ");
-const whyEnd = tick.indexOf("\n};", whyStart) + 3;
-const makeMark = new Function("setTimeout", "dbWhy",
-  `return (${stripTypeScriptTypes(tick.slice(markStart, markEnd))});`);
-const dbWhy = new Function(`${stripTypeScriptTypes(tick.slice(whyStart, whyEnd))} return dbWhy;`)();
-const markStatus = makeMark((fn) => fn(), dbWhy);
+const instant = async () => {};
 
-const clientAnswering = (...answers) => {
+// The write the tick hands markStatus: the client's update, already awaited.
+const writerAnswering = (...answers) => {
   const seen = [];
-  return {
-    seen,
-    from: () => ({
-      update(patch) { seen.push(patch); return this; },
-      eq() {
-        const a = answers[seen.length - 1] ?? { error: null };
-        if (a instanceof Error) return Promise.reject(a);
-        return Promise.resolve(a);
-      }
-    })
+  const update = patch => {
+    seen.push(patch);
+    const a = answers[seen.length - 1] ?? { error: null };
+    if (a instanceof Error) return Promise.reject(a);
+    return Promise.resolve(a);
   };
+  update.seen = seen;
+  return update;
 };
 
 test("a status written first time answers nothing to report", async () => {
-  const db = clientAnswering({ error: null });
-  assert.equal(await markStatus(db, "s1", { status: "sent" }), null);
+  const db = writerAnswering({ error: null });
+  assert.equal(await markStatus(db, { status: "sent" }, instant), null);
   assert.equal(db.seen.length, 1);
 });
 
 test("a status refused once is written again before it is given up on", async () => {
-  const db = clientAnswering({ error: { message: "the gateway blinked" } }, { error: null });
-  assert.equal(await markStatus(db, "s1", { status: "sent" }), null);
+  const db = writerAnswering({ error: { message: "the gateway blinked" } }, { error: null });
+  assert.equal(await markStatus(db, { status: "sent" }, instant), null);
   assert.equal(db.seen.length, 2, "it tried twice");
 });
 
 test("a status refused twice answers the reason and never throws", async () => {
-  const db = clientAnswering({ error: { message: "column status does not exist" } }, { error: { message: "column status does not exist" } });
-  assert.equal(await markStatus(db, "s1", { status: "sent" }), "column status does not exist");
+  const db = writerAnswering({ error: { message: "column status does not exist" } }, { error: { message: "column status does not exist" } });
+  assert.equal(await markStatus(db, { status: "sent" }, instant), "column status does not exist");
   // And a refusal that came with a code keeps it: eight rows reading only
   // "JWT issued at future" is what these stages and codes are for.
-  const coded = clientAnswering(
+  const coded = writerAnswering(
     { error: { message: "JWT issued at future", code: "PGRST303" } },
     { error: { message: "JWT issued at future", code: "PGRST303" } });
-  assert.equal(await markStatus(coded, "s1", { status: "sent" }), "JWT issued at future [PGRST303]");
-  const thrown = clientAnswering(new Error("socket closed"), new Error("socket closed"));
-  assert.equal(await markStatus(thrown, "s1", { status: "failed", error: "x" }), "socket closed");
+  assert.equal(await markStatus(coded, { status: "sent" }, instant), "JWT issued at future [PGRST303]");
+  const thrown = writerAnswering(new Error("socket closed"), new Error("socket closed"));
+  assert.equal(await markStatus(thrown, { status: "failed", error: "x" }, instant), "socket closed");
+  // A code already in the words is not said twice.
+  assert.equal(dbWhy({ message: "the claim: JWT issued at future [PGRST303]", code: "PGRST303" }),
+    "the claim: JWT issued at future [PGRST303]");
 });
 
 test("the tick asks what the final write answered, never assuming it landed", () => {
@@ -294,8 +286,8 @@ test("the tick asks what the final write answered, never assuming it landed", ()
   const body = tick.slice(tick.indexOf("await fire(admin, row, settingsOnce);"), tick.indexOf("return json({ ok: true"));
   assert.ok(!/await admin\.from\("scheduled_sends"\)\.update\(\{ status: "(sent|failed)"/.test(body),
     "the final status goes through markStatus, whose answer is read");
-  assert.match(body, /markStatus\(admin, row\.id, \{ status: "sent" \}\)/);
-  assert.match(body, /markStatus\(admin, row\.id, \{ status: "failed"/);
+  assert.match(body, /settle\(row\.id, \{ status: "sent" \}\)/);
+  assert.match(body, /settle\(row\.id, \{ status: "failed"/);
   assert.match(body, /sentUnrecorded\(row\.label, wErr\)/);
   // And the tick's own answer says so: `fired` and `failed` are about the
   // send, `unrecorded` about the row, and ok is false while one is left.

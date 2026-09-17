@@ -30,7 +30,8 @@ import { secretsMatch } from "../_shared/constantTime.ts";
 import { mailJha, JHA_MAIL_SELECT, type JhaMailRow } from "../_shared/mailJha.ts";
 import { mailReport, REPORT_MAIL_SELECT, type ReportMailRow } from "../_shared/mailReport.ts";
 import { mailApproval } from "../_shared/mailApproval.ts";
-import { fireGate, isKind, resultPushWords, sentUnrecorded, failureUnrecorded, STUCK_MS, STUCK_WORDS, NO_DEVICE_WORDS, NO_DEVICE_TOOK_IT, type Person } from "../_shared/scheduledSends.ts";
+import { fireGate, isKind, resultPushWords, sentUnrecorded, failureUnrecorded, dbWhy, markStatus, STUCK_MS, STUCK_WORDS, NO_DEVICE_WORDS, NO_DEVICE_TOOK_IT, type Person } from "../_shared/scheduledSends.ts";
+import { loggedWords } from "../_shared/publicError.ts";
 import { sendPush, type PushSub } from "../_shared/webPush.ts";
 import { futureJwtRetrying } from "../_shared/jwtRetry.ts";
 
@@ -48,21 +49,19 @@ const adminClient = () => createClient(
   { global: { fetch: futureJwtRetrying((input, init) => fetch(input, init), Deno.env.get("SUPABASE_URL")!) } }
 );
 
-// A database error with the stage it came from and the code PostgREST gave
-// it. `new Error(err.message)` alone is what made "JWT issued at future"
-// eight identical rows in function_errors with nothing to say which request
-// met it.
-const dbWhy = (error: { message?: string; code?: string | null } | null | undefined): string => {
-  const message = error?.message ?? String(error ?? "unknown");
-  const code = error?.code;
-  // The code is dropped when the message already carries it: dbFail's own
-  // errors come back through here at the outer catch, and "[PGRST303]"
-  // twice in one row reads like two failures.
-  return code && !message.includes(`[${code}]`) ? `${message} [${code}]` : message;
-};
+// A database failure with the stage it came from; `dbWhy` (shared, and
+// tested there) adds the code PostgREST gave it.
 
 const dbFail = (stage: string, error: { message?: string; code?: string | null }) =>
   new Error(`${stage}: ${dbWhy(error)}`);
+
+// One row's final status, through the tick's own (wrapped) client: the
+// write is handed to the shared markStatus, which never throws.
+const settleWith = (admin: SupabaseClient) => (id: string, patch: Record<string, string>) =>
+  markStatus(async p => {
+    const { error } = await admin.from("scheduled_sends").update(p).eq("id", id);
+    return { error };
+  }, patch);
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -81,6 +80,7 @@ Deno.serve(async (req) => {
 
   try {
     const admin = adminClient();
+    const settle = settleWith(admin);
     const { data: expected, error: secretErr } = await admin.rpc("internal_secret");
     // The first request of the tick, and the one an overnight PGRST303 was
     // most likely to meet: it threw the bare PostgREST error, so the row in
@@ -139,7 +139,7 @@ Deno.serve(async (req) => {
         // The email has gone. Whether the row can be marked changes nothing
         // about that, so a write that fails is reported as what it is — the
         // record lost, never the send — and NEVER as a reason to send again.
-        const wErr = await markStatus(admin, row.id, { status: "sent" });
+        const wErr = await settle(row.id, { status: "sent" });
         if (wErr) {
           unrecorded++;
           await logError("scheduled-sends", sentUnrecorded(row.label, wErr),
@@ -150,11 +150,16 @@ Deno.serve(async (req) => {
         // be noise on the same devices.
         if (row.kind !== "reminder") await tellScheduler(admin, row, null);
       } catch (e) {
+        // The row and the push get our own words; function_errors gets
+        // those AND the detail a marked refusal is carrying — the settings
+        // read masks the database's reason, and an exhausted PGRST303 used
+        // to reach the log with neither the code nor the underlying words.
         const message = (e as Error).message;
-        const wErr = await markStatus(admin, row.id, { status: "failed", error: message });
+        const logged = loggedWords(e);
+        const wErr = await settle(row.id, { status: "failed", error: message });
         if (wErr) unrecorded++;
         await logError("scheduled-sends",
-          wErr ? failureUnrecorded(row.label, message, wErr) : `${row.label} was not sent: ${message}`,
+          wErr ? failureUnrecorded(row.label, logged, wErr) : `${row.label} was not sent: ${logged}`,
           { id: row.id, kind: row.kind, record_id: row.record_id, job_id: row.job_id, set_by: row.set_by });
         failed++;
         await tellScheduler(admin, row, message);
@@ -170,29 +175,13 @@ Deno.serve(async (req) => {
     // bare sentence, which is how eight identical rows were all this
     // function had to say for itself.
     const message = dbWhy(e as { message?: string; code?: string });
-    await logError("scheduled-sends", message);
+    // The log takes the detail as well — a marked refusal's public sentence
+    // says nothing about which request met what.
+    await logError("scheduled-sends", dbWhy({ message: loggedWords(e), code: (e as { code?: string }).code }));
     return json({ error: message }, 500);
   }
 });
 
-// The row's final status, written with one second chance and NEVER thrown:
-// a throw from the success path would be caught by the branch that marks a
-// row failed, which would be the one lie this function must not tell — the
-// email has already gone. Answers null when the row was written, and the
-// reason it was not otherwise.
-async function markStatus(admin: SupabaseClient, id: string, patch: Record<string, string>): Promise<string | null> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const { error } = await admin.from("scheduled_sends").update(patch).eq("id", id);
-      if (!error) return null;
-      if (attempt) return dbWhy(error);
-    } catch (e) {
-      if (attempt) return dbWhy(e as Error);
-    }
-    await new Promise(r => setTimeout(r, 1_000));
-  }
-  return "the row could not be written";
-}
 
 // One row: the person as they are now, the record as it is now, the gate,
 // the addresses checked again, and the same send the live button makes.

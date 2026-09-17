@@ -38,7 +38,12 @@ export async function appSettings(client?: SupabaseClient) {
   // the env fallbacks or the test sender — that sent mail under rotated
   // keys once. (An absent row is fine: that's an unconfigured install,
   // and exactly what the fallbacks are for.)
-  if (error) throw refuse("Couldn't read the app settings. Try again, and tell the office if it keeps happening.", error.message);
+  // The detail carries the code as well as the words: this refusal is the
+  // last thing between a claimed send and an email, and "Couldn't read the
+  // app settings" in function_errors with no PGRST303 behind it is a row
+  // that cannot be told from any other bad minute.
+  if (error) throw refuse("Couldn't read the app settings. Try again, and tell the office if it keeps happening.",
+    error.code ? `${error.message} [${error.code}]` : error.message);
   const row: Record<string, string | null> = data ?? {};
   return {
     apiKey: row.resend_api_key || Deno.env.get("RESEND_API_KEY") || "",
