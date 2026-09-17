@@ -7,7 +7,7 @@
 // (This module carried Postmark before; only the transport changed. The
 // recipient guards, escaping and the email frame are provider-neutral.)
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { refuse } from "./publicError.ts";
 
 const RESEND_URL = "https://api.resend.com/emails";
@@ -20,8 +20,14 @@ const TEST_SENDER = "VagaboNDE Field Ops <onboarding@resend.dev>";
 // The Admin screen writes this row; the env vars remain as fallback so an
 // install configured the old way (Supabase secrets) keeps working. Read
 // with the service role — the table is Admin-only under RLS.
-export async function appSettings() {
-  const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+// A caller that already holds a service-role client hands it in, and the
+// read goes through whatever that client is wrapped with — the clock retry
+// on the scheduled tick, for one. A settings read is the last request made
+// before an email leaves, and a send already claimed must not be lost to a
+// refusal the tick knows how to wait out. Nobody holding one: the plain
+// client below is the fallback, not the rule.
+export async function appSettings(client?: SupabaseClient) {
+  const admin = client ?? createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   // The invoice's three settings ride on the same read, so a function that
   // sends a bill reads the row once and hands the answer to loadInvoice and
   // sendMail alike (send-ticket-approval read it three times per email,
@@ -82,8 +88,12 @@ export async function sendMail(opts: {
   // A settings row the caller has already read this request. Never held
   // across requests: a warm isolate would send under a rotated key.
   settings?: AppSettings;
+  // The caller's own service-role client, used only when the settings have
+  // to be read here. Same reason as appSettings's: the read inherits the
+  // caller's retries instead of opening a bare door beside them.
+  client?: SupabaseClient;
 }) {
-  const settings = opts.settings ?? await appSettings();
+  const settings = opts.settings ?? await appSettings(opts.client);
   if (!settings.apiKey) {
     throw refuse("Email isn't set up yet — an Admin can add the Resend API key on the Admin screen.");
   }

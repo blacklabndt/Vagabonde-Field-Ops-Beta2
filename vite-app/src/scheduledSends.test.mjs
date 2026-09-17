@@ -238,9 +238,14 @@ test("a reminder's text is one line of a few to three hundred characters, and it
 const tick = readFileSync(new URL("../../supabase/functions/scheduled-sends/index.ts", import.meta.url), "utf8");
 const markStart = tick.indexOf("async function markStatus(");
 const markEnd = tick.indexOf("\n}", markStart) + 2;
-const makeMark = new Function("setTimeout",
+// dbWhy goes in with it: markStatus reports a refused write through it, so
+// a copy of the reason-reader here would be the drift this lifts out to avoid.
+const whyStart = tick.indexOf("const dbWhy = ");
+const whyEnd = tick.indexOf("\n};", whyStart) + 3;
+const makeMark = new Function("setTimeout", "dbWhy",
   `return (${stripTypeScriptTypes(tick.slice(markStart, markEnd))});`);
-const markStatus = makeMark((fn) => fn());
+const dbWhy = new Function(`${stripTypeScriptTypes(tick.slice(whyStart, whyEnd))} return dbWhy;`)();
+const markStatus = makeMark((fn) => fn(), dbWhy);
 
 const clientAnswering = (...answers) => {
   const seen = [];
@@ -272,6 +277,12 @@ test("a status refused once is written again before it is given up on", async ()
 test("a status refused twice answers the reason and never throws", async () => {
   const db = clientAnswering({ error: { message: "column status does not exist" } }, { error: { message: "column status does not exist" } });
   assert.equal(await markStatus(db, "s1", { status: "sent" }), "column status does not exist");
+  // And a refusal that came with a code keeps it: eight rows reading only
+  // "JWT issued at future" is what these stages and codes are for.
+  const coded = clientAnswering(
+    { error: { message: "JWT issued at future", code: "PGRST303" } },
+    { error: { message: "JWT issued at future", code: "PGRST303" } });
+  assert.equal(await markStatus(coded, "s1", { status: "sent" }), "JWT issued at future [PGRST303]");
   const thrown = clientAnswering(new Error("socket closed"), new Error("socket closed"));
   assert.equal(await markStatus(thrown, "s1", { status: "failed", error: "x" }), "socket closed");
 });

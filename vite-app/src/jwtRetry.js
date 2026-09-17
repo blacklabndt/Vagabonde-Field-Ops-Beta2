@@ -22,9 +22,19 @@
 // broken: a quarter second clears it, a second is the outside.
 export const FUTURE_JWT_DELAYS_MS = [250, 1000];
 
-// Only the database's own endpoint. Auth, Storage and Edge Functions
-// validate elsewhere and a 401 from them means what it says.
-export const FUTURE_JWT_PATH = /\/rest\/v1\//;
+// Our own project's database endpoint, and nothing else. The URL is
+// PARSED, never searched: "/rest/v1/" reads the same in a query string as
+// in a path, and a Functions call carrying `?next=/rest/v1/items` was
+// asked again three times by a match that looked at the whole string.
+// Another host's REST path is not ours either. An address that will not
+// parse, or a base that will not, answers no — the retry is the exception
+// and has to be earned.
+export function isProjectRest(url, baseUrl) {
+  if (typeof url !== "string" || typeof baseUrl !== "string") return false;
+  let base, target;
+  try { base = new URL(baseUrl); target = new URL(url); } catch { return false; }
+  return target.origin === base.origin && target.pathname.startsWith("/rest/v1/");
+}
 
 // 401 AND the code AND the words. PGRST303 alone is the whole family of
 // claims failures — an expired token is one of them, and retrying that is
@@ -39,8 +49,9 @@ export function isFutureJwtRefusal(status, bodyText) {
 }
 
 // Waits, unless the caller gives up first. Answers true when it was the
-// caller. The listener goes either way — a screen-lifetime signal must not
-// collect one of these per request it outlives.
+// caller. The listener and the timer both go, on either exit — a
+// screen-lifetime signal must not collect one of these per request it
+// outlives, and a wait the caller cut short must not leave a timer running.
 export function waitOrAbort(ms, signal) {
   return new Promise(resolve => {
     if (!signal) { setTimeout(() => resolve(false), ms); return; }
@@ -51,15 +62,16 @@ export function waitOrAbort(ms, signal) {
   });
 }
 
-// Wraps a fetch. Re-entering the wrapped one is deliberate: whatever it
-// does per attempt — a timeout ceiling, its own listeners — it does again,
-// fresh, and cleans up after each attempt before the next one starts.
-export function futureJwtRetrying(inner) {
+// Wraps a fetch, for the one project named by `baseUrl`. Re-entering the
+// wrapped one is deliberate: whatever it does per attempt — a timeout
+// ceiling, its own listeners — it does again, fresh, and cleans up after
+// each attempt before the next one starts.
+export function futureJwtRetrying(inner, baseUrl) {
   return async function fetchRetryingFutureJwt(input, init) {
     let res = await inner(input, init);
     // A Request object's body is spent by the first attempt; only a string
     // URL with a plain init can be sent twice.
-    if (typeof input !== "string" || !FUTURE_JWT_PATH.test(input)) return res;
+    if (typeof input !== "string" || !isProjectRest(input, baseUrl)) return res;
     const signal = init && init.signal;
     for (const delay of FUTURE_JWT_DELAYS_MS) {
       if (res.status !== 401) return res;

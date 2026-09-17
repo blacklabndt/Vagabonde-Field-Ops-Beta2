@@ -45,15 +45,24 @@ import { futureJwtRetrying } from "../_shared/jwtRetry.ts";
 const adminClient = () => createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-  { global: { fetch: futureJwtRetrying((input, init) => fetch(input, init)) } }
+  { global: { fetch: futureJwtRetrying((input, init) => fetch(input, init), Deno.env.get("SUPABASE_URL")!) } }
 );
 
 // A database error with the stage it came from and the code PostgREST gave
 // it. `new Error(err.message)` alone is what made "JWT issued at future"
 // eight identical rows in function_errors with nothing to say which request
 // met it.
-const dbFail = (stage: string, error: { message: string; code?: string }) =>
-  new Error(`${stage}: ${error.message}${error.code ? ` [${error.code}]` : ""}`);
+const dbWhy = (error: { message?: string; code?: string | null } | null | undefined): string => {
+  const message = error?.message ?? String(error ?? "unknown");
+  const code = error?.code;
+  // The code is dropped when the message already carries it: dbFail's own
+  // errors come back through here at the outer catch, and "[PGRST303]"
+  // twice in one row reads like two failures.
+  return code && !message.includes(`[${code}]`) ? `${message} [${code}]` : message;
+};
+
+const dbFail = (stage: string, error: { message?: string; code?: string | null }) =>
+  new Error(`${stage}: ${dbWhy(error)}`);
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -73,7 +82,10 @@ Deno.serve(async (req) => {
   try {
     const admin = adminClient();
     const { data: expected, error: secretErr } = await admin.rpc("internal_secret");
-    if (secretErr) throw secretErr;
+    // The first request of the tick, and the one an overnight PGRST303 was
+    // most likely to meet: it threw the bare PostgREST error, so the row in
+    // function_errors said "JWT issued at future" and nothing about where.
+    if (secretErr) throw dbFail("the authorization check", secretErr);
     // Constant time, never `===`: a compare that stops at the first byte
     // that differs times out how much of the secret the caller has right.
     if (!secretsMatch(req.headers.get("x-internal-secret"), expected)) {
@@ -109,7 +121,10 @@ Deno.serve(async (req) => {
     let unrecorded = 0;
     // The settings row, read once per tick and only when an approval needs it.
     let settings: AppSettings | null = null;
-    const settingsOnce = async () => { settings ??= await appSettings(); return settings; };
+    // Through the tick's own client, so the last read before an email
+    // leaves has the same clock retry behind it as the claim that took the
+    // row. A refusal here would otherwise fail a send already claimed.
+    const settingsOnce = async () => { settings ??= await appSettings(admin); return settings; };
 
     for (const row of (due ?? []) as unknown as Row[]) {
       // The claim: a tick that reads a row another tick has just taken gets
@@ -150,7 +165,11 @@ Deno.serve(async (req) => {
     // answer never reads as "all settled" when a row was left behind.
     return json({ ok: unrecorded === 0, fired, failed, unrecorded, stuck: stuckRows?.length ?? 0 });
   } catch (e) {
-    const message = (e as Error).message;
+    // Whatever reached here keeps its code: an error thrown before dbFail
+    // could name it — or by a library that never does — used to arrive as a
+    // bare sentence, which is how eight identical rows were all this
+    // function had to say for itself.
+    const message = dbWhy(e as { message?: string; code?: string });
     await logError("scheduled-sends", message);
     return json({ error: message }, 500);
   }
@@ -166,9 +185,9 @@ async function markStatus(admin: SupabaseClient, id: string, patch: Record<strin
     try {
       const { error } = await admin.from("scheduled_sends").update(patch).eq("id", id);
       if (!error) return null;
-      if (attempt) return error.message;
+      if (attempt) return dbWhy(error);
     } catch (e) {
-      if (attempt) return (e as Error).message;
+      if (attempt) return dbWhy(e as Error);
     }
     await new Promise(r => setTimeout(r, 1_000));
   }
@@ -200,21 +219,21 @@ async function fire(admin: SupabaseClient, row: Row, settingsOnce: () => Promise
 
   if (row.kind === "jha") {
     const { data, error } = await admin.from("jhas").select(JHA_MAIL_SELECT).eq("id", row.record_id).maybeSingle();
-    if (error) throw new Error(error.message);
+    if (error) throw dbFail("the assessment read", error);
     const jha = data as unknown as JhaMailRow | null;
     if (!jha) throw new Error("The assessment has been deleted since this was scheduled.");
     fireGate("jha", person, jha as unknown as Record<string, unknown>);
     await mailJha(admin, jha, to, undefined, row.message);
   } else if (row.kind === "report") {
     const { data, error } = await admin.from("reports").select(REPORT_MAIL_SELECT).eq("id", row.record_id).maybeSingle();
-    if (error) throw new Error(error.message);
+    if (error) throw dbFail("the report read", error);
     const report = data as unknown as ReportMailRow | null;
     if (!report) throw new Error("The report has been deleted since this was scheduled.");
     fireGate("report", person, report as unknown as Record<string, unknown>);
     await mailReport(admin, report, to, undefined, row.message);
   } else {
     const { data, error } = await admin.from("tickets").select("id, status, total, technician_id").eq("id", row.record_id).maybeSingle();
-    if (error) throw new Error(error.message);
+    if (error) throw dbFail("the ticket read", error);
     const ticket = data as TicketRow | null;
     if (!ticket) throw new Error("The ticket has been deleted since this was scheduled.");
     fireGate("ticket_approval", person, ticket as unknown as Record<string, unknown>);
@@ -246,7 +265,7 @@ async function devicesOf(admin: SupabaseClient, profileId: string): Promise<Push
   const { data, error } = await admin.from("push_subscriptions")
     .select("id, endpoint, p256dh, auth, profiles!inner(deactivated_at)")
     .eq("profile_id", profileId).is("profiles.deactivated_at", null);
-  if (error) throw new Error(error.message);
+  if (error) throw dbFail("the device read", error);
   return (data ?? []) as unknown as PushSub[];
 }
 

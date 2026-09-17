@@ -85,7 +85,7 @@ function fetchWithCeiling(input, init = {}) {
 // reached the outbox as `lastError: "JWT issued at future"` and parked a
 // day's work behind a badge. The retry wraps the ceiling rather than the
 // other way round, so every attempt gets its own fresh timeout.
-const sbFetch = futureJwtRetrying(fetchWithCeiling);
+const sbFetch = futureJwtRetrying(fetchWithCeiling, SUPABASE_URL);
 
 // Where supabase-js keeps the signed-in session. It derives this key from the
 // project ref on its own; naming it here and handing it back is the only way

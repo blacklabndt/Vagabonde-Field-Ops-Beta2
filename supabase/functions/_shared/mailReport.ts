@@ -88,6 +88,9 @@ export async function mailReport(admin: SupabaseClient, report: ReportMailRow, t
   ].filter(Boolean).join("\n");
 
   await sendMail({
+    // The settings read this send still needs goes through the caller's own
+    // client, so it inherits whatever that client is wrapped with.
+    client: admin,
     from: "reports",
     to, cc, subject, htmlBody: html, textBody: text,
     attachments, tag: "report"
