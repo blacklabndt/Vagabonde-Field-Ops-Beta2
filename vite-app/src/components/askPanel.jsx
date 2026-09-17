@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Db } from "../db.js";
 import { Btn } from "./common.jsx";
-import { askTurns, askSession, pushTurn, threadForSend, dropAction, dropLearned, isConfirmAction, confirmLabel, formLabel, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
+import { askTurns, pushTurn, threadForSend, dropAction, dropLearned, isConfirmAction, confirmLabel, formLabel, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
 import { downloadFile, fileToUpload } from "../askFiles.js";
-import { prepareAttachments, attachmentManifest, bindPdfInputs } from "../askAttachments.js";
+import { imageFilesFrom, readAttachment, attachLabel, attachRunner, canSend, clearSent, keepName, keepTag, hashOfPath, verifyKept } from "../askAttach.js";
 
 // Ask: a square launcher at the bottom right of every screen (it says
 // "Claudia", per Kyle) and the card it opens. Not a dialog — no backdrop, the
@@ -13,6 +13,17 @@ import { prepareAttachments, attachmentManifest, bindPdfInputs } from "../askAtt
 // is pushed only once an answer has come back, so the thread never
 // carries a question with no answer. Job numbers in an answer open the
 // job, by membership against the job list as the chat does.
+//
+// A photo can be pasted or dropped onto the card. It is uploaded to the
+// shared drive at once — under Ask/attachments/YYYY-MM, named for its own
+// bytes — so it is an ordinary Files image from that moment: the storage
+// policy is the gate, the Files screen shows it, and the PDF builder reads
+// it back the way it reads any other. The card sends the keys with the
+// question; the function checks each one against storage as the person
+// before Ask is told it is there. Attaching needs the files tab, because
+// the upload does; without it the card says so instead of failing at the
+// drop. The month in the key is what the nightly sweep reads, so a one-off
+// photo ages out on its own after about three months (askAttachments.ts).
 //
 // Dictation is the browser's own speech recognition (Chrome, Edge, Safari
 // on the tablets): no key, no server of ours, nothing stored. The mic
@@ -138,8 +149,20 @@ export const CARD_WORDS = {
   // Under the thread while an answer is on its way.
   busy: "Procrastinating...",
   // The box, when it is empty.
-  placeholder: "Type here"
+  placeholder: "Type here",
+  // Under the box, where a photo may be pasted or dropped.
+  attach: "Paste or drop a photo to attach it",
+  // Over the card while an image is being dragged onto it.
+  dropping: "Drop the photo here",
+  // Under the chips, while anything attached is still only an attachment.
+  expires: "Attached photos are cleared from Files after about three months — tap Keep to hold one for good.",
+  // On the Keep button.
+  keepWhy: "Save a permanent copy in Files › Ask, which is never cleared"
 };
+
+// Attaching uploads to the shared drive, which the files tab gates. An
+// account without it is told why rather than shown a failed upload.
+const ATTACH_DENIED = "Attaching a photo needs the Files screen — ask the office for it.";
 
 function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles }) {
   const [turns, setTurns] = useState(askTurns);
@@ -152,50 +175,12 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
   // A proposed send going out — the card stays open for the answer.
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
-  const [attachments, setAttachments] = useState([]);
-  const [preparing, setPreparing] = useState(false);
-  const preparingRef = useRef(false);
-  const pickerEl = useRef(null);
-  const mounted = useRef(true);
   const [jobNums, setJobNums] = useState(null);
   const threadEl = useRef(null);
   const boxEl = useRef(null);
   const draftRef = useRef("");
   draftRef.current = draft;
   const mic = useDictation(() => draftRef.current, setDraft, setError);
-
-  useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
-
-  const attach = async files => {
-    if (!files.length || busy || sending || preparingRef.current) return;
-    preparingRef.current = true;
-    setPreparing(true);
-    setError("");
-    try {
-      const next = await prepareAttachments(files, attachments);
-      if (mounted.current) setAttachments(next);
-    } catch (e) {
-      if (mounted.current) setError(e.message || "Couldn't attach that image.");
-    } finally {
-      preparingRef.current = false;
-      if (mounted.current) setPreparing(false);
-    }
-  };
-
-  const dropImages = e => {
-    e.preventDefault();
-    e.stopPropagation();
-    attach(Array.from(e.dataTransfer.files));
-  };
-  const pasteImages = e => {
-    const files = Array.from(e.clipboardData.files);
-    if (!files.length) return;
-    e.preventDefault();
-    attach(files);
-  };
 
   // The job list for the links, read once the card opens; a failed read
   // only costs the links.
@@ -220,24 +205,36 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
   const send = async () => {
     mic.stop();
     const text = draft.trim();
-    if (!text || busy || sending || preparingRef.current) return;
-    const sentImages = attachments.slice();
-    const sentSession = askSession();
+    // The upload is the guard, not the Send button's disabled attribute:
+    // Enter goes through this function too.
+    if (!canSend({ text, busy, attaching: attachingRef.current })) return;
     setBusy(true);
     setError("");
     try {
-      const { answer, trace, action, learned, files, learnTrouble, followUp } = await Db.ask([...threadForSend(), { role: "user", text }], { ...context, input_images: attachmentManifest(sentImages) });
-      if (askSession() !== sentSession) return;
-      bindPdfInputs(files, sentImages);
+      const going = attachedRef.current;
+      const paths = going.map(a => a.path);
+      const sentIds = going.map(a => a.id);
+      const { answer, trace, action, learned, files, learnTrouble, followUp } = await Db.ask(
+        [...threadForSend(), { role: "user", text }],
+        paths.length ? { ...context, attachments: paths } : context
+      );
       pushTurn("user", text);
       pushTurn("assistant", answer, trace, action, learned, files, learnTrouble, followUp);
-      if (mounted.current) { setTurns(askTurns()); setDraft(""); }
+      setTurns(askTurns());
+      setDraft("");
+      // The photos that went with that question are the ones cleared — a
+      // photo dropped while the answer was on its way was never sent, so it
+      // stays on the card for the next question instead of vanishing. They
+      // are all still in Files either way; the chip is not the file.
+      const left = clearSent(attachedRef.current, sentIds);
+      attachedRef.current = left;
+      setAttached(left);
     } catch (e) {
-      if (mounted.current) setError(e.networkFailure
+      setError(e.networkFailure
         ? "No connection — your question is still here, try again when you have signal."
         : (e.message || "Ask couldn't answer."));
     } finally {
-      if (mounted.current) setBusy(false);
+      setBusy(false);
     }
   };
 
@@ -295,6 +292,134 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
     }
   };
 
+  // Paste and drop. Each file is checked on the device (the PDF loader's own
+  // header and size rules, one set of them) and uploaded before it becomes a
+  // chip, so a chip always stands for bytes that are really there. A file
+  // that fails takes only itself down — the rest of a multi-photo drop still
+  // lands, and the reason is on the error line.
+  const [attached, setAttached] = useState([]);
+  const [attaching, setAttaching] = useState(false);
+  const attachedRef = useRef([]);
+  attachedRef.current = attached;
+  // Send reads this, not the `attaching` state: Enter fires the handler the
+  // render made, and a drop landing between that render and the keystroke
+  // would otherwise send the question without the photo it was about.
+  const attachingRef = useRef(false);
+  // Each chip's own identity. Two chips can hold the same path (detach a
+  // photo and paste it again — the key is its content hash), so the path
+  // cannot say which chip a reply carried; this counter can.
+  const nextId = useRef(0);
+  // Every drop and paste goes through one chain, so two of them cannot read
+  // the same "bytes so far" and both fit under the 12 MiB budget, and the
+  // second cannot clear "Attaching…" while the first is still uploading.
+  // The runner is askAttach.js's, tested there without a browser; the two
+  // setters it is handed are React's own and never change identity.
+  const runner = useRef(null);
+  if (!runner.current) {
+    runner.current = attachRunner({
+      setBusy: on => { attachingRef.current = on; setAttaching(on); },
+      onError: setError
+    });
+  }
+
+  const attachOne = async file => {
+    const held = attachedRef.current;
+    const item = await readAttachment(file, {
+      soFar: held.reduce((n, a) => n + a.size, 0),
+      count: held.length
+    });
+    if (held.some(a => a.path === item.path)) return;
+    await Db.uploadAskAttachment(item.path, item.bytes, item.type);
+    // The bytes are kept until the chip goes, so Keep can write the photo a
+    // second time under Ask/ without reading it back off the drive. They are
+    // inside the same 12 MiB the budget above already refuses to exceed.
+    nextId.current += 1;
+    const next = [...attachedRef.current, {
+      id: nextId.current,
+      path: item.path, size: item.size, bytes: item.bytes, type: item.type,
+      label: attachLabel(file, attachedRef.current.length)
+    }];
+    attachedRef.current = next;
+    setAttached(next);
+  };
+
+  const attach = files => {
+    if (!files.length || !canSaveFiles) return;
+    setError("");
+    runner.current.run(files, attachOne);
+  };
+
+  // "Keep" writes the photo a second time, into Ask/ as an ordinary file
+  // under its own name, where the sweep never looks. The attachment itself
+  // is left alone: the question that is about to go names it, and moving it
+  // out from under a live request would leave the key pointing at nothing.
+  const [keeping, setKeeping] = useState(0);
+  const keep = async a => {
+    setKeeping(a.id);
+    setError("");
+    const tag = keepTag(hashOfPath(a.path));
+    try {
+      // The name carries the photo's own content hash WHOLE, so a name
+      // already taken in Ask/ is this same photo and "already kept" is the
+      // truth. Without a hash it is only a name, and a refusal over it says
+      // nothing about what is under it.
+      const name = keepName(a.label, a.type, tag);
+      await Db.uploadSharedFile("Ask", new File([a.bytes], name, { type: a.type }));
+      Db.forgetFileTree();
+      const next = attachedRef.current.map(x => (x.id === a.id ? { ...x, kept: true } : x));
+      attachedRef.current = next;
+      setAttached(next);
+    } catch (e) {
+      if (tag && e.taken) {
+        // A taken name is not a kept photo. Files takes any bytes under any
+        // name, so what is under it is read back and digested before the chip
+        // is allowed to say it is saved.
+        const verdict = await verifyKept({ hash: tag, read: () => Db.downloadObject("shared", e.path) });
+        if (verdict === "same") {
+          const next = attachedRef.current.map(x => (x.id === a.id ? { ...x, kept: true } : x));
+          attachedRef.current = next;
+          setAttached(next);
+          setError(`“${a.label}” is already kept in Files › Ask.`);
+        } else if (verdict === "different") {
+          setError(`A different file is already called “${keepName(a.label, a.type, tag)}” in Files › Ask — rename this one, or remove that file first.`);
+        } else {
+          setError(`That name is taken in Files › Ask and the file there couldn't be checked — “${a.label}” is not kept. Try again.`);
+        }
+      } else setError(e.message || "Couldn't keep that photo.");
+    } finally { setKeeping(0); }
+  };
+
+  const onPaste = e => {
+    const files = imageFilesFrom(e.clipboardData);
+    if (!files.length) return;
+    e.preventDefault();
+    if (!canSaveFiles) { setError(ATTACH_DENIED); return; }
+    attach(files);
+  };
+
+  const [over, setOver] = useState(false);
+  const onDragOver = e => {
+    if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
+    e.preventDefault();
+    setOver(true);
+  };
+  // Moving between the card's own children fires dragleave on the card; the
+  // word must not flicker on every heading crossed, so a leave that lands
+  // somewhere still inside is not a leave.
+  const onDragLeave = e => {
+    if (e.relatedTarget && e.currentTarget.contains(e.relatedTarget)) return;
+    setOver(false);
+  };
+  const onDrop = e => {
+    if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
+    e.preventDefault();
+    setOver(false);
+    if (!canSaveFiles) { setError(ATTACH_DENIED); return; }
+    const files = imageFilesFrom(e.dataTransfer);
+    if (!files.length) { setError("Drop a PNG or JPEG image."); return; }
+    attach(files);
+  };
+
   const toggleMic = () => {
     if (mic.listening) { mic.stop(); return; }
     setError("");
@@ -302,9 +427,9 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
   };
 
   return (
-    <div className={`ask-card${closing ? " closing" : ""}`} role="dialog" aria-label="Claudia"
-      onDragOver={e => { if (Array.from(e.dataTransfer.types).includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } }}
-      onDrop={dropImages}>
+    <div className={`ask-card${closing ? " closing" : ""}${over ? " ask-card-over" : ""}`} role="dialog" aria-label="Claudia"
+      onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+      {over && <div className="ask-drop">{CARD_WORDS.dropping}</div>}
       <div className="ask-card-head">
         <h3>Claudia</h3>
         <button type="button" className="ask-close"
@@ -410,28 +535,35 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
         {busy && <div className="ask-turn-answer ask-busy">{CARD_WORDS.busy}</div>}
       </div>
       {error && <div className="ask-error">{error}</div>}
-      <div style={{ padding: "6px 12px", fontSize: 12 }}>
-        <input ref={pickerEl} type="file" accept="image/png,image/jpeg" multiple hidden
-          onChange={e => { const files = Array.from(e.target.files || []); e.target.value = ""; attach(files); }} />
-        <button type="button" className="btn btn-secondary" onClick={() => pickerEl.current?.click()}
-          disabled={busy || sending || preparing || attachments.length >= 4}>Attach images</button>
-        <span style={{ marginLeft: 8 }}>{preparing ? "Preparing images…" : "Or drop / paste PNG or JPEG images here."}</span>
-        {attachments.length > 0 && <>
-          <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingTop: 8 }}>
-            {attachments.map((input, index) => <div key={input.id} style={{ flex: "0 0 96px", minWidth: 0 }}>
-              <img src={input.image.data} alt={input.name} style={{ width: 80, height: 56, objectFit: "contain" }} />
-              <div title={input.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{index + 1}. {input.name}</div>
-              <button type="button" className="btn btn-secondary" aria-label={`Remove ${input.name}`}
-                disabled={busy || sending || preparing} onClick={() => setAttachments(items => items.filter(item => item.id !== input.id))}>Remove</button>
-            </div>)}
-          </div>
-          <div style={{ marginTop: 6 }}>For PDF placement; Ask cannot view these images. Up to 4, 5 MiB each, 12 MiB total.</div>
-        </>}
-      </div>
+      {/* What is attached to the NEXT question, not to a turn already sent.
+          The × detaches; Keep writes a second, permanent copy into
+          Files › Ask. Say the expiry plainly — an attachment left alone is
+          swept with its month, and nobody should learn that in month four. */}
+      {canSaveFiles && (attached.length > 0 || attaching) && (
+        <div className="ask-attached">
+          {attached.map(a => (
+            <span key={a.id} className="ask-chip">
+              <span className="ask-chip-name">{a.label}</span>
+              {a.kept
+                ? <span className="ask-chip-kept" title="Kept in Files › Ask">kept</span>
+                : <button type="button" className="ask-chip-keep" disabled={keeping === a.id}
+                    title={CARD_WORDS.keepWhy} aria-label={`Keep ${a.label} in Files`}
+                    onClick={() => keep(a)}>{keeping === a.id ? "…" : "Keep"}</button>}
+              <button type="button" className="ask-chip-x" aria-label={`Detach ${a.label}`}
+                onClick={() => { const next = attachedRef.current.filter(x => x.id !== a.id); attachedRef.current = next; setAttached(next); }}>×</button>
+            </span>
+          ))}
+          {attaching && <span className="ask-chip ask-chip-busy">Attaching…</span>}
+        </div>
+      )}
+      {canSaveFiles && attached.some(a => !a.kept) && (
+        <div className="ask-attach-hint">{CARD_WORDS.expires}</div>
+      )}
       <div className="ask-foot">
         <textarea ref={boxEl} className="input" rows={2} value={draft}
           placeholder={mic.listening ? "Listening…" : CARD_WORDS.placeholder}
-          onChange={e => setDraft(e.target.value)} onKeyDown={onKeyDown} onPaste={pasteImages} disabled={busy || sending} />
+          onChange={e => setDraft(e.target.value)} onKeyDown={onKeyDown} onPaste={onPaste}
+          disabled={busy || sending} />
         {mic.supported && (
           <button type="button" className={`btn btn-secondary ask-mic${mic.listening ? " ask-mic-on" : ""}`}
             onClick={toggleMic} disabled={busy || sending} aria-pressed={mic.listening}
@@ -439,8 +571,9 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
             {mic.listening ? "■" : "🎤"}
           </button>
         )}
-        <Btn variant="primary" onClick={send} disabled={busy || sending || preparing || !draft.trim()}>Send</Btn>
+        <Btn variant="primary" onClick={send} disabled={busy || sending || attaching || !draft.trim()}>Send</Btn>
       </div>
+      {canSaveFiles && !attached.length && !attaching && <div className="ask-attach-hint">{CARD_WORDS.attach}</div>}
     </div>
   );
 }

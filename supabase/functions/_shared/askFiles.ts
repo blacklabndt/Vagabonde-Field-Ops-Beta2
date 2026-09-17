@@ -37,8 +37,7 @@ export interface Sheet extends Table { name: string }
 export const ASSET_BUDGET = 40_000;
 export interface AppImage { asset: "vagabonde-logo"; caption?: string }
 export interface SharedImage { shared_path: string; caption?: string }
-export interface InputImage { input_id: string; caption?: string }
-export type PdfImage = AppImage | SharedImage | InputImage;
+export type PdfImage = AppImage | SharedImage;
 export interface Section { heading?: string; text?: string; table?: Table; image?: PdfImage }
 export interface Doc { title: string; subtitle?: string; sections: Section[] }
 export interface AskFile {
@@ -89,39 +88,6 @@ function checkTable(raw: unknown, where: string, rowsSoFar: number): Table {
 export const MAX_PDF_IMAGES = 4;
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const IMAGE_LIST_LIMIT = 100;
-export const MAX_IMAGE_TOTAL = 12 * 1024 * 1024;
-export interface InputImageMetadata { id: string; name: string; type: "image/png" | "image/jpeg"; size: number; width: number; height: number }
-
-function inputId(raw: unknown): string {
-  if (typeof raw !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(raw)) throw refuse("An attached image needs a valid input ID of at most 64 letters, numbers, underscores or hyphens.");
-  return raw;
-}
-
-// Only metadata crosses the request boundary. Actual image bytes are checked
-// and prepared by the browser; these caller-supplied fields prove no contents.
-export function checkInputImages(raw: unknown): InputImageMetadata[] {
-  if (raw == null) return [];
-  if (!Array.isArray(raw) || raw.length > MAX_PDF_IMAGES) throw refuse("Attach at most four PNG or JPEG images.");
-  const ids = new Set<string>();
-  let total = 0;
-  return raw.map(value => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) throw refuse("An attached image needs valid metadata.");
-    const r = value as Record<string, unknown>;
-    const id = inputId(r.id);
-    if (ids.has(id)) throw refuse("Each attached image needs a different input ID.");
-    ids.add(id);
-    if (typeof r.name !== "string") throw refuse("An attached image needs a filename.");
-    const name = [...r.name].filter(c => c.charCodeAt(0) >= 32 && c.charCodeAt(0) !== 127).join("").trim().slice(0, 120);
-    if (!name) throw refuse("An attached image needs a filename.");
-    if (r.type !== "image/png" && r.type !== "image/jpeg") throw refuse("Attach only PNG or JPEG images.");
-    const { size, width, height } = r;
-    if (typeof size !== "number" || !Number.isSafeInteger(size) || size <= 0 || size > MAX_IMAGE_BYTES) throw refuse("Each attached image must be no larger than 5 MiB.");
-    if (typeof width !== "number" || !Number.isSafeInteger(width) || width < 1 || width > 1600 || typeof height !== "number" || !Number.isSafeInteger(height) || height < 1 || height > 1600) throw refuse("Attached image dimensions must be between 1 and 1600 pixels after preparation.");
-    total += size;
-    if (total > MAX_IMAGE_TOTAL) throw refuse("Attached images exceed the 12 MiB total source budget.");
-    return { id, name, type: r.type, size, width, height };
-  });
-}
 
 function sharedPath(raw: unknown, folder = false): string {
   if (folder && raw === "") return "";
@@ -155,10 +121,9 @@ export function imageListing(folder: string, offset: number, entries: ImageEntry
   return { folder, folders, images, next_offset: entries.length === IMAGE_LIST_LIMIT ? offset + entries.length : null };
 }
 
-export function requireDiscoveredImages(file: AskFile, discovered: Set<string>, attached: Set<string> = new Set()): void {
+export function requireDiscoveredImages(file: AskFile, discovered: Set<string>): void {
   for (const section of file.document?.sections ?? []) {
     if (section.image && "shared_path" in section.image && !discovered.has(section.image.shared_path)) throw refuse("Use list_images to find each Files image during this request before adding it to a PDF.");
-    if (section.image && "input_id" in section.image && !attached.has(section.image.input_id)) throw refuse("Use only an input_id from the images attached to this request before adding it to a PDF.");
   }
 }
 
@@ -166,12 +131,11 @@ function checkImage(raw: unknown, shared: true): PdfImage;
 function checkImage(raw: unknown, shared?: false): AppImage;
 function checkImage(raw: unknown, shared = false): PdfImage {
   const r = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  if ([r.asset, r.shared_path, r.input_id].filter(v => v != null).length > 1) throw refuse("An image needs exactly one source: asset, shared_path or input_id.");
-  if ((r.shared_path != null || r.input_id != null) && !shared) throw refuse("HTML images support only the bundled app asset.");
-  if (r.shared_path == null && r.input_id == null && r.asset !== "vagabonde-logo") throw refuse("Unknown app asset. Use vagabonde-logo, a PDF shared_path from list_images, or an attached input_id.");
+  if (r.asset != null && r.shared_path != null) throw refuse("An image needs exactly one source: asset or shared_path.");
+  if (r.shared_path != null && !shared) throw refuse("HTML images support only the bundled app asset.");
+  if (r.shared_path == null && r.asset !== "vagabonde-logo") throw refuse("Unknown app asset. Use vagabonde-logo or a PDF shared_path from list_images.");
   const caption = str(r.caption)?.trim();
   if (r.caption != null && (typeof r.caption !== "string" || (caption?.length ?? 0) > 300)) throw refuse("An image caption must be text of at most 300 characters.");
-  if (r.input_id != null) return { input_id: inputId(r.input_id), ...(caption ? { caption } : {}) };
   return r.shared_path != null ? { shared_path: sharedPath(r.shared_path), ...(caption ? { caption } : {}) } : { asset: "vagabonde-logo", ...(caption ? { caption } : {}) };
 }
 

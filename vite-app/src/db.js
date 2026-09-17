@@ -2780,9 +2780,31 @@ export const Db = {
     const { error } = await sbClient.storage
       .from("shared").upload(path, file, { upsert: false });
     if (error) {
-      if (/exists/i.test(error.message)) throw new Error(`“${file.name}” is already in this folder.`);
+      if (/exists/i.test(error.message)) {
+        // The key the duplicate sits under, marked, so a caller that means to
+        // check WHAT is under that name can read it back instead of trusting
+        // the name. Storage takes any bytes under any name.
+        const taken = new Error(`“${file.name}” is already in this folder.`);
+        taken.taken = true;
+        taken.path = path;
+        throw taken;
+      }
       throw error;
     }
+    return path;
+  },
+
+  // A photo pasted or dropped into Ask's card. The key is its month and its
+  // content hash (askAttach.js), so an object already there IS this photo —
+  // the duplicate is the dedupe landing, not a failure, and the path comes
+  // back either way. upsert stays false on purpose: re-uploading identical
+  // bytes buys nothing and would let a second device overwrite an object a
+  // first one is still reading.
+  async uploadAskAttachment(path, bytes, type) {
+    const { error } = await sbClient.storage
+      .from("shared").upload(path, new Blob([bytes], { type }), { upsert: false, contentType: type });
+    if (error && !/exists/i.test(error.message || "")) throw error;
+    this.forgetFileTree();
     return path;
   },
 
