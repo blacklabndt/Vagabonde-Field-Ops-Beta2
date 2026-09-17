@@ -236,6 +236,7 @@ test("a reminder's text is one line of a few to three hundred characters, and it
 // module's own now (the tick hands it the wrapped client's write); the wait
 // is handed in, so the test is instant.
 const tick = readFileSync(new URL("../../supabase/functions/scheduled-sends/index.ts", import.meta.url), "utf8");
+const shared = readFileSync(new URL("../../supabase/functions/_shared/scheduledSends.ts", import.meta.url), "utf8");
 const instant = async () => {};
 
 // The write the tick hands markStatus: the client's update, already awaited.
@@ -283,12 +284,16 @@ test("the tick asks what the final write answered, never assuming it landed", ()
   // The bug this replaces: `await admin.from(...).update({ status: "sent" })`
   // with the error dropped, then fired++ and a success push, leaving the row
   // `sending` for the stale sweep to call "check before sending again".
-  const body = tick.slice(tick.indexOf("await fire(admin, row, settingsOnce);"), tick.indexOf("return json({ ok: true"));
-  assert.ok(!/await admin\.from\("scheduled_sends"\)\.update\(\{ status: "(sent|failed)"/.test(body),
+  // The sequence moved into the shared module (runRow), where the node
+  // suite drives it with the transports counted; the tick hands it the live
+  // claim, send, write, log and push.
+  const body = shared.slice(shared.indexOf("export async function runRow("));
+  assert.ok(!/admin\.from\("scheduled_sends"\)\.update\(\{ status: "(sent|failed)"/.test(tick),
     "the final status goes through markStatus, whose answer is read");
-  assert.match(body, /settle\(row\.id, \{ status: "sent" \}\)/);
-  assert.match(body, /settle\(row\.id, \{ status: "failed"/);
+  assert.match(body, /deps\.settle\(row\.id, \{ status: "sent" \}\)/);
+  assert.match(body, /deps\.settle\(row\.id, \{ status: "failed"/);
   assert.match(body, /sentUnrecorded\(row\.label, wErr\)/);
+  assert.match(tick, /const tally = await runRow\(/);
   // And the tick's own answer says so: `fired` and `failed` are about the
   // send, `unrecorded` about the row, and ok is false while one is left.
   const answer = tick.slice(tick.indexOf("return json({ ok:"), tick.indexOf("} catch (e) {", tick.indexOf("return json({ ok:")));

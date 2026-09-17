@@ -104,6 +104,57 @@ export async function markStatus(
   return "the row could not be written";
 }
 
+// ── One due row, start to finish ────────────────────────────────────────
+// The claim, the send, the final status, the log and the push, in the one
+// order that keeps a send from going twice. It lives here, with the
+// database and the transports handed in, because the argument for the
+// clock retry is entirely about this sequence: a refused claim asked again
+// has sent nothing, and a status write refused to the end must never be a
+// reason to send again. The tick's own tally is the sum of what it answers.
+//
+// `claim` answers false when another tick took the row, and THROWS when the
+// database refused — a refusal is not an answer about the row.
+export interface SendRow {
+  id: string; kind: string; record_id: string; job_id: string | null; label: string; set_by: string;
+}
+export interface RowDeps {
+  claim: (id: string) => Promise<boolean>;
+  fire: (row: SendRow) => Promise<void>;
+  settle: (id: string, patch: Record<string, string>) => Promise<string | null>;
+  log: (message: string, context: Record<string, unknown>) => Promise<void>;
+  notify: (row: SendRow, error: string | null) => Promise<void>;
+  // What function_errors is told — the public sentence AND whatever detail a
+  // marked refusal carries. Handed in so this module keeps its one import.
+  logged: (e: unknown) => string;
+}
+export interface RowTally { fired: number; failed: number; unrecorded: number; claimed: boolean }
+
+export async function runRow(row: SendRow, deps: RowDeps): Promise<RowTally> {
+  if (!await deps.claim(row.id)) return { fired: 0, failed: 0, unrecorded: 0, claimed: false };
+  const ctx = { id: row.id, kind: row.kind, record_id: row.record_id, job_id: row.job_id, set_by: row.set_by };
+  try {
+    await deps.fire(row);
+    // The email has gone. Whether the row can be marked changes nothing
+    // about that, so a write that fails is reported as what it is — the
+    // record lost, never the send — and NEVER as a reason to send again.
+    const wErr = await deps.settle(row.id, { status: "sent" });
+    if (wErr) await deps.log(sentUnrecorded(row.label, wErr), ctx);
+    // A reminder's push was the firing itself; a second "Sent" would be
+    // noise on the same devices.
+    if (row.kind !== "reminder") await deps.notify(row, null);
+    return { fired: 1, failed: 0, unrecorded: wErr ? 1 : 0, claimed: true };
+  } catch (e) {
+    // The row and the push get our own words; function_errors gets those
+    // AND the detail a marked refusal is carrying.
+    const message = (e as Error).message;
+    const logged = deps.logged(e);
+    const wErr = await deps.settle(row.id, { status: "failed", error: message });
+    await deps.log(wErr ? failureUnrecorded(row.label, logged, wErr) : `${row.label} was not sent: ${logged}`, ctx);
+    await deps.notify(row, message);
+    return { fired: 0, failed: 1, unrecorded: wErr ? 1 : 0, claimed: true };
+  }
+}
+
 export interface Person { id: string; role: string; tab_access: string[] | null; deactivated_at: string | null }
 export interface ReportToSend { id: string; pdf_key: string | null; filename?: string | null }
 export interface SendWords { summary: string; done: string }

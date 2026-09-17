@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { futureJwtRetrying, isFutureJwtRefusal, isProjectRest, waitOrAbort, FUTURE_JWT_DELAYS_MS } from "./jwtRetry.js";
 import { fetchWithCeiling } from "./fetchCeiling.js";
-import { markStatus, sentUnrecorded } from "../../supabase/functions/_shared/scheduledSends.ts";
+import { markStatus, runRow, dbWhy, sentUnrecorded } from "../../supabase/functions/_shared/scheduledSends.ts";
 import { refuse, loggedWords, publicWords } from "../../supabase/functions/_shared/publicError.ts";
 
 const BASE = "https://eielmvxzdwwprmmfamlq.supabase.co";
@@ -23,10 +23,17 @@ const ok = () => new Response('[{"id":"S-1"}]', { status: 200 });
 // Instant waits, in a list. Anything the wrapper schedules is answered at
 // once; the delays it asked for are what the tests read back.
 function withFastClock(fn) {
-  const real = globalThis.setTimeout;
+  const real = globalThis.setTimeout, realClear = globalThis.clearTimeout;
   const waits = [];
-  globalThis.setTimeout = (cb, ms) => { waits.push(ms); return real(cb, 0); };
-  return Promise.resolve(fn(waits)).finally(() => { globalThis.setTimeout = real; });
+  // Every timer that was set, with what it was set for, and every id that
+  // was cleared: counting a ceiling being STARTED says nothing about whether
+  // it was put out, and a timer left running is the leak.
+  const set = [], cleared = new Set();
+  globalThis.setTimeout = (cb, ms) => { const id = real(cb, 0); waits.push(ms); set.push({ ms, id }); return id; };
+  globalThis.clearTimeout = id => { cleared.add(id); return realClear(id); };
+  const clock = { set, cleared, clearedFor: ms => set.filter(t => t.ms === ms && cleared.has(t.id)).length };
+  return Promise.resolve(fn(waits, clock))
+    .finally(() => { globalThis.setTimeout = real; globalThis.clearTimeout = realClear; });
 }
 
 // A clock that does not tick. Timers are held until the test releases one,
@@ -255,7 +262,7 @@ function countingSignal() {
   };
 }
 
-test("the browser's ceiling and the retry compose: three attempts, three ceilings", () => withFastClock(async waits => {
+test("the browser's ceiling and the retry compose: three attempts, three ceilings", () => withFastClock(async (waits, clock) => {
   const { signal, live } = countingSignal();
   const wrapped = futureJwtRetrying(fetchWithCeiling, BASE);
   await withNetwork([refusal], async calls => {
@@ -272,6 +279,10 @@ test("the browser's ceiling and the retry compose: three attempts, three ceiling
     const ceilings = waits.filter(ms => ms === 30000);
     assert.equal(ceilings.length, 3, "one fresh 30s ceiling per attempt");
     assert.deepEqual(waits.filter(ms => ms !== 30000), FUTURE_JWT_DELAYS_MS, "and the two backoffs between them");
+    // Started is not the same as put out: each attempt's ceiling was
+    // CLEARED when its request settled, so nothing is left running to abort
+    // a later attempt — or the caller's next request — thirty seconds on.
+    assert.equal(clock.clearedFor(30000), 3, "every ceiling was cleared when its attempt settled");
     // Three requests over one caller signal, and nothing still holding it.
     assert.equal(live.size, 0, "every attempt let go of the caller's signal");
   });
@@ -296,41 +307,126 @@ test("the ceiling still answers for itself inside the retry", () => withFastCloc
   });
 }));
 
-// ── The tick's real settle: the send has gone, the row may not be written ──
-// `markStatus` is the shared module's own, driven through the real retry
-// over a scripted PostgREST. The send is counted: whatever the row does,
-// the email goes once.
+// ── The tick's real row: claim, send, settle, log, push ──────────────
+// `runRow` is the sequence the deployed tick runs — index.ts hands it the
+// live claim, `fire`, `settle`, `logError` and `tellScheduler`, and adds up
+// what it answers. Here the database behind the claim and the status write
+// is a scripted PostgREST behind the REAL retry, and the two transports are
+// counted. What is being proved is that the count can only ever be one:
+// nothing about a refused request, recovered or exhausted, sends again.
 function postgrest(answers) {
   const { fetchImpl, calls } = scripted(answers);
   const db = futureJwtRetrying(fetchImpl, BASE);
-  const update = async patch => {
+  const write = async patch => {
     const res = await db(`${BASE}/rest/v1/scheduled_sends?id=eq.S-1`, { method: "PATCH", body: JSON.stringify(patch) });
-    if (res.status === 200) return { error: null };
-    let body = {};
+    let body = null;
     try { body = JSON.parse(await res.text()); } catch { /* a gateway page */ }
-    return { error: { message: body.message ?? `HTTP ${res.status}`, code: body.code ?? null } };
+    if (res.status === 200) return { data: body, error: null };
+    return { data: null, error: { message: body?.message ?? `HTTP ${res.status}`, code: body?.code ?? null } };
   };
-  return { update, calls };
+  return { write, calls };
 }
 
-test("a status write that meets the clock recovers, and the send is not repeated", () => withFastClock(async () => {
-  const sends = { count: 1 };               // the email has already gone
-  const { update, calls } = postgrest([refusal, ok]);
-  assert.equal(await markStatus(update, { status: "sent" }, async () => {}), null, "the row was written");
+const ROW = {
+  id: "S-1", kind: "ticket_approval", record_id: "T-1", job_id: "J-1",
+  label: "Ticket T-10231", set_by: "P-1"
+};
+
+// The tick's five dependencies, with mail and push replaced by counters.
+// They are counted and not scripted on purpose: a send that goes twice shows
+// up here as a 2, whatever the database did.
+function tickDeps(answers, fireFails) {
+  const { write, calls } = postgrest(answers);
+  const sends = { mail: 0, push: 0 };
+  const logs = [];
+  const deps = {
+    claim: async () => {
+      const { data, error } = await write({ status: "sending" });
+      if (error) throw new Error(`the claim: ${dbWhy(error)}`);
+      return Array.isArray(data) && data.length > 0;
+    },
+    fire: async () => { sends.mail++; if (fireFails) throw fireFails; },
+    settle: (_id, patch) => markStatus(p => write(p).then(r => ({ error: r.error })), patch, async () => {}),
+    log: async (message, context) => { logs.push({ message, context }); },
+    notify: async () => { sends.push++; },
+    logged: loggedWords
+  };
+  return { deps, calls, sends, logs };
+}
+
+test("a claim that meets the clock recovers, and the send is made once", () => withFastClock(async () => {
+  const { deps, calls, sends, logs } = tickDeps([refusal, ok]);
+  const tally = await runRow(ROW, deps);
+  assert.equal(calls.length, 3, "two attempts at the claim, then the status write");
+  assert.deepEqual(tally, { fired: 1, failed: 0, unrecorded: 0, claimed: true });
+  assert.equal(sends.mail, 1, "the email went once");
+  assert.equal(sends.push, 1, "and the scheduler heard once");
+  assert.deepEqual(logs, [], "nothing to tell the office");
+}));
+
+test("a claim refused to the end sends nothing at all", () => withFastClock(async () => {
+  const { deps, calls, sends, logs } = tickDeps([refusal]);
+  await assert.rejects(runRow(ROW, deps), /^Error: the claim: JWT issued at future \[PGRST303\]$/);
+  assert.equal(calls.length, 3, "three attempts, and then it is a failure like any other");
+  assert.equal(sends.mail, 0, "a row that was never claimed is never sent");
+  assert.equal(sends.push, 0);
+  assert.deepEqual(logs, []);
+}));
+
+test("a claim another tick took sends nothing, and asks nothing again", () => withFastClock(async () => {
+  const taken = () => new Response("[]", { status: 200 });
+  const { deps, calls, sends } = tickDeps([taken]);
+  const tally = await runRow(ROW, deps);
+  assert.deepEqual(tally, { fired: 0, failed: 0, unrecorded: 0, claimed: false });
+  assert.equal(calls.length, 1, "zero rows back is an answer, not a refusal");
+  assert.equal(sends.mail, 0, "the tick that won it is the one that sends");
+  assert.equal(sends.push, 0);
+}));
+
+test("a status write refused to the end after the send: told, never repeated", () => withFastClock(async () => {
+  // The claim lands; everything after it meets the clock and keeps meeting it.
+  const { deps, calls, sends, logs } = tickDeps([ok, refusal]);
+  const tally = await runRow(ROW, deps);
+  // One claim, then markStatus's two tries with three attempts inside each.
+  assert.equal(calls.length, 7);
+  assert.deepEqual(tally, { fired: 1, failed: 0, unrecorded: 1, claimed: true });
+  assert.equal(sends.mail, 1, "the email had already gone, and goes once");
+  assert.equal(sends.push, 1);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0].message, /WAS SENT/);
+  assert.match(logs[0].message, /PGRST303/, "the office is told which refusal it was");
+  assert.match(logs[0].message, /Do not send it again\.$/);
+  assert.equal(logs[0].context.id, "S-1");
+  assert.equal(logs[0].message, sentUnrecorded(ROW.label, "JWT issued at future [PGRST303]"));
+}));
+
+test("a send that failed is failed once, and the log keeps the detail the row does not", () => withFastClock(async () => {
+  const why = refuse("Couldn't read the app settings. Try again, and tell the office if it keeps happening.",
+    "JWT issued at future [PGRST303]");
+  const { deps, calls, sends, logs } = tickDeps([ok, refusal, ok], why);
+  const tally = await runRow(ROW, deps);
+  // Claim, then the failed status write: refused once, written on the retry.
+  assert.equal(calls.length, 3);
+  assert.deepEqual(tally, { fired: 0, failed: 1, unrecorded: 0, claimed: true });
+  assert.equal(sends.mail, 1, "the send was attempted once and not again");
+  assert.equal(sends.push, 1, "and the scheduler is told once, with our own words");
+  assert.match(logs[0].message, /was not sent: /);
+  assert.match(logs[0].message, /PGRST303/, "function_errors gets the database's reason");
+}));
+
+// markStatus itself, driven the same way: the write and nothing else.
+test("a status write that meets the clock recovers", () => withFastClock(async () => {
+  const { write, calls } = postgrest([refusal, ok]);
+  const w = p => write(p).then(r => ({ error: r.error }));
+  assert.equal(await markStatus(w, { status: "sent" }, async () => {}), null, "the row was written");
   assert.equal(calls.length, 2, "the retry asked again inside the first try");
-  assert.equal(sends.count, 1, "and nothing about the row sent another email");
 }));
 
 test("a status write refused to the end says so with its code, and never throws", () => withFastClock(async () => {
-  const sends = { count: 1 };               // the email has already gone
-  const { update, calls } = postgrest([refusal]);
-  const why = await markStatus(update, { status: "sent" }, async () => {});
-  // Three attempts inside each of markStatus's two tries: the retry is
-  // spent, and then the second chance is.
-  assert.equal(calls.length, 6);
+  const { write, calls } = postgrest([refusal]);
+  const why = await markStatus(p => write(p).then(r => ({ error: r.error })), { status: "sent" }, async () => {});
+  assert.equal(calls.length, 6, "three attempts inside each of markStatus's two tries");
   assert.equal(why, "JWT issued at future [PGRST303]", "the office is told which refusal it was");
-  assert.equal(sends.count, 1, "the send is never made twice by a row that would not write");
-  // And the words the office reads say not to send it again.
   const words = sentUnrecorded("Ticket T-10231", why);
   assert.match(words, /WAS SENT/);
   assert.match(words, /PGRST303/);
@@ -416,13 +512,25 @@ test("the tick's every database request is wrapped, and its sends are not", () =
   assert.ok(src.includes("loggedWords(e)"), "and the log takes the detail a marked refusal carries");
   assert.ok(/logError\("scheduled-sends", dbWhy\(\{ message: loggedWords\(e\)/.test(src),
     "the outer catch logs the words AND the code");
-  assert.ok(/failureUnrecorded\(row\.label, logged, wErr\)/.test(src) && /was not sent: \$\{logged\}/.test(src),
-    "a row that failed is logged with its detail, and told to the person without it");
+  // The per-row sequence is the shared module's, and the tick hands it the
+  // live claim, send, status write, log and push. A loop that did any of it
+  // itself again would be a second, untested order.
+  assert.ok(/const tally = await runRow\(row as unknown as SendRow, \{/.test(src),
+    "the tick runs the shared sequence");
+  assert.ok(/logged: loggedWords/.test(src), "and the log takes the detail a marked refusal carries");
+  for (const dep of ["claim,", "fire: () => fire(admin, row, settingsOnce)", "settle,",
+    "log: (message, context) => logError(", "notify: (_r, error) => tellScheduler(admin, row, error)"]) {
+    assert.ok(src.includes(dep), `${dep} must be what runRow is given`);
+  }
+  assert.ok(/if \(error\) throw dbFail\("the claim", error\);/.test(src), "a refused claim is not an answer about the row");
   // dbWhy and markStatus are the shared module's, and tested there against
   // the real thing rather than a copy lifted out of this file.
   const shared = readFileSync(new URL("../../supabase/functions/_shared/scheduledSends.ts", import.meta.url), "utf8");
   assert.ok(/code && !message\.includes/.test(shared), "the code PostgREST gave it is recorded, once");
   assert.ok(shared.includes("export async function markStatus("), "the final status write is the shared one");
+  assert.ok(shared.includes("export async function runRow("), "and so is the order the row goes through");
+  assert.ok(/failureUnrecorded\(row\.label, logged, wErr\)/.test(shared) && /was not sent: \$\{logged\}/.test(shared),
+    "a row that failed is logged with its detail, and told to the person without it");
   // The settings read is the last one before an email leaves.
   assert.ok(src.includes("await appSettings(admin)"), "the settings read rides the wrapped client");
 });

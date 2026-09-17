@@ -30,7 +30,7 @@ import { secretsMatch } from "../_shared/constantTime.ts";
 import { mailJha, JHA_MAIL_SELECT, type JhaMailRow } from "../_shared/mailJha.ts";
 import { mailReport, REPORT_MAIL_SELECT, type ReportMailRow } from "../_shared/mailReport.ts";
 import { mailApproval } from "../_shared/mailApproval.ts";
-import { fireGate, isKind, resultPushWords, sentUnrecorded, failureUnrecorded, dbWhy, markStatus, STUCK_MS, STUCK_WORDS, NO_DEVICE_WORDS, NO_DEVICE_TOOK_IT, type Person } from "../_shared/scheduledSends.ts";
+import { fireGate, isKind, resultPushWords, runRow, dbWhy, markStatus, STUCK_MS, STUCK_WORDS, NO_DEVICE_WORDS, NO_DEVICE_TOOK_IT, type Person, type SendRow } from "../_shared/scheduledSends.ts";
 import { loggedWords } from "../_shared/publicError.ts";
 import { sendPush, type PushSub } from "../_shared/webPush.ts";
 import { futureJwtRetrying } from "../_shared/jwtRetry.ts";
@@ -126,44 +126,32 @@ Deno.serve(async (req) => {
     // row. A refusal here would otherwise fail a send already claimed.
     const settingsOnce = async () => { settings ??= await appSettings(admin); return settings; };
 
-    for (const row of (due ?? []) as unknown as Row[]) {
-      // The claim: a tick that reads a row another tick has just taken gets
-      // zero rows back and leaves it alone.
-      const { data: claimed, error: cErr } = await admin.from("scheduled_sends")
+    // The claim: a tick that reads a row another tick has just taken gets
+    // zero rows back and leaves it alone. A refusal is not an answer about
+    // the row, so it throws and the tick ends.
+    const claim = async (id: string) => {
+      const { data, error } = await admin.from("scheduled_sends")
         .update({ status: "sending", fired_at: new Date().toISOString() })
-        .eq("id", row.id).eq("status", "queued").select("id");
-      if (cErr) throw dbFail("the claim", cErr);
-      if (!claimed || !claimed.length) continue;
-      try {
-        await fire(admin, row, settingsOnce);
-        // The email has gone. Whether the row can be marked changes nothing
-        // about that, so a write that fails is reported as what it is — the
-        // record lost, never the send — and NEVER as a reason to send again.
-        const wErr = await settle(row.id, { status: "sent" });
-        if (wErr) {
-          unrecorded++;
-          await logError("scheduled-sends", sentUnrecorded(row.label, wErr),
-            { id: row.id, kind: row.kind, record_id: row.record_id, job_id: row.job_id, set_by: row.set_by });
-        }
-        fired++;
-        // A reminder's push was the firing itself; a second "Sent" would
-        // be noise on the same devices.
-        if (row.kind !== "reminder") await tellScheduler(admin, row, null);
-      } catch (e) {
-        // The row and the push get our own words; function_errors gets
-        // those AND the detail a marked refusal is carrying — the settings
-        // read masks the database's reason, and an exhausted PGRST303 used
-        // to reach the log with neither the code nor the underlying words.
-        const message = (e as Error).message;
-        const logged = loggedWords(e);
-        const wErr = await settle(row.id, { status: "failed", error: message });
-        if (wErr) unrecorded++;
-        await logError("scheduled-sends",
-          wErr ? failureUnrecorded(row.label, logged, wErr) : `${row.label} was not sent: ${logged}`,
-          { id: row.id, kind: row.kind, record_id: row.record_id, job_id: row.job_id, set_by: row.set_by });
-        failed++;
-        await tellScheduler(admin, row, message);
-      }
+        .eq("id", id).eq("status", "queued").select("id");
+      if (error) throw dbFail("the claim", error);
+      return !!(data && data.length);
+    };
+
+    for (const row of (due ?? []) as unknown as Row[]) {
+      // The order — claim, send, settle, log, push — is the shared module's,
+      // so the node suite drives this exact sequence with the transports
+      // counted: a database refused at any point in it sends nothing twice.
+      const tally = await runRow(row as unknown as SendRow, {
+        claim,
+        fire: () => fire(admin, row, settingsOnce),
+        settle,
+        log: (message, context) => logError("scheduled-sends", message, context),
+        notify: (_r, error) => tellScheduler(admin, row, error),
+        logged: loggedWords
+      });
+      fired += tally.fired;
+      failed += tally.failed;
+      unrecorded += tally.unrecorded;
     }
     // `ok` is about the tick, not about every row: a send whose row could
     // not be written is named here as well as in function_errors, so the
