@@ -3,7 +3,7 @@ import { Db } from "../db.js";
 import { Btn } from "./common.jsx";
 import { askTurns, pushTurn, threadForSend, dropAction, dropLearned, isConfirmAction, confirmLabel, formLabel, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
 import { downloadFile, fileToUpload } from "../askFiles.js";
-import { imageFilesFrom, readAttachment, attachLabel, attachRunner, canSend, clearSent, keepName, hashOfPath } from "../askAttach.js";
+import { imageFilesFrom, readAttachment, attachLabel, attachRunner, canSend, clearSent, keepName, keepTag, hashOfPath } from "../askAttach.js";
 
 // Ask: a square launcher at the bottom right of every screen (it says
 // "Claudia", per Kyle) and the card it opens. Not a dialog — no backdrop, the
@@ -357,17 +357,20 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
   const keep = async a => {
     setKeeping(a.id);
     setError("");
+    const tag = keepTag(hashOfPath(a.path));
     try {
-      // The name carries the photo's own content hash, so a name already
-      // taken in Ask/ is this same photo and "already kept" is the truth.
-      const name = keepName(a.label, a.type, hashOfPath(a.path));
+      // The name carries the photo's own content hash WHOLE, so a name
+      // already taken in Ask/ is this same photo and "already kept" is the
+      // truth. Without a hash it is only a name, and a refusal over it says
+      // nothing about what is under it.
+      const name = keepName(a.label, a.type, tag);
       await Db.uploadSharedFile("Ask", new File([a.bytes], name, { type: a.type }));
       Db.forgetFileTree();
       const next = attachedRef.current.map(x => (x.id === a.id ? { ...x, kept: true } : x));
       attachedRef.current = next;
       setAttached(next);
     } catch (e) {
-      if (/already in this folder/i.test(e.message || "")) {
+      if (tag && /already in this folder/i.test(e.message || "")) {
         // Same bytes, same name: the copy is there, so the chip may say so.
         const next = attachedRef.current.map(x => (x.id === a.id ? { ...x, kept: true } : x));
         attachedRef.current = next;

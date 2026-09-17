@@ -10,12 +10,13 @@ import {
   ATTACH_ROOT, MAX_ATTACHMENTS, ATTACH_KEEP_DAYS,
   attachMonth, attachPath, isAttachPath, expiredAttachMonths,
   imageFilesFrom, attachLabel, hashName, readAttachment,
-  attachRunner, canSend, clearSent, keepName, hashOfPath
+  attachRunner, canSend, clearSent, keepName, keepTag, hashOfPath
 } from "./askAttach.js";
 import {
   isAttachPath as isAttachPathTs,
   expiredAttachMonths as expiredAttachMonthsTs, ATTACH_ROOT as ATTACH_ROOT_TS
 } from "../../supabase/functions/_shared/askAttachments.ts";
+import { storageKeySafe } from "./data.js";
 import { cleanContext, whereLines } from "../../supabase/functions/_shared/askKnowledge.ts";
 
 const CORE = /\/\/ ═══ shared core[^\n]*\n([\s\S]*?)\/\/ ═══ end shared core ═══/;
@@ -226,18 +227,38 @@ test("one bad photo takes only itself down and its reason is shown", async () =>
   assert.equal(errors.length, 1);
 });
 
-test("a Keep name carries the photo's own hash, so two screenshots differ", () => {
+test("a Keep name carries the photo's whole hash, so two screenshots differ", () => {
   const a = keepName("Pasted image 1", "image/png", "0123456789abcdef0123456789abcdef");
   const b = keepName("Pasted image 1", "image/png", "fedcba9876543210fedcba9876543210");
-  assert.equal(a, "Pasted image 1-01234567.png");
+  assert.equal(a, "Pasted image 1-0123456789abcdef0123456789abcdef.png");
   assert.notEqual(a, b);
   // Same photo, same name — which is what makes "already kept" true.
   assert.equal(keepName("Pasted image 1", "image/png", "0123456789abcdef0123456789abcdef"), a);
-  assert.equal(keepName("weld-3.JPG", "image/jpeg", "abcdef0123456789"), "weld-3-abcdef01.jpg");
+  // The hash is NOT shortened: two keys agreeing on their first eight hex
+  // characters are 32 bits apart, which is collidable on purpose, and the
+  // collision would report someone else's photo as this one's saved copy.
+  const c = keepName("Pasted image 1", "image/png", "0123456700000000000000000000000a");
+  const d = keepName("Pasted image 1", "image/png", "0123456700000000000000000000000b");
+  assert.notEqual(c, d);
+  assert.equal(keepName("weld-3.JPG", "image/jpeg", "abcdef0123456789"), "weld-3-abcdef0123456789.jpg");
   assert.equal(keepName("", "image/png", ""), "image.png");
-  // storageKeySafe slices the key at 100 characters: the hash must survive.
-  const long = keepName("x".repeat(200), "image/png", "0123456789abcdef");
-  assert.ok(long.length < 80 && long.endsWith("-01234567.png"));
+  // storageKeySafe slices the key at 100 characters and only ever shortens:
+  // the whole hash must survive a very long original name.
+  const long = keepName("x".repeat(200), "image/png", "0123456789abcdef0123456789abcdef");
+  assert.ok(long.length <= 100 && long.endsWith("-0123456789abcdef0123456789abcdef.png"));
+  assert.equal(storageKeySafe(long), long);
+});
+
+test("a name with no hash under it proves nothing", () => {
+  assert.equal(keepTag("0123456789abcdef0123456789abcdef"), "0123456789abcdef0123456789abcdef");
+  assert.equal(keepTag("abc"), "");
+  assert.equal(keepTag(null), "");
+  assert.equal(keepTag("0123456789abcdefg"), "");
+  // So the card only reads "already in this folder" as "already kept" when a
+  // hash is in the name it sent.
+  const src = readFileSync(new URL("./components/askPanel.jsx", import.meta.url), "utf8");
+  assert.match(src, /const tag = keepTag\(hashOfPath\(a\.path\)\)/);
+  assert.match(src, /if \(tag && \/already in this folder\/i\.test/);
 });
 
 test("the hash a Keep name uses is read off the attachment's own key", () => {
@@ -250,7 +271,7 @@ test("the card offers Keep and says when an attachment is cleared", () => {
   const src = readFileSync(new URL("./components/askPanel.jsx", import.meta.url), "utf8");
   // The permanent copy goes to Files, through the upload the Files screen uses.
   assert.match(src, /Db\.uploadSharedFile\("Ask", new File\(/);
-  assert.match(src, /keepName\(a\.label, a\.type, hashOfPath\(a\.path\)\)/);
+  assert.match(src, /keepName\(a\.label, a\.type, tag\)/);
   // A reply clears chips by their own id, never by the path they share.
   assert.match(src, /clearSent\(attachedRef\.current, sentIds\)/);
   // The gate is the function, not the button's disabled attribute.

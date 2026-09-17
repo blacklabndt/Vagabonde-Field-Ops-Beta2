@@ -120,16 +120,27 @@ export function clearSent(attached, sentIds) {
 // Keep writes a second copy under Ask/ as an ordinary file, so it needs a
 // real name — a pasted screenshot's label has no extension of its own, and
 // two screenshots pasted on different days are both "Pasted image 1". The
-// content hash goes in the name, so a name already taken in Ask/ means the
-// SAME bytes are already there: "already kept" is then true, where before it
-// was said over a refusal to overwrite a different photo. The base is cut
-// short so storageKeySafe's 100-character slice can never eat the hash.
+// content hash goes in the name WHOLE: it is the attachment key's own 32 hex
+// characters (128 bits of SHA-256), so a name already taken in Ask/ is the
+// same photo and "already kept" is the truth. A shortened tag is not — eight
+// hex characters is 32 bits, which a person with two screenshots and a few
+// minutes can collide on purpose, and the collision would tell them their
+// photo was saved when another one was sitting under that name. The base is
+// cut to 50 characters so storageKeySafe's 100-character slice (which only
+// ever shortens) can never eat the hash.
 export function keepName(label, type, hash) {
   const ext = type === "image/png" ? "png" : "jpg";
   const bare = String(label || "image").trim() || "image";
-  const stem = bare.replace(/\.(png|jpe?g)$/i, "").slice(0, 60) || "image";
-  const tag = /^[0-9a-f]{8,}$/.test(String(hash || "")) ? String(hash).slice(0, 8) : "";
+  const stem = bare.replace(/\.(png|jpe?g)$/i, "").slice(0, 50) || "image";
+  const tag = keepTag(hash);
   return tag ? `${stem}-${tag}.${ext}` : `${stem}.${ext}`;
+}
+
+// The hash a Keep name may carry, or "" when there is none to carry. A name
+// with no tag is not evidence of anything, so the card must not read a
+// refusal over one as "already kept" — see askPanel.jsx.
+export function keepTag(hash) {
+  return /^[0-9a-f]{12,64}$/.test(String(hash || "")) ? String(hash) : "";
 }
 
 // The hash a Keep name carries, read back off the attachment's own key —
