@@ -3,7 +3,7 @@ import { Db } from "../db.js";
 import { Btn } from "./common.jsx";
 import { askTurns, pushTurn, threadForSend, dropAction, dropLearned, isConfirmAction, confirmLabel, formLabel, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
 import { downloadFile, fileToUpload } from "../askFiles.js";
-import { imageFilesFrom, readAttachment, attachLabel } from "../askAttach.js";
+import { imageFilesFrom, readAttachment, attachLabel, attachRunner, canSend, clearSent, keepName } from "../askAttach.js";
 
 // Ask: a square launcher at the bottom right of every screen (it says
 // "Claudia", per Kyle) and the card it opens. Not a dialog — no backdrop, the
@@ -153,7 +153,11 @@ export const CARD_WORDS = {
   // Under the box, where a photo may be pasted or dropped.
   attach: "Paste or drop a photo to attach it",
   // Over the card while an image is being dragged onto it.
-  dropping: "Drop the photo here"
+  dropping: "Drop the photo here",
+  // Under the chips, while anything attached is still only an attachment.
+  expires: "Attached photos are cleared from Files after about three months — tap Keep to hold one for good.",
+  // On the Keep button.
+  keepWhy: "Save a permanent copy in Files › Ask, which is never cleared"
 };
 
 // Attaching uploads to the shared drive, which the files tab gates. An
@@ -201,7 +205,9 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
   const send = async () => {
     mic.stop();
     const text = draft.trim();
-    if (!text || busy) return;
+    // The upload is the guard, not the Send button's disabled attribute:
+    // Enter goes through this function too.
+    if (!canSend({ text, busy, attaching: attachingRef.current })) return;
     setBusy(true);
     setError("");
     try {
@@ -214,11 +220,13 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
       pushTurn("assistant", answer, trace, action, learned, files, learnTrouble, followUp);
       setTurns(askTurns());
       setDraft("");
-      // The photos went with that question. They stay in Files — the chips
-      // are what is cleared, so the next question starts empty rather than
-      // silently re-sending the last one's images.
-      attachedRef.current = [];
-      setAttached([]);
+      // The photos that went with that question are the ones cleared — a
+      // photo dropped while the answer was on its way was never sent, so it
+      // stays on the card for the next question instead of vanishing. They
+      // are all still in Files either way; the chip is not the file.
+      const left = clearSent(attachedRef.current, paths);
+      attachedRef.current = left;
+      setAttached(left);
     } catch (e) {
       setError(e.networkFailure
         ? "No connection — your question is still here, try again when you have signal."
@@ -291,30 +299,68 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
   const [attaching, setAttaching] = useState(false);
   const attachedRef = useRef([]);
   attachedRef.current = attached;
+  // Send reads this, not the `attaching` state: Enter fires the handler the
+  // render made, and a drop landing between that render and the keystroke
+  // would otherwise send the question without the photo it was about.
+  const attachingRef = useRef(false);
+  // Every drop and paste goes through one chain, so two of them cannot read
+  // the same "bytes so far" and both fit under the 12 MiB budget, and the
+  // second cannot clear "Attaching…" while the first is still uploading.
+  // The runner is askAttach.js's, tested there without a browser; the two
+  // setters it is handed are React's own and never change identity.
+  const runner = useRef(null);
+  if (!runner.current) {
+    runner.current = attachRunner({
+      setBusy: on => { attachingRef.current = on; setAttaching(on); },
+      onError: setError
+    });
+  }
 
-  const attach = async files => {
+  const attachOne = async file => {
+    const held = attachedRef.current;
+    const item = await readAttachment(file, {
+      soFar: held.reduce((n, a) => n + a.size, 0),
+      count: held.length
+    });
+    if (held.some(a => a.path === item.path)) return;
+    await Db.uploadAskAttachment(item.path, item.bytes, item.type);
+    // The bytes are kept until the chip goes, so Keep can write the photo a
+    // second time under Ask/ without reading it back off the drive. They are
+    // inside the same 12 MiB the budget above already refuses to exceed.
+    const next = [...attachedRef.current, {
+      path: item.path, size: item.size, bytes: item.bytes, type: item.type,
+      label: attachLabel(file, attachedRef.current.length)
+    }];
+    attachedRef.current = next;
+    setAttached(next);
+  };
+
+  const attach = files => {
     if (!files.length || !canSaveFiles) return;
-    setAttaching(true);
     setError("");
-    const trouble = [];
-    for (const file of files) {
-      const held = attachedRef.current;
-      try {
-        const item = await readAttachment(file, {
-          soFar: held.reduce((n, a) => n + a.size, 0),
-          count: held.length
-        });
-        if (held.some(a => a.path === item.path)) continue;
-        await Db.uploadAskAttachment(item.path, item.bytes, item.type);
-        const next = [...attachedRef.current, { path: item.path, size: item.size, label: attachLabel(file, attachedRef.current.length) }];
-        attachedRef.current = next;
-        setAttached(next);
-      } catch (e) {
-        trouble.push(e.message || "That image couldn't be attached.");
-      }
-    }
-    setAttaching(false);
-    if (trouble.length) setError(trouble[0]);
+    runner.current.run(files, attachOne);
+  };
+
+  // "Keep" writes the photo a second time, into Ask/ as an ordinary file
+  // under its own name, where the sweep never looks. The attachment itself
+  // is left alone: the question that is about to go names it, and moving it
+  // out from under a live request would leave the key pointing at nothing.
+  const [keeping, setKeeping] = useState("");
+  const keep = async a => {
+    setKeeping(a.path);
+    setError("");
+    try {
+      const name = keepName(a.label, a.type);
+      await Db.uploadSharedFile("Ask", new File([a.bytes], name, { type: a.type }));
+      Db.forgetFileTree();
+      const next = attachedRef.current.map(x => (x.path === a.path ? { ...x, kept: true } : x));
+      attachedRef.current = next;
+      setAttached(next);
+    } catch (e) {
+      setError(/already in this folder/i.test(e.message || "")
+        ? `“${a.label}” is already kept in Files › Ask.`
+        : (e.message || "Couldn't keep that photo."));
+    } finally { setKeeping(""); }
   };
 
   const onPaste = e => {
@@ -464,19 +510,28 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
       </div>
       {error && <div className="ask-error">{error}</div>}
       {/* What is attached to the NEXT question, not to a turn already sent.
-          The × detaches; the file itself stays in Files, where the person
-          put it, and is swept with its month if nothing else keeps it. */}
+          The × detaches; Keep writes a second, permanent copy into
+          Files › Ask. Say the expiry plainly — an attachment left alone is
+          swept with its month, and nobody should learn that in month four. */}
       {canSaveFiles && (attached.length > 0 || attaching) && (
         <div className="ask-attached">
           {attached.map(a => (
             <span key={a.path} className="ask-chip">
               <span className="ask-chip-name">{a.label}</span>
+              {a.kept
+                ? <span className="ask-chip-kept" title="Kept in Files › Ask">kept</span>
+                : <button type="button" className="ask-chip-keep" disabled={keeping === a.path}
+                    title={CARD_WORDS.keepWhy} aria-label={`Keep ${a.label} in Files`}
+                    onClick={() => keep(a)}>{keeping === a.path ? "…" : "Keep"}</button>}
               <button type="button" className="ask-chip-x" aria-label={`Detach ${a.label}`}
                 onClick={() => { const next = attachedRef.current.filter(x => x.path !== a.path); attachedRef.current = next; setAttached(next); }}>×</button>
             </span>
           ))}
           {attaching && <span className="ask-chip ask-chip-busy">Attaching…</span>}
         </div>
+      )}
+      {canSaveFiles && attached.some(a => !a.kept) && (
+        <div className="ask-attach-hint">{CARD_WORDS.expires}</div>
       )}
       <div className="ask-foot">
         <textarea ref={boxEl} className="input" rows={2} value={draft}

@@ -9,7 +9,8 @@ import { stripTypeScriptTypes } from "node:module";
 import {
   ATTACH_ROOT, MAX_ATTACHMENTS, ATTACH_KEEP_DAYS,
   attachMonth, attachPath, isAttachPath, expiredAttachMonths,
-  imageFilesFrom, attachLabel, hashName, readAttachment
+  imageFilesFrom, attachLabel, hashName, readAttachment,
+  attachRunner, canSend, clearSent, keepName
 } from "./askAttach.js";
 import {
   isAttachPath as isAttachPathTs,
@@ -149,4 +150,90 @@ test("the function takes an attached key as a shape and never as a right", () =>
   // With no attachment nothing is added, and an unknown place still answers.
   assert.ok(!whereLines(cleanContext({ screen: "board" })).includes("attached"));
   assert.match(whereLines(cleanContext({ attachments: [good] })), /not known[\s\S]*attached/);
+});
+
+// ── The three interaction cases. Each was a real way to lose a photo or to
+// send a question without one, and none of them is visible from the pure
+// naming above — they are about order. ──
+
+const later = (ms, value) => new Promise(r => setTimeout(() => r(value), ms));
+
+test("Enter is the same gate as the Send button, and an upload holds it shut", () => {
+  assert.equal(canSend({ text: "what is this", busy: false, attaching: false }), true);
+  // The photo is still going up: the question would arrive without it.
+  assert.equal(canSend({ text: "what is this", busy: false, attaching: true }), false);
+  assert.equal(canSend({ text: "  ", busy: false, attaching: false }), false);
+  assert.equal(canSend({ text: "x", busy: true, attaching: false }), false);
+});
+
+test("a reply clears the photos it carried and leaves one attached since", () => {
+  const held = [{ path: "a" }, { path: "b" }, { path: "c" }];
+  // "b" was dropped while the answer was on its way — it never went.
+  assert.deepEqual(clearSent(held, ["a", "c"]).map(x => x.path), ["b"]);
+  assert.deepEqual(clearSent(held, []).map(x => x.path), ["a", "b", "c"]);
+  assert.deepEqual(clearSent([], ["a"]), []);
+});
+
+test("overlapping drops upload one at a time and the word stays until the last", async () => {
+  const busy = [];
+  const errors = [];
+  const runner = attachRunner({ setBusy: on => busy.push(on), onError: e => errors.push(e) });
+  const order = [];
+  let live = 0;
+  let most = 0;
+  const one = async file => {
+    live += 1;
+    most = Math.max(most, live);
+    order.push(`start ${file}`);
+    await later(5);
+    order.push(`done ${file}`);
+    live -= 1;
+  };
+  const first = runner.run(["1", "2"], one);
+  // A second drop while the first is still going.
+  const second = runner.run(["3"], one);
+  assert.equal(runner.busy(), true);
+  await Promise.all([first, second]);
+  assert.equal(most, 1, "two uploads must never be in flight together");
+  assert.deepEqual(order, ["start 1", "done 1", "start 2", "done 2", "start 3", "done 3"]);
+  // Busy went on once and off once: the second drop did not clear the word
+  // out from under the first, and the first did not clear it under the second.
+  assert.equal(runner.busy(), false);
+  assert.deepEqual(busy.filter((v, i, a) => i === 0 || a[i - 1] !== v), [true, false]);
+  assert.deepEqual(errors, []);
+});
+
+test("one bad photo takes only itself down and its reason is shown", async () => {
+  const errors = [];
+  const runner = attachRunner({ setBusy: () => {}, onError: e => errors.push(e) });
+  const landed = [];
+  await runner.run(["good", "bad", "also good"], async f => {
+    if (f === "bad") throw new Error("That image is larger than 5 MiB.");
+    landed.push(f);
+  });
+  assert.deepEqual(landed, ["good", "also good"]);
+  assert.deepEqual(errors, ["That image is larger than 5 MiB."]);
+  assert.equal(runner.busy(), false);
+  // Nothing to do is not a busy state.
+  await runner.run([], async () => { throw new Error("never"); });
+  assert.equal(errors.length, 1);
+});
+
+test("Keep names a pasted screenshot something Files can hold", () => {
+  assert.equal(keepName("Pasted image 1", "image/png"), "Pasted image 1.png");
+  assert.equal(keepName("Pasted image 2", "image/jpeg"), "Pasted image 2.jpg");
+  // A dropped file keeps the name it came with.
+  assert.equal(keepName("weld-3.JPG", "image/jpeg"), "weld-3.JPG");
+  assert.equal(keepName("", "image/png"), "image.png");
+});
+
+test("the card offers Keep and says when an attachment is cleared", () => {
+  const src = readFileSync(new URL("./components/askPanel.jsx", import.meta.url), "utf8");
+  // The permanent copy goes to Files, through the upload the Files screen uses.
+  assert.match(src, /Db\.uploadSharedFile\("Ask", new File\(/);
+  assert.match(src, /keepName\(/);
+  // The gate is the function, not the button's disabled attribute.
+  assert.match(src, /canSend\(\{ text, busy, attaching: attachingRef\.current \}\)/);
+  // And the expiry is on the card, not only in the commit message.
+  assert.match(src, /cleared from Files after about three months/);
 });

@@ -884,6 +884,9 @@ label.field-label-missing {
 .ask-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
 .ask-chip-busy { opacity: 0.7; padding-right: 8px; }
 .ask-chip-x { background: none; border: 0; color: inherit; cursor: pointer; font-size: 14px; line-height: 1; padding: 0 3px; }
+.ask-chip-keep { background: none; border: 0; color: var(--color-accent-700); cursor: pointer; font-size: 11px; line-height: 1; padding: 0 3px; text-decoration: underline; }
+.ask-chip-keep:disabled { cursor: default; opacity: 0.6; }
+.ask-chip-kept { font-size: 11px; opacity: 0.6; padding: 0 3px; }
 .ask-attach-hint { padding: 0 12px 8px; font-size: 11px; opacity: 0.55; }
 .ask-proposal { margin-top: 8px; padding: 10px; border: 1px solid var(--color-accent); }
 .ask-proposal-to { margin-top: 4px; font-size: 12px; opacity: 0.8; word-break: break-all; }

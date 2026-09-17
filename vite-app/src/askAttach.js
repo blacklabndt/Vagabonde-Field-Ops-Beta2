@@ -94,3 +94,60 @@ export async function readAttachment(file, { soFar = 0, count = 0, nowMs = Date.
   const path = attachPath(attachMonth(nowMs), await hashName(bytes), header.format);
   return { path, bytes, size: file.size, format: header.format, type: header.format === "PNG" ? "image/png" : "image/jpeg" };
 }
+
+// ── The card's own decisions, kept out of the component so they can be tested
+// without a browser. The three of them are the interaction bugs a first cut
+// had: a send that outran its upload, two drops that read the same "so far",
+// and a reply that cleared a photo attached while it was in flight. ──
+
+// Enter and the Send button ask the SAME question. The button's `disabled`
+// is a courtesy; this is the gate.
+export function canSend({ text, busy, attaching }) {
+  return Boolean(String(text || "").trim()) && !busy && !attaching;
+}
+
+// A reply clears the photos THAT question carried and nothing else, so one
+// dropped while the answer was on its way is still attached afterwards.
+export function clearSent(attached, sentPaths) {
+  const sent = new Set(sentPaths || []);
+  return (attached || []).filter(a => !sent.has(a.path));
+}
+
+// Keep writes a second copy under Ask/ as an ordinary file, so it needs a
+// real name — a pasted screenshot's label has no extension of its own.
+export function keepName(label, type) {
+  const name = String(label || "image").trim() || "image";
+  return /\.(png|jpe?g)$/i.test(name) ? name : `${name}.${type === "image/png" ? "png" : "jpg"}`;
+}
+
+// Every drop and paste runs through one chain. Overlapping drops must not
+// both read the same "bytes attached so far" (two 7 MiB photos would fit a
+// 12 MiB budget neither of them saw), and the second must not clear the
+// "Attaching…" word while the first is still uploading — hence the depth
+// count rather than a boolean each one sets and unsets.
+export function attachRunner({ setBusy, onError }) {
+  let chain = Promise.resolve();
+  let depth = 0;
+  let busy = false;
+  return {
+    busy: () => busy,
+    idle: () => chain,
+    run(files, one) {
+      if (!files || !files.length) return chain;
+      depth += 1;
+      busy = true;
+      setBusy(true);
+      chain = chain.then(async () => {
+        const trouble = [];
+        for (const file of files) {
+          try { await one(file); }
+          catch (e) { trouble.push(e?.message || "That image couldn't be attached."); }
+        }
+        depth -= 1;
+        if (depth === 0) { busy = false; setBusy(false); }
+        if (trouble.length) onError(trouble[0]);
+      });
+      return chain;
+    }
+  };
+}
