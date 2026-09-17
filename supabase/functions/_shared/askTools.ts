@@ -38,6 +38,7 @@ export const PRICE_ROLES = ["Admin", "Technician"];
 // which set_reminder proposes on its own; askTools.test.mjs fails on drift.
 export const SEND_KINDS = ["jha", "report", "ticket_approval"];
 const APP_IMAGE_SCHEMA = { type: "object", properties: { asset: { type: "string", enum: ["vagabonde-logo"] }, caption: { type: "string", maxLength: 300 } }, required: ["asset"], additionalProperties: false };
+const PDF_IMAGE_SCHEMA = { oneOf: [APP_IMAGE_SCHEMA, { type: "object", properties: { shared_path: { type: "string", maxLength: 1024 }, caption: { type: "string", maxLength: 300 } }, required: ["shared_path"], additionalProperties: false }] };
 
 // The kinds make_file builds — askFiles.ts's list, twice because neither
 // may import the other; askTools.test.mjs fails on drift.
@@ -259,8 +260,13 @@ export const ASK_TOOLS: AskTool[] = [
     }
   },
   {
+    name: "list_images", tab: "files",
+    description: "List PNG/JPEG images available in one Files folder for PDF documents, as the signed-in person. Start with folder empty for the root, follow returned folders, and use next_offset for more entries. Copy shared_path into a PDF section image. Each image must be discovered again in THIS request before make_file. Images are at most 5 MiB. This lists names and metadata, not visual contents; do not claim to have seen an image. Other formats must first be converted and uploaded to Files by the person.",
+    input_schema: { type: "object", properties: { folder: { type: "string", maxLength: 1024 }, offset: { type: "integer", minimum: 0, maximum: 100000 } }, additionalProperties: false }
+  },
+  {
     name: "make_file", tab: "any",
-    description: "Make a file for the person to download or save to the app's Files, from what the tools returned in this conversation. kind html or css: give text, the whole file. csv: give table { columns, rows }. xlsx: give sheets [{ name, columns, rows }], up to ten. pdf: give document { title, subtitle?, sections: [{ heading?, text?, table? }] }. For a bundled logo, use asset vagabonde-logo with an optional caption: HTML takes images [{asset, caption?}] placed at the start of the body; PDF sections take image {asset, caption?}. Images are embedded PNGs with automatic proportional sizing. No URLs, uploads, or generated images. Each image reserves 40000 of the 200000 byte budget. name is the file's name, no path; the extension is added. Up to five files an answer and 2,000 rows a file; never invent rows — use the rows the tools gave, and if you left some out say so. Nothing is written anywhere: the card offers Download and Save to Files. Say in a sentence what the file holds.",
+    description: "Make a file for the person to download or save to the app's Files, from what the tools returned in this conversation. kind html or css: give text, the whole file. csv: give table { columns, rows }. xlsx: give sheets [{ name, columns, rows }], up to ten. pdf: give document { title, subtitle?, sections: [{ heading?, text?, table? }] }. For a bundled logo, use asset vagabonde-logo with an optional caption: HTML takes images [{asset, caption?}] placed at the start of the body; PDF sections take image {asset, caption?} or {shared_path, caption?} copied from list_images in THIS request. At most four images per PDF. Files images are PNG/JPEG, at most 5 MiB each and 12 MiB combined; the finished PDF may be up to 10 MiB. Images are embedded with proportional sizing. No arbitrary URLs, uploads through Ask, or generated image bytes. Bundled images reserve 40000 of the 200000 text budget; shared image bytes have separate limits. Do not claim to visually inspect Files images. name is the file's name, no path; the extension is added. Up to five files an answer and 2,000 rows a file; never invent rows — use the rows the tools gave, and if you left some out say so. Nothing is written anywhere: the card offers Download and Save to Files. Say in a sentence what the file holds.",
     input_schema: {
       type: "object",
       properties: {
@@ -274,7 +280,7 @@ export const ASK_TOOLS: AskTool[] = [
           type: "object",
           properties: {
             title: { type: "string" }, subtitle: { type: "string" },
-            sections: { type: "array", items: { type: "object", properties: { heading: { type: "string" }, text: { type: "string" }, table: TABLE_SCHEMA, image: APP_IMAGE_SCHEMA }, additionalProperties: false } }
+            sections: { type: "array", items: { type: "object", properties: { heading: { type: "string" }, text: { type: "string" }, table: TABLE_SCHEMA, image: PDF_IMAGE_SCHEMA }, additionalProperties: false } }
           },
           required: ["title", "sections"], additionalProperties: false
         }
@@ -452,6 +458,7 @@ export function traceLine(name: string, input: Record<string, unknown>): string 
   if (name === "cancel_scheduled") return "proposed cancelling a scheduled send";
   if (name === "reschedule_send") return "proposed moving a scheduled send";
   if (name === "make_file") return `made ${str(input.name) || "a file"}${str(input.kind) ? ` (${str(input.kind)})` : ""}`;
+  if (name === "list_images") return "listed images in Files";
   if (name === "list_learned") return "read what it has learned";
   if (name === "forget_learned") return "proposed forgetting a learned note";
   if (name === "chase_unsigned") {

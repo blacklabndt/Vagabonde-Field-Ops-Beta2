@@ -11,6 +11,7 @@
 
 import { saveBlob } from "./zip.js";
 import { loadXlsx, loadJsPdf } from "./cdnLibs.js";
+import { createPdfImageLoader, MAX_IMAGE_PDF_BYTES } from "./askPdfImages.js";
 
 export const MIME = {
   html: "text/html;charset=utf-8",
@@ -83,7 +84,7 @@ async function htmlWithImages(file) {
 // A letter-size document: the title, a subtitle, then each section's
 // heading, its text wrapped to the page, and its table through autotable;
 // the cursor carries down the page and over page breaks.
-export async function buildPdf(JsPDF, doc) {
+export async function buildPdf(JsPDF, doc, { loadSharedImage = createPdfImageLoader() } = {}) {
   const pdf = new JsPDF({ unit: "pt", format: "letter" });
   const margin = 48;
   const width = pdf.internal.pageSize.getWidth() - margin * 2;
@@ -102,13 +103,21 @@ export async function buildPdf(JsPDF, doc) {
   if (doc.subtitle) { pdf.setTextColor(110); write(doc.subtitle, 11, "normal", 10); pdf.setTextColor(0); } else y += 8;
   for (const s of doc.sections) {
     if (s.image) {
-      const asset = await appAsset(s.image);
-      const w = Math.min(360, width, (bottom - margin - 40) * asset.width / asset.height);
+      const asset = s.image.shared_path ? await loadSharedImage(s.image.shared_path) : await appAsset(s.image);
+      pdf.setFont("helvetica", "normal");
+      const captionLines = s.image.caption ? lines(s.image.caption, 9) : [];
+      const captionHeight = captionLines.length ? captionLines.length * 9 * 1.3 + 6 : 0;
+      const available = bottom - margin - captionHeight - 6;
+      if (available <= 0) throw new Error("The image caption is too long to fit on a page.");
+      const w = Math.min(s.image.shared_path ? width : 360, width, available * asset.width / asset.height);
       const h = w * asset.height / asset.width;
-      need(h + (s.image.caption ? 24 : 0) + 10);
-      pdf.addImage(asset.data, "PNG", margin, y, w, h, "vagabonde-logo", "FAST");
+      need(h + captionHeight + 6);
+      pdf.addImage(asset.data, asset.format || "PNG", margin, y, w, h, asset.alias || "vagabonde-logo", "FAST");
       y += h + 6;
-      if (s.image.caption) write(s.image.caption, 9, "normal", 6);
+      // Already measured with the same font/width. Keep the complete caption
+      // with the image instead of letting a line spill onto the next page.
+      for (const line of captionLines) { pdf.text(line, margin, y + 9); y += 9 * 1.3; }
+      if (captionLines.length) y += 6;
     }
     if (s.heading) write(s.heading, 13, "bold", 2);
     if (s.text) write(s.text, 10, "normal", 6);
@@ -136,7 +145,9 @@ export async function fileBlob(file) {
   if (file.kind === "pdf") {
     const out = await buildPdf(await loadJsPdf(), file.document);
     const blob = out instanceof Blob ? out : new Blob([out], { type: MIME.pdf });
-    if (file.document.sections.some(s => s.image) && blob.size > 200000) throw new Error("The PDF with embedded images exceeds the 200000 byte file budget.");
+    const sharedImages = file.document.sections.some(s => s.image?.shared_path);
+    const limit = sharedImages ? MAX_IMAGE_PDF_BYTES : 200000;
+    if (file.document.sections.some(s => s.image) && blob.size > limit) throw new Error(`The PDF with embedded images exceeds the ${sharedImages ? "10 MiB" : "200000 byte"} file budget.`);
     return blob;
   }
   throw new Error(`Nothing builds a "${file.kind}" file.`);

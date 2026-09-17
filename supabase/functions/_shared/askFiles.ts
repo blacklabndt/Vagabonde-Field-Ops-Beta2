@@ -36,7 +36,9 @@ export interface Sheet extends Table { name: string }
 // Reserve more than the bundled PNG data URI plus figure markup per occurrence.
 export const ASSET_BUDGET = 40_000;
 export interface AppImage { asset: "vagabonde-logo"; caption?: string }
-export interface Section { heading?: string; text?: string; table?: Table; image?: AppImage }
+export interface SharedImage { shared_path: string; caption?: string }
+export type PdfImage = AppImage | SharedImage;
+export interface Section { heading?: string; text?: string; table?: Table; image?: PdfImage }
 export interface Doc { title: string; subtitle?: string; sections: Section[] }
 export interface AskFile {
   name: string; kind: FileKind;
@@ -83,12 +85,58 @@ function checkTable(raw: unknown, where: string, rowsSoFar: number): Table {
   return { columns, rows };
 }
 
-function checkImage(raw: unknown): AppImage {
+export const MAX_PDF_IMAGES = 4;
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+export const IMAGE_LIST_LIMIT = 100;
+
+function sharedPath(raw: unknown, folder = false): string {
+  if (folder && raw === "") return "";
+  if (typeof raw !== "string" || !raw || raw.length > 1024 || raw.includes(":") || raw.includes("\\") || [...raw].some(c => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127) || raw.split("/").some(p => !p || p === "." || p === "..")) {
+    throw refuse("An image path must be a relative Files path without URLs or dot segments.");
+  }
+  return raw;
+}
+
+export function imageListArgs(input: Record<string, unknown>): { folder: string; offset: number } {
+  const folder = sharedPath(input.folder ?? "", true);
+  const offset = input.offset ?? 0;
+  if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0 || offset > 100_000) throw refuse("Image listing offset must be an integer from 0 to 100000.");
+  return { folder, offset };
+}
+
+interface ImageEntry { id?: string | null; name: string; metadata?: { mimetype?: string; size?: number } | null }
+export function imageListing(folder: string, offset: number, entries: ImageEntry[]) {
+  const folders: { name: string; path: string }[] = [];
+  const images: { name: string; shared_path: string; type: string; size: number }[] = [];
+  for (const entry of entries) {
+    if (!entry.name || entry.name === ".keep" || entry.name.includes("/")) continue;
+    const path = folder ? `${folder}/${entry.name}` : entry.name;
+    try { sharedPath(path); } catch { continue; }
+    if (!entry.id) { folders.push({ name: entry.name, path }); continue; }
+    const type = entry.metadata?.mimetype ?? "";
+    const size = entry.metadata?.size ?? 0;
+    if (!["image/png", "image/jpeg"].includes(type) || !Number.isFinite(size) || size <= 0 || size > MAX_IMAGE_BYTES) continue;
+    images.push({ name: entry.name, shared_path: path, type, size });
+  }
+  return { folder, folders, images, next_offset: entries.length === IMAGE_LIST_LIMIT ? offset + entries.length : null };
+}
+
+export function requireDiscoveredImages(file: AskFile, discovered: Set<string>): void {
+  for (const section of file.document?.sections ?? []) {
+    if (section.image && "shared_path" in section.image && !discovered.has(section.image.shared_path)) throw refuse("Use list_images to find each Files image during this request before adding it to a PDF.");
+  }
+}
+
+function checkImage(raw: unknown, shared: true): PdfImage;
+function checkImage(raw: unknown, shared?: false): AppImage;
+function checkImage(raw: unknown, shared = false): PdfImage {
   const r = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  if (r.asset !== "vagabonde-logo") throw refuse("Unknown app asset. Use vagabonde-logo; URLs and storage paths are not supported.");
+  if (r.asset != null && r.shared_path != null) throw refuse("An image needs exactly one source: asset or shared_path.");
+  if (r.shared_path != null && !shared) throw refuse("HTML images support only the bundled app asset.");
+  if (r.shared_path == null && r.asset !== "vagabonde-logo") throw refuse("Unknown app asset. Use vagabonde-logo or a PDF shared_path from list_images.");
   const caption = str(r.caption)?.trim();
   if (r.caption != null && (typeof r.caption !== "string" || (caption?.length ?? 0) > 300)) throw refuse("An image caption must be text of at most 300 characters.");
-  return { asset: "vagabonde-logo", ...(caption ? { caption } : {}) };
+  return r.shared_path != null ? { shared_path: sharedPath(r.shared_path), ...(caption ? { caption } : {}) } : { asset: "vagabonde-logo", ...(caption ? { caption } : {}) };
 }
 
 // The tool's input, checked and shaped, or a refusal in words.
@@ -104,7 +152,7 @@ export function checkFile(raw: unknown): AskFile {
     if (text.length > MAX_TEXT_CHARS) throw refuse(`The text is ${text.length} characters; the most is ${MAX_TEXT_CHARS}.`);
     if (kind === "html" && r.images != null) {
       if (!Array.isArray(r.images) || r.images.length > 4) throw refuse("HTML images must be a list of at most four app assets.");
-      const images = r.images.map(checkImage);
+      const images = r.images.map(image => checkImage(image));
       if (new TextEncoder().encode(text).length + images.length * ASSET_BUDGET > MAX_TEXT_CHARS) throw refuse("Text and embedded images exceed the 200000 byte file budget.");
       return { name, kind, text, images };
     }
@@ -137,12 +185,17 @@ export function checkFile(raw: unknown): AskFile {
   if (d.sections.length > MAX_SECTIONS) throw refuse(`${d.sections.length} sections; the most is ${MAX_SECTIONS}.`);
   let rowsSoFar = 0;
   let chars = title.length;
+  let imageCount = 0;
   const sections = d.sections.map((s, i) => {
     const o = (s && typeof s === "object") ? s as { heading?: unknown; text?: unknown; table?: unknown; image?: unknown } : {};
     const section: Section = {};
     const heading = str(o.heading)?.trim();
     const text = str(o.text)?.trim();
-    if (o.image != null) { section.image = checkImage(o.image); chars += ASSET_BUDGET; }
+    if (o.image != null) {
+      if (++imageCount > MAX_PDF_IMAGES) throw refuse("A PDF can contain at most four images.");
+      section.image = checkImage(o.image, true);
+      chars += ("asset" in section.image ? ASSET_BUDGET : 0) + (section.image.caption?.length ?? 0);
+    }
     if (heading) section.heading = heading;
     if (text) section.text = text;
     chars += (heading?.length ?? 0) + (text?.length ?? 0);
@@ -167,7 +220,7 @@ export function fileChars(file: AskFile): number {
   if (file.table) return tableChars(file.table);
   if (file.sheets) return file.sheets.reduce((n, s) => n + tableChars(s), 0);
   if (file.document) {
-    return file.document.title.length + file.document.sections.reduce((n, s) => n + (s.image ? ASSET_BUDGET : 0) + (s.heading?.length ?? 0) + (s.text?.length ?? 0) + (s.table ? tableChars(s.table) : 0), 0);
+    return file.document.title.length + file.document.sections.reduce((n, s) => n + (s.image && "asset" in s.image ? ASSET_BUDGET : 0) + (s.image?.caption?.length ?? 0) + (s.heading?.length ?? 0) + (s.text?.length ?? 0) + (s.table ? tableChars(s.table) : 0), 0);
   }
   return 0;
 }

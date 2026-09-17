@@ -48,7 +48,7 @@ import {
   BUSY_WORDS, SPENT_WORDS, OUT_OF_TIME_WORDS, LEARN_SPENT_WORDS, LEARN_TROUBLE_WORDS, LEARN_NO_TIME_WORDS
 } from "../_shared/askBudget.ts";
 import { knowledgeText, cleanContext, whereLines } from "../_shared/askKnowledge.ts";
-import { checkFile, fileWords, fileChars, MAX_FILES, type AskFile } from "../_shared/askFiles.ts";
+import { checkFile, fileWords, fileChars, MAX_FILES, imageListArgs, imageListing, requireDiscoveredImages, IMAGE_LIST_LIMIT, type AskFile } from "../_shared/askFiles.ts";
 import { refuse, plainRefusal, loggedWords } from "../_shared/publicError.ts";
 
 const json = (body: unknown, status = 200) =>
@@ -582,6 +582,7 @@ Deno.serve(async (req) => {
     // The files make_file proposed this answer — checked shapes only; the
     // device builds the bytes and nothing is written here.
     const files: AskFile[] = [];
+    const discoveredImages = new Set<string>();
     // The person's own words, for the one place an address may come from
     // that is not a contact on file. Computed once, and lazily: most
     // questions never send.
@@ -731,9 +732,17 @@ Deno.serve(async (req) => {
         const words = cancelWords(row.label, Date.parse(row.run_at), row.kind);
         action = { kind: "cancel_scheduled", summary: words.summary, done: words.done, id: row.id };
         out = { ready: true, summary: words.summary };
+      } else if (name === "list_images") {
+        const { folder, offset } = imageListArgs(input);
+        const { data, error } = await asUser.storage.from("shared").list(folder, { limit: IMAGE_LIST_LIMIT, offset, sortBy: { column: "name", order: "asc" } });
+        if (error) throw refuse("Could not read images from Files. Check your Files access and try again.");
+        const listing = imageListing(folder, offset, data ?? []);
+        for (const image of listing.images) discoveredImages.add(image.shared_path);
+        out = listing;
       } else if (name === "make_file") {
         if (files.length >= MAX_FILES) throw refuse(`Five files is the most in one answer.`);
         const file = checkFile(input);
+        requireDiscoveredImages(file, discoveredImages);
         files.push(file);
         out = { ready: true, file: fileWords(file), approx_chars: fileChars(file), note: "The card offers Download and Save to Files; nothing more to do." };
       } else if (name === "list_learned") {
