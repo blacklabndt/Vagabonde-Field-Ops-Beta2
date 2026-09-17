@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Db } from "../db.js";
 import { Btn } from "./common.jsx";
-import { askTurns, pushTurn, threadForSend, dropAction, dropLearned, isConfirmAction, confirmLabel, formLabel, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
+import { askTurns, askSession, pushTurn, threadForSend, dropAction, dropLearned, isConfirmAction, confirmLabel, formLabel, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
 import { downloadFile, fileToUpload } from "../askFiles.js";
+import { prepareAttachments, attachmentManifest, bindPdfInputs } from "../askAttachments.js";
 
 // Ask: a square launcher at the bottom right of every screen (it says
 // "Claudia", per Kyle) and the card it opens. Not a dialog — no backdrop, the
@@ -151,12 +152,50 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
   // A proposed send going out — the card stays open for the answer.
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [attachments, setAttachments] = useState([]);
+  const [preparing, setPreparing] = useState(false);
+  const preparingRef = useRef(false);
+  const pickerEl = useRef(null);
+  const mounted = useRef(true);
   const [jobNums, setJobNums] = useState(null);
   const threadEl = useRef(null);
   const boxEl = useRef(null);
   const draftRef = useRef("");
   draftRef.current = draft;
   const mic = useDictation(() => draftRef.current, setDraft, setError);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  const attach = async files => {
+    if (!files.length || busy || sending || preparingRef.current) return;
+    preparingRef.current = true;
+    setPreparing(true);
+    setError("");
+    try {
+      const next = await prepareAttachments(files, attachments);
+      if (mounted.current) setAttachments(next);
+    } catch (e) {
+      if (mounted.current) setError(e.message || "Couldn't attach that image.");
+    } finally {
+      preparingRef.current = false;
+      if (mounted.current) setPreparing(false);
+    }
+  };
+
+  const dropImages = e => {
+    e.preventDefault();
+    e.stopPropagation();
+    attach(Array.from(e.dataTransfer.files));
+  };
+  const pasteImages = e => {
+    const files = Array.from(e.clipboardData.files);
+    if (!files.length) return;
+    e.preventDefault();
+    attach(files);
+  };
 
   // The job list for the links, read once the card opens; a failed read
   // only costs the links.
@@ -181,21 +220,24 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
   const send = async () => {
     mic.stop();
     const text = draft.trim();
-    if (!text || busy) return;
+    if (!text || busy || sending || preparingRef.current) return;
+    const sentImages = attachments.slice();
+    const sentSession = askSession();
     setBusy(true);
     setError("");
     try {
-      const { answer, trace, action, learned, files, learnTrouble, followUp } = await Db.ask([...threadForSend(), { role: "user", text }], context);
+      const { answer, trace, action, learned, files, learnTrouble, followUp } = await Db.ask([...threadForSend(), { role: "user", text }], { ...context, input_images: attachmentManifest(sentImages) });
+      if (askSession() !== sentSession) return;
+      bindPdfInputs(files, sentImages);
       pushTurn("user", text);
       pushTurn("assistant", answer, trace, action, learned, files, learnTrouble, followUp);
-      setTurns(askTurns());
-      setDraft("");
+      if (mounted.current) { setTurns(askTurns()); setDraft(""); }
     } catch (e) {
-      setError(e.networkFailure
+      if (mounted.current) setError(e.networkFailure
         ? "No connection — your question is still here, try again when you have signal."
         : (e.message || "Ask couldn't answer."));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
 
@@ -260,7 +302,9 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
   };
 
   return (
-    <div className={`ask-card${closing ? " closing" : ""}`} role="dialog" aria-label="Claudia">
+    <div className={`ask-card${closing ? " closing" : ""}`} role="dialog" aria-label="Claudia"
+      onDragOver={e => { if (Array.from(e.dataTransfer.types).includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } }}
+      onDrop={dropImages}>
       <div className="ask-card-head">
         <h3>Claudia</h3>
         <button type="button" className="ask-close"
@@ -366,10 +410,28 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
         {busy && <div className="ask-turn-answer ask-busy">{CARD_WORDS.busy}</div>}
       </div>
       {error && <div className="ask-error">{error}</div>}
+      <div style={{ padding: "6px 12px", fontSize: 12 }}>
+        <input ref={pickerEl} type="file" accept="image/png,image/jpeg" multiple hidden
+          onChange={e => { const files = Array.from(e.target.files || []); e.target.value = ""; attach(files); }} />
+        <button type="button" className="btn btn-secondary" onClick={() => pickerEl.current?.click()}
+          disabled={busy || sending || preparing || attachments.length >= 4}>Attach images</button>
+        <span style={{ marginLeft: 8 }}>{preparing ? "Preparing images…" : "Or drop / paste PNG or JPEG images here."}</span>
+        {attachments.length > 0 && <>
+          <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingTop: 8 }}>
+            {attachments.map((input, index) => <div key={input.id} style={{ flex: "0 0 96px", minWidth: 0 }}>
+              <img src={input.image.data} alt={input.name} style={{ width: 80, height: 56, objectFit: "contain" }} />
+              <div title={input.name} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{index + 1}. {input.name}</div>
+              <button type="button" className="btn btn-secondary" aria-label={`Remove ${input.name}`}
+                disabled={busy || sending || preparing} onClick={() => setAttachments(items => items.filter(item => item.id !== input.id))}>Remove</button>
+            </div>)}
+          </div>
+          <div style={{ marginTop: 6 }}>For PDF placement; Ask cannot view these images. Up to 4, 5 MiB each, 12 MiB total.</div>
+        </>}
+      </div>
       <div className="ask-foot">
         <textarea ref={boxEl} className="input" rows={2} value={draft}
           placeholder={mic.listening ? "Listening…" : CARD_WORDS.placeholder}
-          onChange={e => setDraft(e.target.value)} onKeyDown={onKeyDown} disabled={busy || sending} />
+          onChange={e => setDraft(e.target.value)} onKeyDown={onKeyDown} onPaste={pasteImages} disabled={busy || sending} />
         {mic.supported && (
           <button type="button" className={`btn btn-secondary ask-mic${mic.listening ? " ask-mic-on" : ""}`}
             onClick={toggleMic} disabled={busy || sending} aria-pressed={mic.listening}
@@ -377,7 +439,7 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
             {mic.listening ? "■" : "🎤"}
           </button>
         )}
-        <Btn variant="primary" onClick={send} disabled={busy || sending || !draft.trim()}>Send</Btn>
+        <Btn variant="primary" onClick={send} disabled={busy || sending || preparing || !draft.trim()}>Send</Btn>
       </div>
     </div>
   );

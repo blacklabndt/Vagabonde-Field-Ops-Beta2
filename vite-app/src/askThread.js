@@ -8,6 +8,8 @@
 export const ASK_KEEP = 24;
 
 let turns = [];
+let session = 0;
+export function askSession() { return session; }
 
 export function askTurns() { return turns.slice(); }
 
@@ -92,7 +94,7 @@ export function threadForSend() {
   }).reverse();
 }
 
-export function forgetAskThread() { turns = []; }
+export function forgetAskThread() { turns = []; session++; }
 
 // The recogniser's results for one utterance, folded into one line. Chrome
 // hands them over in two shapes and says which nowhere: segments that

@@ -71,10 +71,10 @@ async function downloadSharedImage(path) {
 }
 
 // Cache only within this build: each new Download/Save rechecks access.
-export function createPdfImageLoader(download = downloadSharedImage, prepare = normalizePdfImage) {
+export function createPdfImageLoader(download = downloadSharedImage, prepare = normalizePdfImage, inputs = new Map()) {
   const cache = new Map();
   let total = 0;
-  return async path => {
+  const load = async path => {
     if (cache.has(path)) return cache.get(path);
     try {
       const blob = await download(path);
@@ -91,4 +91,16 @@ export function createPdfImageLoader(download = downloadSharedImage, prepare = n
       throw new Error(`Could not include "${String(path).split("/").pop()}": ${e.message || "Image unavailable."}`);
     }
   };
+  const attached = new Map();
+  load.input = async id => {
+    if (attached.has(id)) return attached.get(id);
+    const input = inputs.get(id);
+    if (!input) throw new Error("An attached image is no longer available. Attach it again and retry.");
+    if (total + input.size > MAX_IMAGE_TOTAL) throw new Error("The images exceed the 12 MiB total source budget.");
+    const image = { ...input.image, alias: `attached-image-${attached.size}` };
+    total += input.size;
+    attached.set(id, image);
+    return image;
+  };
+  return load;
 }

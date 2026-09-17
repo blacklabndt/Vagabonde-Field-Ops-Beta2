@@ -84,7 +84,7 @@ async function htmlWithImages(file) {
 // A letter-size document: the title, a subtitle, then each section's
 // heading, its text wrapped to the page, and its table through autotable;
 // the cursor carries down the page and over page breaks.
-export async function buildPdf(JsPDF, doc, { loadSharedImage = createPdfImageLoader() } = {}) {
+export async function buildPdf(JsPDF, doc, { loadSharedImage = createPdfImageLoader(), loadInputImage = loadSharedImage.input } = {}) {
   const pdf = new JsPDF({ unit: "pt", format: "letter" });
   const margin = 48;
   const width = pdf.internal.pageSize.getWidth() - margin * 2;
@@ -103,13 +103,13 @@ export async function buildPdf(JsPDF, doc, { loadSharedImage = createPdfImageLoa
   if (doc.subtitle) { pdf.setTextColor(110); write(doc.subtitle, 11, "normal", 10); pdf.setTextColor(0); } else y += 8;
   for (const s of doc.sections) {
     if (s.image) {
-      const asset = s.image.shared_path ? await loadSharedImage(s.image.shared_path) : await appAsset(s.image);
+      const asset = s.image.input_id ? await loadInputImage(s.image.input_id) : s.image.shared_path ? await loadSharedImage(s.image.shared_path) : await appAsset(s.image);
       pdf.setFont("helvetica", "normal");
       const captionLines = s.image.caption ? lines(s.image.caption, 9) : [];
       const captionHeight = captionLines.length ? captionLines.length * 9 * 1.3 + 6 : 0;
       const available = bottom - margin - captionHeight - 6;
       if (available <= 0) throw new Error("The image caption is too long to fit on a page.");
-      const w = Math.min(s.image.shared_path ? width : 360, width, available * asset.width / asset.height);
+      const w = Math.min(s.image.shared_path || s.image.input_id ? width : 360, width, available * asset.width / asset.height);
       const h = w * asset.height / asset.width;
       need(h + captionHeight + 6);
       pdf.addImage(asset.data, asset.format || "PNG", margin, y, w, h, asset.alias || "vagabonde-logo", "FAST");
@@ -143,9 +143,11 @@ export async function fileBlob(file) {
   if (file.kind === "csv") return new Blob([csvText(file.table)], { type: MIME.csv });
   if (file.kind === "xlsx") return new Blob([buildXlsx(await loadXlsx(), file.sheets)], { type: MIME.xlsx });
   if (file.kind === "pdf") {
-    const out = await buildPdf(await loadJsPdf(), file.document);
+    const { inputsForPdf } = await import("./askAttachments.js");
+    const loadSharedImage = createPdfImageLoader(undefined, undefined, inputsForPdf(file));
+    const out = await buildPdf(await loadJsPdf(), file.document, { loadSharedImage });
     const blob = out instanceof Blob ? out : new Blob([out], { type: MIME.pdf });
-    const sharedImages = file.document.sections.some(s => s.image?.shared_path);
+    const sharedImages = file.document.sections.some(s => s.image?.shared_path || s.image?.input_id);
     const limit = sharedImages ? MAX_IMAGE_PDF_BYTES : 200000;
     if (file.document.sections.some(s => s.image) && blob.size > limit) throw new Error(`The PDF with embedded images exceeds the ${sharedImages ? "10 MiB" : "200000 byte"} file budget.`);
     return blob;
