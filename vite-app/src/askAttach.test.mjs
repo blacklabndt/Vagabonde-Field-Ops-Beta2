@@ -10,7 +10,7 @@ import {
   ATTACH_ROOT, MAX_ATTACHMENTS, ATTACH_KEEP_DAYS,
   attachMonth, attachPath, isAttachPath, expiredAttachMonths,
   imageFilesFrom, attachLabel, hashName, readAttachment,
-  attachRunner, canSend, clearSent, keepName
+  attachRunner, canSend, clearSent, keepName, hashOfPath
 } from "./askAttach.js";
 import {
   isAttachPath as isAttachPathTs,
@@ -167,11 +167,18 @@ test("Enter is the same gate as the Send button, and an upload holds it shut", (
 });
 
 test("a reply clears the photos it carried and leaves one attached since", () => {
-  const held = [{ path: "a" }, { path: "b" }, { path: "c" }];
+  const held = [{ id: 1, path: "a" }, { id: 2, path: "b" }, { id: 3, path: "c" }];
   // "b" was dropped while the answer was on its way — it never went.
-  assert.deepEqual(clearSent(held, ["a", "c"]).map(x => x.path), ["b"]);
+  assert.deepEqual(clearSent(held, [1, 3]).map(x => x.path), ["b"]);
   assert.deepEqual(clearSent(held, []).map(x => x.path), ["a", "b", "c"]);
-  assert.deepEqual(clearSent([], ["a"]), []);
+  assert.deepEqual(clearSent([], [1]), []);
+});
+
+test("re-attaching the very same photo mid-reply keeps its chip", () => {
+  // Photo A is sent (id 1), detached, and pasted again before the answer
+  // lands. The new chip has A's path, because the key IS the content hash.
+  const held = [{ id: 2, path: "Ask/attachments/2026-09/abc.png" }];
+  assert.deepEqual(clearSent(held, [1]).map(x => x.id), [2]);
 });
 
 test("overlapping drops upload one at a time and the word stays until the last", async () => {
@@ -219,19 +226,33 @@ test("one bad photo takes only itself down and its reason is shown", async () =>
   assert.equal(errors.length, 1);
 });
 
-test("Keep names a pasted screenshot something Files can hold", () => {
-  assert.equal(keepName("Pasted image 1", "image/png"), "Pasted image 1.png");
-  assert.equal(keepName("Pasted image 2", "image/jpeg"), "Pasted image 2.jpg");
-  // A dropped file keeps the name it came with.
-  assert.equal(keepName("weld-3.JPG", "image/jpeg"), "weld-3.JPG");
-  assert.equal(keepName("", "image/png"), "image.png");
+test("a Keep name carries the photo's own hash, so two screenshots differ", () => {
+  const a = keepName("Pasted image 1", "image/png", "0123456789abcdef0123456789abcdef");
+  const b = keepName("Pasted image 1", "image/png", "fedcba9876543210fedcba9876543210");
+  assert.equal(a, "Pasted image 1-01234567.png");
+  assert.notEqual(a, b);
+  // Same photo, same name — which is what makes "already kept" true.
+  assert.equal(keepName("Pasted image 1", "image/png", "0123456789abcdef0123456789abcdef"), a);
+  assert.equal(keepName("weld-3.JPG", "image/jpeg", "abcdef0123456789"), "weld-3-abcdef01.jpg");
+  assert.equal(keepName("", "image/png", ""), "image.png");
+  // storageKeySafe slices the key at 100 characters: the hash must survive.
+  const long = keepName("x".repeat(200), "image/png", "0123456789abcdef");
+  assert.ok(long.length < 80 && long.endsWith("-01234567.png"));
+});
+
+test("the hash a Keep name uses is read off the attachment's own key", () => {
+  assert.equal(hashOfPath("Ask/attachments/2026-09/0123456789abcdef.png"), "0123456789abcdef");
+  assert.equal(hashOfPath("Ask/attachments/2026-09/abc.png"), "");
+  assert.equal(hashOfPath(null), "");
 });
 
 test("the card offers Keep and says when an attachment is cleared", () => {
   const src = readFileSync(new URL("./components/askPanel.jsx", import.meta.url), "utf8");
   // The permanent copy goes to Files, through the upload the Files screen uses.
   assert.match(src, /Db\.uploadSharedFile\("Ask", new File\(/);
-  assert.match(src, /keepName\(/);
+  assert.match(src, /keepName\(a\.label, a\.type, hashOfPath\(a\.path\)\)/);
+  // A reply clears chips by their own id, never by the path they share.
+  assert.match(src, /clearSent\(attachedRef\.current, sentIds\)/);
   // The gate is the function, not the button's disabled attribute.
   assert.match(src, /canSend\(\{ text, busy, attaching: attachingRef\.current \}\)/);
   // And the expiry is on the card, not only in the commit message.

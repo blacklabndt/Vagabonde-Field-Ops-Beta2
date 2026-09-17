@@ -3,7 +3,7 @@ import { Db } from "../db.js";
 import { Btn } from "./common.jsx";
 import { askTurns, pushTurn, threadForSend, dropAction, dropLearned, isConfirmAction, confirmLabel, formLabel, jobLinks, mergeDictation, foldTranscripts } from "../askThread.js";
 import { downloadFile, fileToUpload } from "../askFiles.js";
-import { imageFilesFrom, readAttachment, attachLabel, attachRunner, canSend, clearSent, keepName } from "../askAttach.js";
+import { imageFilesFrom, readAttachment, attachLabel, attachRunner, canSend, clearSent, keepName, hashOfPath } from "../askAttach.js";
 
 // Ask: a square launcher at the bottom right of every screen (it says
 // "Claudia", per Kyle) and the card it opens. Not a dialog — no backdrop, the
@@ -211,7 +211,9 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
     setBusy(true);
     setError("");
     try {
-      const paths = attachedRef.current.map(a => a.path);
+      const going = attachedRef.current;
+      const paths = going.map(a => a.path);
+      const sentIds = going.map(a => a.id);
       const { answer, trace, action, learned, files, learnTrouble, followUp } = await Db.ask(
         [...threadForSend(), { role: "user", text }],
         paths.length ? { ...context, attachments: paths } : context
@@ -224,7 +226,7 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
       // photo dropped while the answer was on its way was never sent, so it
       // stays on the card for the next question instead of vanishing. They
       // are all still in Files either way; the chip is not the file.
-      const left = clearSent(attachedRef.current, paths);
+      const left = clearSent(attachedRef.current, sentIds);
       attachedRef.current = left;
       setAttached(left);
     } catch (e) {
@@ -303,6 +305,10 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
   // render made, and a drop landing between that render and the keystroke
   // would otherwise send the question without the photo it was about.
   const attachingRef = useRef(false);
+  // Each chip's own identity. Two chips can hold the same path (detach a
+  // photo and paste it again — the key is its content hash), so the path
+  // cannot say which chip a reply carried; this counter can.
+  const nextId = useRef(0);
   // Every drop and paste goes through one chain, so two of them cannot read
   // the same "bytes so far" and both fit under the 12 MiB budget, and the
   // second cannot clear "Attaching…" while the first is still uploading.
@@ -327,7 +333,9 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
     // The bytes are kept until the chip goes, so Keep can write the photo a
     // second time under Ask/ without reading it back off the drive. They are
     // inside the same 12 MiB the budget above already refuses to exceed.
+    nextId.current += 1;
     const next = [...attachedRef.current, {
+      id: nextId.current,
       path: item.path, size: item.size, bytes: item.bytes, type: item.type,
       label: attachLabel(file, attachedRef.current.length)
     }];
@@ -345,22 +353,28 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
   // under its own name, where the sweep never looks. The attachment itself
   // is left alone: the question that is about to go names it, and moving it
   // out from under a live request would leave the key pointing at nothing.
-  const [keeping, setKeeping] = useState("");
+  const [keeping, setKeeping] = useState(0);
   const keep = async a => {
-    setKeeping(a.path);
+    setKeeping(a.id);
     setError("");
     try {
-      const name = keepName(a.label, a.type);
+      // The name carries the photo's own content hash, so a name already
+      // taken in Ask/ is this same photo and "already kept" is the truth.
+      const name = keepName(a.label, a.type, hashOfPath(a.path));
       await Db.uploadSharedFile("Ask", new File([a.bytes], name, { type: a.type }));
       Db.forgetFileTree();
-      const next = attachedRef.current.map(x => (x.path === a.path ? { ...x, kept: true } : x));
+      const next = attachedRef.current.map(x => (x.id === a.id ? { ...x, kept: true } : x));
       attachedRef.current = next;
       setAttached(next);
     } catch (e) {
-      setError(/already in this folder/i.test(e.message || "")
-        ? `“${a.label}” is already kept in Files › Ask.`
-        : (e.message || "Couldn't keep that photo."));
-    } finally { setKeeping(""); }
+      if (/already in this folder/i.test(e.message || "")) {
+        // Same bytes, same name: the copy is there, so the chip may say so.
+        const next = attachedRef.current.map(x => (x.id === a.id ? { ...x, kept: true } : x));
+        attachedRef.current = next;
+        setAttached(next);
+        setError(`“${a.label}” is already kept in Files › Ask.`);
+      } else setError(e.message || "Couldn't keep that photo.");
+    } finally { setKeeping(0); }
   };
 
   const onPaste = e => {
@@ -516,15 +530,15 @@ function AskCard({ onClose, onOpenJob, onAction, closing, context, canSaveFiles 
       {canSaveFiles && (attached.length > 0 || attaching) && (
         <div className="ask-attached">
           {attached.map(a => (
-            <span key={a.path} className="ask-chip">
+            <span key={a.id} className="ask-chip">
               <span className="ask-chip-name">{a.label}</span>
               {a.kept
                 ? <span className="ask-chip-kept" title="Kept in Files › Ask">kept</span>
-                : <button type="button" className="ask-chip-keep" disabled={keeping === a.path}
+                : <button type="button" className="ask-chip-keep" disabled={keeping === a.id}
                     title={CARD_WORDS.keepWhy} aria-label={`Keep ${a.label} in Files`}
-                    onClick={() => keep(a)}>{keeping === a.path ? "…" : "Keep"}</button>}
+                    onClick={() => keep(a)}>{keeping === a.id ? "…" : "Keep"}</button>}
               <button type="button" className="ask-chip-x" aria-label={`Detach ${a.label}`}
-                onClick={() => { const next = attachedRef.current.filter(x => x.path !== a.path); attachedRef.current = next; setAttached(next); }}>×</button>
+                onClick={() => { const next = attachedRef.current.filter(x => x.id !== a.id); attachedRef.current = next; setAttached(next); }}>×</button>
             </span>
           ))}
           {attaching && <span className="ask-chip ask-chip-busy">Attaching…</span>}

@@ -107,17 +107,36 @@ export function canSend({ text, busy, attaching }) {
 }
 
 // A reply clears the photos THAT question carried and nothing else, so one
-// dropped while the answer was on its way is still attached afterwards.
-export function clearSent(attached, sentPaths) {
-  const sent = new Set(sentPaths || []);
-  return (attached || []).filter(a => !sent.has(a.path));
+// dropped while the answer was on its way is still attached afterwards. The
+// match is the chip's own id and NOT its path: detach a photo, send, then
+// paste the SAME photo again before the answer lands, and the new chip has
+// the old one's path (the key is the content hash) — cleared by path, the
+// reply would take a photo down that it never carried.
+export function clearSent(attached, sentIds) {
+  const sent = new Set(sentIds || []);
+  return (attached || []).filter(a => !sent.has(a.id));
 }
 
 // Keep writes a second copy under Ask/ as an ordinary file, so it needs a
-// real name — a pasted screenshot's label has no extension of its own.
-export function keepName(label, type) {
-  const name = String(label || "image").trim() || "image";
-  return /\.(png|jpe?g)$/i.test(name) ? name : `${name}.${type === "image/png" ? "png" : "jpg"}`;
+// real name — a pasted screenshot's label has no extension of its own, and
+// two screenshots pasted on different days are both "Pasted image 1". The
+// content hash goes in the name, so a name already taken in Ask/ means the
+// SAME bytes are already there: "already kept" is then true, where before it
+// was said over a refusal to overwrite a different photo. The base is cut
+// short so storageKeySafe's 100-character slice can never eat the hash.
+export function keepName(label, type, hash) {
+  const ext = type === "image/png" ? "png" : "jpg";
+  const bare = String(label || "image").trim() || "image";
+  const stem = bare.replace(/\.(png|jpe?g)$/i, "").slice(0, 60) || "image";
+  const tag = /^[0-9a-f]{8,}$/.test(String(hash || "")) ? String(hash).slice(0, 8) : "";
+  return tag ? `${stem}-${tag}.${ext}` : `${stem}.${ext}`;
+}
+
+// The hash a Keep name carries, read back off the attachment's own key —
+// the key is `.../<hash>.png`, so nothing has to be re-digested.
+export function hashOfPath(path) {
+  const m = /\/([0-9a-f]{12,64})\.(?:png|jpg)$/.exec(String(path || ""));
+  return m ? m[1] : "";
 }
 
 // Every drop and paste runs through one chain. Overlapping drops must not
