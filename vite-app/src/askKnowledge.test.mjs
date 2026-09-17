@@ -25,9 +25,11 @@ test("the knowledge block names every screen and stays a page, not a manual", ()
 });
 
 test("the context is checked and cut to size, never trusted", () => {
-  assert.deepEqual(cleanContext(null), { screen: null, jobNumber: null, ticketId: null, help: [] });
+  assert.deepEqual(cleanContext(null), { screen: null, jobNumber: null, ticketId: null, help: [], attachments: [] });
   assert.deepEqual(cleanContext({ screen: "job", jobNumber: "S-10113", ticketId: "T-10231", help: ["One.", " Two. "] }),
-    { screen: "job", jobNumber: "S-10113", ticketId: "T-10231", help: ["One.", "Two."] });
+    { screen: "job", jobNumber: "S-10113", ticketId: "T-10231", help: ["One.", "Two."], attachments: [] });
+  // The images the person attached are the context's too; askAttach.test.mjs
+  // holds their shape, and index.ts asks storage before Ask is told of one.
   // An unknown screen, a non-string, an overlong value: dropped, not passed on.
   assert.equal(cleanContext({ screen: "payroll" }).screen, null);
   assert.equal(cleanContext({ jobNumber: 42 }).jobNumber, null);

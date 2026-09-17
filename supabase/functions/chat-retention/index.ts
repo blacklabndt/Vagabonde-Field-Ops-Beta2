@@ -1,4 +1,9 @@
-// chat-retention — the team chat forgets, on schedule.
+// chat-retention — what the app forgets, on schedule.
+//
+// Two things, one nightly run: the team chat (below) and the photos people
+// paste or drop onto Ask's card. Both are the same act — an ordinary,
+// fixed retention policy enforced by the service role after the fact — and
+// both are idempotent, so an extra run deletes nothing not already due.
 //
 // Messages older than 30 days are deleted unless they are pinned; a
 // pinned message stays for as long as its pin does, and starts its 30
@@ -20,12 +25,13 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { secretsMatch } from "../_shared/constantTime.ts";
+import { ATTACH_ROOT, ATTACH_KEEP_DAYS, expiredAttachMonths } from "../_shared/askAttachments.ts";
 import { publicWords, loggedWords } from "../_shared/publicError.ts";
 // The one sentence anything unmarked comes back as. A refusal of ours says
 // what to do and is shown as written; a message from Postgres, Auth, Resend
 // or a drive names columns, constraints and accounts, so it is logged and not
 // shown. Deny by default: the cost of forgetting is silence.
-const TROUBLE = "The nightly chat clean-up failed.";
+const TROUBLE = "The nightly clean-up failed.";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -119,7 +125,38 @@ Deno.serve(async (req) => {
       if (expired.length < PAGE) break;
     }
 
-    return new Response(JSON.stringify({ ok: true, deleted, pictures, cutoff }), {
+    // Ask's attachments. The month is in the key (askAttachments.ts), so a
+    // whole folder goes at once and nothing here reads an object's clock —
+    // a folder is due only once its LAST day is ATTACH_KEEP_DAYS behind, so
+    // nothing is thrown away early and nothing lives much past that.
+    //
+    // Only under Ask/attachments: a file the person MOVED into the shared
+    // drive proper is theirs, and the sweep must never find it. A month
+    // whose objects run past one run's passes is finished by the next.
+    let attachments = 0;
+    const { data: monthRows, error: monthErr } = await admin.storage
+      .from("shared").list(ATTACH_ROOT, { limit: 1000, sortBy: { column: "name", order: "asc" } });
+    if (monthErr) throw monthErr;
+    const months = expiredAttachMonths((monthRows || []).filter((r) => !r.id).map((r) => r.name), Date.now());
+    for (const month of months) {
+      const folder = `${ATTACH_ROOT}/${month}`;
+      for (let pass = 0; pass < MAX_PASSES; pass++) {
+        const { data: objects, error: listErr } = await admin.storage
+          .from("shared").list(folder, { limit: 100 });
+        if (listErr) throw listErr;
+        // A prefix row has no id and is not an object to remove; there are
+        // no folders under a month, but a stray one must not be mistaken
+        // for a file and silently counted as deleted.
+        const keys = (objects || []).filter((o) => o.id).map((o) => `${folder}/${o.name}`);
+        if (!keys.length) break;
+        const { error: rmErr } = await admin.storage.from("shared").remove(keys);
+        if (rmErr) throw rmErr;
+        attachments += keys.length;
+        if (keys.length < 100) break;
+      }
+    }
+
+    return new Response(JSON.stringify({ ok: true, deleted, pictures, attachments, attachmentMonths: months, keepDays: ATTACH_KEEP_DAYS, cutoff }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {

@@ -254,7 +254,25 @@ Deno.serve(async (req) => {
     // Where the person is — the screen, the open job and ticket, the
     // screen's own help — checked and cut to size like the thread; it
     // answers "this job" and "what is this screen for" without a question back.
-    const where = whereLines(cleanContext(body?.context));
+    // Images the person pasted or dropped onto the card. The browser has
+    // already uploaded each one to the shared drive, so what arrives here is
+    // a key and nothing more — and a key in a request body is a claim, not a
+    // right. Each is asked of storage AS THE PERSON before Ask is told it
+    // exists: the listing runs under their own token, so an account without
+    // the files tab, or a path invented by a tampered-with client, finds
+    // nothing and the attachment simply is not there. What survives is
+    // discovered the way list_images discovers, which is what make_file's
+    // gate wants — the person picking a photo is a discovery, and asking
+    // them to have Ask list the folder first would be theatre.
+    const context = cleanContext(body?.context);
+    const attachedImages: string[] = [];
+    for (const path of context.attachments) {
+      const cut = path.lastIndexOf("/");
+      const { data, error } = await asUser.storage.from("shared").list(path.slice(0, cut), { limit: 1, search: path.slice(cut + 1) });
+      if (error) continue;
+      if (imageListing(path.slice(0, cut), 0, data ?? []).images.some(i => i.shared_path === path)) attachedImages.push(path);
+    }
+    const where = whereLines({ ...context, attachments: attachedImages });
     // What the crew has taught Ask about the app, read as the caller (every
     // staff account may): into the prompt after the built-in knowledge,
     // graded by the speaker's role as it is now.
@@ -582,7 +600,7 @@ Deno.serve(async (req) => {
     // The files make_file proposed this answer — checked shapes only; the
     // device builds the bytes and nothing is written here.
     const files: AskFile[] = [];
-    const discoveredImages = new Set<string>();
+    const discoveredImages = new Set<string>(attachedImages);
     // The person's own words, for the one place an address may come from
     // that is not a contact on file. Computed once, and lazily: most
     // questions never send.
